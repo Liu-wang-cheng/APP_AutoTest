@@ -43,6 +43,10 @@ def d_serial(d):
         return ""
 
 
+class UserStopped(RuntimeError):
+    """用户请求停止执行(GUI 停止按钮触发)"""
+
+
 class ActionRunner:
     """YAML 步骤执行引擎"""
 
@@ -58,6 +62,8 @@ class ActionRunner:
         self.click_timeout = config.get("click_timeout", 10)
         self.results = []
         self.store = {}  # grab/match 数据暂存
+        self.stopped = False  # 停止标志,GUI 停止按钮置位
+        self.on_result = None  # 结果回调(GUI 实时推送用),签名 fn(result_dict)
         # 执行过程中动态写入的状态,集中在此初始化
         self._locators = {}
         self._last_compare_msg = None
@@ -83,14 +89,37 @@ class ActionRunner:
             self._ocr = ddddocr.DdddOcr(show_ad=False)
         return self._ocr
 
+    def _append_result(self, entry):
+        """记录步骤结果;设置了 on_result 时同步回调(GUI 实时刷新)"""
+        self.results.append(entry)
+        if callable(self.on_result):
+            try:
+                self.on_result(entry)
+            except Exception:
+                pass
+
+    def stop(self):
+        """请求停止执行: 等待点在 _sleep/_poll_sleep/步骤边界"""
+        self.stopped = True
+
+    def _sleep(self, seconds):
+        """可中断等待: 收到停止请求后快速退出并抛 UserStopped"""
+        end = time.time() + max(0.0, seconds)
+        while not self.stopped:
+            remain = end - time.time()
+            if remain <= 0:
+                return
+            time.sleep(min(0.2, remain))
+        raise UserStopped("用户手动停止")
+
     def _poll_sleep(self, check_count):
         """轮询间隔: 1s → 2s → 5s 封顶(保证刚出现的元素尽快被发现)"""
         if check_count <= POLL_SHORT_N:
-            time.sleep(POLL_SHORT)
+            self._sleep(POLL_SHORT)
         elif check_count <= POLL_MID_N:
-            time.sleep(POLL_MID)
+            self._sleep(POLL_MID)
         else:
-            time.sleep(POLL_MAX)
+            self._sleep(POLL_MAX)
 
     def _failure_screenshot(self, step_index):
         """失败截图存到 reports/failures/,文件名带用例名避免跨用例覆盖"""
@@ -142,8 +171,10 @@ class ActionRunner:
         return s
 
     def run_steps(self, steps: list) -> bool:
-        """依次执行所有步骤，任一失败则中断。步骤支持 retry:N 自动重试"""
+        """依次执行所有步骤，任一失败则中断。步骤支持 retry:N 自动重试;支持中途停止"""
         for i, step in enumerate(steps):
+            if self.stopped:
+                break
             step = self._resolve_step(step)  # 解析 ${section.key} 定位器引用
             desc = self._step_desc(step)
             # retry: 失败自动重试次数（默认0=不重试）
@@ -151,24 +182,31 @@ class ActionRunner:
             max_attempts = retry + 1
             succeeded = False
             last_err = None
+            screenshot = ""
             for attempt in range(max_attempts):
+                if self.stopped:
+                    break
                 self._ensure_device()
                 try:
                     screenshot = self._execute(step) or ""
                     if getattr(self, '_last_compare_msg', None):
                         desc = f"{desc} ({self._last_compare_msg})"
                         self._last_compare_msg = None
-                    self.results.append({"desc": desc, "passed": True, "error": "", "screenshot": screenshot})
+                    self._append_result({"desc": desc, "passed": True, "error": "", "screenshot": screenshot})
                     if getattr(self, '_pending_sub_results', None):
-                        self.results.extend(self._pending_sub_results)
+                        for sub in self._pending_sub_results:
+                            self._append_result(sub)
                         self._pending_sub_results = None
                     succeeded = True
                     break
+                except UserStopped:
+                    last_err = UserStopped("用户手动停止")
+                    break  # 不重试,直接走失败收尾
                 except Exception as e:
                     last_err = e
                     if attempt < max_attempts - 1:
                         log.warning(f"[retry] 步骤「{desc}」第{attempt+1}次失败: {e}，重试...")
-                        time.sleep(2)
+                        self._sleep(2)
                     else:
                         # 最终失败：截图 + 诊断
                         screenshot = self._failure_screenshot(i)
@@ -181,15 +219,24 @@ class ActionRunner:
                         except Exception:
                             pass
             if not succeeded:
-                self.results.append({"desc": desc, "passed": False, "error": str(last_err), "screenshot": screenshot})
+                err_text = "用户手动停止执行" if (self.stopped or isinstance(last_err, UserStopped)) else str(last_err)
+                self._append_result({"desc": desc, "passed": False, "error": err_text, "screenshot": screenshot})
                 if getattr(self, '_pending_sub_results', None):
-                    self.results.extend(self._pending_sub_results)
+                    for sub in self._pending_sub_results:
+                        self._append_result(sub)
                     self._pending_sub_results = None
                 return False
-            # 步骤间等待
+            # 步骤间等待(可中断)
             if i < len(steps) - 1:
                 wait_time = step.get("wait") if isinstance(step, dict) else None
-                time.sleep(wait_time if wait_time is not None else self.interval)
+                try:
+                    self._sleep(wait_time if wait_time is not None else self.interval)
+                except UserStopped:
+                    self._append_result({"desc": "用户手动停止", "passed": False, "error": "用户手动停止执行", "screenshot": ""})
+                    return False
+        if self.stopped:
+            self._append_result({"desc": "用户手动停止", "passed": False, "error": "用户手动停止执行", "screenshot": ""})
+            return False
         return True
 
     def _execute(self, step: dict):
