@@ -1,0 +1,93 @@
+module: 勿扰模式
+
+cases:
+  - name: 勿扰模式完整流程
+    priority: P1
+    wait: 5
+    steps:
+      - desc: 进入设置界面
+        click: 进入设置.png
+
+      - desc: 进入勿扰模式界面
+        click: 勿扰模式
+        screenshot: screenshots/勿扰模式_01_勿扰界面.png
+
+      - desc: 点击设置勿扰开始时间
+        click: 开始时间
+
+      - desc: 设置开始时间为当前时间
+        set_time: 0
+        circular: false
+
+      - desc: 确认开始时间
+        click: 确认
+
+      - desc: 点击设置勿扰结束时间
+        click: 结束时间
+
+      - desc: 设置结束时间为当前+20分钟
+        set_time: 20
+        circular: false
+
+      - desc: 确认结束时间
+        click: 确认
+        screenshot: screenshots/勿扰模式_02_时间段设置.png
+
+      - desc: 打开勿扰开关
+        switch_to: 打开
+        switch_tpl: 勿扰打开.png
+        screenshot: screenshots/勿扰模式_03_开关打开.png
+
+      - desc: 返回设置界面
+        back: true
+
+      - desc: 进入定时清扫界面
+        click: 定时
+        wait: 5
+        screenshot: screenshots/勿扰模式_04_定时界面.png
+
+      - desc: 添加定时清扫任务
+        add_timer:
+          add_text: "添加"
+          add_tpl: "添加预约.png"
+          max_tasks: 2
+
+      - desc: 设置定时时间为当前+3分钟
+        set_time: 3
+        circular: false
+
+      - desc: 保存定时任务
+        click: 确认
+        screenshot: screenshots/勿扰模式_05_定时已添加.png
+
+      - desc: 返回设置界面
+        screenshot: screenshots/勿扰模式_05_定时任务界面.png
+        back: true
+
+      - desc: 返回主界面
+        back: true
+
+      - desc: 等待定时时间到达，确认勿扰生效
+        wait: 200
+
+      - desc: 确认勿扰生效（定时任务未执行，设备处于充电）
+        assert: 充电完成,充电中
+        timeout: 10
+        screenshot: screenshots/勿扰模式_06_勿扰生效.png
+
+      - desc: 进入设置界面恢复
+        click: 进入设置.png
+
+      - desc: 进入勿扰模式关闭
+        click: 勿扰模式
+
+      - desc: 关闭勿扰开关
+        switch_to: 关闭
+        switch_tpl: 勿扰打开.png
+
+      - desc: 返回设置界面
+        back: true
+
+      - desc: 返回主界面
+        back: true
+

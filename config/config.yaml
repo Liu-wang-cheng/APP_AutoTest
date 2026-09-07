@@ -1,0 +1,22 @@
+# ── APP 配置 ──
+app:
+  package: com.tuya.smartiot
+  main_activity: com.smart.ThingSplashActivity
+
+# ── 设备配置 ──
+device:
+  default: 127.0.0.1:5555
+  list:
+    - id: 127.0.0.1:5555
+      name: 模拟器
+
+# ── 目标设备 ──
+target_device: SE3L            # 进入哪个设备页面
+
+# ── 执行配置 ──
+runner:
+  step_interval: 3           # 每步间隔（秒）
+  default_timeout: 30        # assert 超时（秒），0 = 无限等待
+  click_timeout: 10          # click 超时（秒），0 = 无限等待
+  template_confidence: 0.8   # 模板匹配置信度
+  screenshot_on_fail: true   # 失败自动截图

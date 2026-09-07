@@ -1,0 +1,15 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# 运行产物(报告/日志/失败截图/运行截图)
+reports/
+Test_img/screenshots/
+*.log
+
+# 设备层级 dump 残留
+/*.xml
+
+# IDE 配置
+.idea/

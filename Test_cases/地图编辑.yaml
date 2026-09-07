@@ -1,0 +1,64 @@
+module: 地图编辑
+
+cases:
+  - name: 地图编辑完整流程
+    priority: P1
+    wait: 5
+    steps:
+      - desc: 检查是否有地图，无图则先建图
+        if not: 扫地机器人
+        else:
+          - desc: 启动建图（优先快速建图，否则开始清扫）
+            find_click: ['快速建图', '开始清扫']
+            wait: 5
+          - desc: 确认设备处于建图或清扫状态
+            assert: 建图,清扫中
+            timeout: 60
+          - desc: 等待建图完成并返回充电
+            assert: 充电中,充电完成
+            timeout: 0
+
+      - desc: 进入设置界面
+        click: 进入设置.png
+        screenshot: screenshots/地图编辑_00_进入设置.png
+
+      - desc: 进入地图管理
+        click: 地图管理
+        screenshot: screenshots/地图编辑_01_地图管理.png
+
+      - desc: 保存当前地图
+        click: 保存首页地图
+        screenshot: screenshots/地图编辑_02_保存.png
+
+      - desc: 检测弹窗并点击确认
+        screenshot: screenshots/地图编辑_03_确认保存.png
+        if_click: 确认,确定
+
+      - desc: 重置首页地图
+        click: 重置首页地图
+        screenshot: screenshots/地图编辑_04_重置后.png
+
+      - desc: 快速左滑到云端地图
+        screenshot: screenshots/地图编辑_05_云端地图.png
+        swipe: fast-left
+
+      - desc: 载入云端地图
+        click: 地图载入主页
+        screenshot: screenshots/地图编辑_06_载入地图.png
+
+      - desc: 快速右滑回当前地图
+        screenshot: screenshots/地图编辑_07_恢复后.png
+        swipe: fast-right
+
+      - desc: 对比地图是否恢复
+        compare: screenshots/地图编辑_01_地图管理.png
+        threshold: 0.95
+        screenshot: screenshots/地图编辑_08_对比结果.png
+
+      - desc: 返回设置界面
+        back: true
+
+      - desc: 返回主界面
+        screenshot: screenshots/地图编辑_10_返回主界面.png
+        back: true
+

@@ -1,0 +1,57 @@
+module: 定点清扫
+
+cases:
+  - name: 定点清扫完整流程
+    priority: P1
+    wait: 5
+    steps:
+      - desc: 在主页识别地图房间分区
+        room_zones: true
+
+      - desc: 打开清扫模式选择
+        click: 切换清扫模式.png
+
+      - desc: 选择定点清扫
+        click: 指哪扫哪
+        screenshot: screenshots/定点清扫_01_选择定点清扫.png
+
+      - desc: 确认清扫模式
+        click: 确认
+
+      - desc: 点击识别的房间分区
+        room_click: true
+
+      - desc: 点击开始清扫按钮
+        click: 开始清扫.png
+        screenshot: screenshots/定点清扫_02_开始清扫.png
+
+      - desc: 确认设备处于定点清扫状态
+        assert: 指哪扫哪中,局部清扫,清扫中
+        timeout: 60
+        screenshot: screenshots/定点清扫_03_清扫状态.png
+
+      - desc: 等待清扫完成并返回充电
+        assert: 充电中,充电完成
+        timeout: 0
+        screenshot: screenshots/定点清扫_04_清扫完成.png
+
+      - desc: 展开清扫数据并抓取面积和时间
+        click: 展开清扫数据.png
+        grab: 面积,时间
+        screenshot: screenshots/定点清扫_05_主界面清扫数据.png
+
+      - desc: 进入设置界面
+        click: 进入设置.png
+        screenshot: screenshots/定点清扫_06_进入设置.png
+
+      - desc: 进入清扫记录界面
+        click: 清扫记录
+        screenshot: screenshots/定点清扫_07_清扫记录界面.png
+
+      - desc: 点击最新一条清扫记录
+        screenshot: screenshots/定点清扫_08_最新清扫记录.png
+        latest_record: true
+
+      - desc: 对比清扫面积和时间是否一致
+        match: 面积,时间
+

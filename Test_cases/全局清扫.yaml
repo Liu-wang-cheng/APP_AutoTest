@@ -1,0 +1,70 @@
+module: 全局清扫
+
+cases:
+  - name: 全局清扫完整流程
+    priority: P0
+    wait: 5
+    steps:
+      - desc: 点击开始清扫按钮
+        click: 开始清扫.png
+
+      - desc: 确认设备进入清扫状态
+        assert: 清扫中
+        screenshot: screenshots/全局清扫_01_清扫状态.png
+
+      - desc: 点击清洁偏好
+        click: 清洁偏好
+        screenshot: screenshots/全局清扫_02_清洁偏好.png
+
+      - desc: 点击切换强力档吸力
+        click: 强力
+        screenshot: screenshots/全局清扫_03_切换强力档.png
+
+      - desc: 点击切换安静档吸力
+        click: 安静
+        screenshot: screenshots/全局清扫_04_切换安静档.png
+
+      - desc: 点击确认返回主界面
+        click: 确认
+
+      - desc: 点击暂停清扫按钮
+        click: 暂停清扫.png
+        screenshot: screenshots/全局清扫_05_暂停.png
+
+      - desc: 确认设备已暂停
+        assert: 暂停
+        screenshot: screenshots/全局清扫_06_暂停状态.png
+
+      - desc: 点击继续清扫按钮
+        click: 继续清扫.png
+        screenshot: screenshots/全局清扫_07_继续清扫.png
+
+      - desc: 确认设备继续清扫中
+        assert: 清扫中
+        screenshot: screenshots/全局清扫_08_继续清扫状态.png
+
+      - desc: 等待清扫完成并返回充电
+        assert: 充电中,充电完成
+        timeout: 0
+        screenshot: screenshots/全局清扫_09_清扫完成.png
+
+      - desc: 展开清扫数据并抓取面积和时间
+        click: 展开清扫数据.png
+        grab: 面积,时间
+        screenshot: screenshots/全局清扫_10_主界面清扫数据.png
+
+      - desc: 进入设置界面
+        click: 进入设置.png
+        screenshot: screenshots/全局清扫_11_进入设置.png
+
+      - desc: 进入清扫记录界面
+        click: 清扫记录
+        screenshot: screenshots/全局清扫_12_清扫记录界面.png
+
+      - desc: 点击最新一条清扫记录
+        screenshot: screenshots/全局清扫_13_最新清扫记录.png
+        latest_record: true
+
+      - desc: 对比清扫面积和时间是否一致
+        match: 面积,时间
+

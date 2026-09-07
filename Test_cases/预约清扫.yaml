@@ -1,0 +1,102 @@
+module: 预约清扫
+
+cases:
+  - name: 预约清扫完整流程
+    priority: P1
+    wait: 5
+    steps:
+      - desc: 进入设置界面
+        click: 进入设置.png
+
+      - desc: 进入勿扰模式界面
+        click: 勿扰模式
+
+      - desc: 关闭勿扰开关（确保预约清扫可执行）
+        switch_to: 关闭
+        switch_tpl: 勿扰打开.png
+
+      - desc: 返回设置界面
+        back: true
+
+      - desc: 进入预约清扫界面
+        click: 定时
+        screenshot: screenshots/预约清扫_01_预约界面.png
+
+      - desc: 添加预约清扫任务
+        add_timer:
+          add_text: 添加
+          add_tpl: 添加预约.png
+          max_tasks: 2
+
+      - desc: 设置预约时间为当前+3分钟
+        set_time: 3
+        circular: false
+
+      - desc: 设置吸力为安静挡
+        click: 吸力
+
+      - desc: 选择安静挡位
+        click: 安静
+        wait_for: 安静,标准,强力
+
+      - desc: 确认吸力设置
+        if_click: 确认,确定
+
+      - desc: 设置水量为低挡
+        click: 水量设置
+
+      - desc: 选择低挡位
+        click: 低
+        wait_for: 低,中,高
+
+      - desc: 确认水量设置
+        if_click: 确认,确定
+
+      - desc: 保存预约清扫设置
+        if_click: 确认,确定
+        screenshot: screenshots/预约清扫_02_预约设置.png
+
+      - desc: 返回设置界面
+        back: true
+
+      - desc: 返回主界面
+        back: true
+
+      - desc: 等待预约时间到达，确认开始清扫
+        wait: 100
+
+      - desc: 确认预约清扫开始执行
+        assert: 智能清扫中,全屋清扫中
+        timeout: 50
+        screenshot: screenshots/预约清扫_03_执行中.png
+
+      - desc: 等待清扫完成并返回充电
+        assert: 充电中,充电完成
+        timeout: 0
+        screenshot: screenshots/预约清扫_04_清扫完成.png
+
+      - desc: 展开清扫数据
+        click: 展开清扫数据.png
+
+      - desc: 等待清扫数据出现
+        wait_for: 面积,清扫面积
+
+      - desc: 抓取主页清扫面积和时间
+        grab: 面积,时间
+        screenshot: screenshots/预约清扫_05_主界面清扫数据.png
+
+      - desc: 进入设置界面
+        click: 进入设置.png
+        screenshot: screenshots/预约清扫_06_进入设置.png
+
+      - desc: 进入清扫记录界面
+        click: 清扫记录
+        screenshot: screenshots/预约清扫_07_清扫记录界面.png
+
+      - desc: 点击最新一条清扫记录
+        screenshot: screenshots/预约清扫_08_最新清扫记录.png
+        latest_record: true
+
+      - desc: 对比清扫面积、时间和预约执行时间
+        match: 面积,时间,预约时间
+

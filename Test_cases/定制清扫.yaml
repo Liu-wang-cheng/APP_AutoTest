@@ -1,0 +1,170 @@
+module: 定制清扫
+
+cases:
+  - name: 定制清扫完整流程
+    priority: P1
+    wait: 5
+    steps:
+      - desc: 定制前截图（对比基准）
+        screenshot: screenshots/定制清扫_00_定制前.png
+
+      - desc: 进入地图编辑
+        click: 地图编辑
+        timeout: 30
+
+      - desc: 进入地图自定义编辑
+        click: 地图自定义编辑
+
+      - desc: 识别房间分区坐标
+        room_zones: true
+
+      - desc: 识别地图房间分区
+        screenshot: screenshots/定制清扫_01_房间分区.png
+
+      - desc: 进入定制模式
+        click: 定制模式
+
+      - desc: 选择第一个房间并设置参数
+        room_click: 1
+
+      - desc: 设置清扫次数2次
+        find_click: 2次,2,2x,x2
+        wait: 2
+
+      - desc: 设置吸力为安静档
+        click: 安静
+        wait: 2
+
+      - desc: 设置水量为低档
+        click: 低
+        wait: 2
+
+      - desc: 确认房间1设置
+        click: 确认
+        wait: 3
+
+      - desc: 选择第二个房间并设置参数
+        room_click: 1
+
+      - desc: 设置清扫次数2次
+        find_click: 2次,2,2x,x2
+        wait: 2
+
+      - desc: 设置吸力为强力档
+        click: 强力
+        wait: 2
+
+      - desc: 设置水量为高档
+        click: 高
+        wait: 2
+
+      - desc: 确认房间2设置
+        click: 确认
+        wait: 3
+
+      - desc: 保存定制模式设置
+        click: 保存
+        screenshot: screenshots/定制清扫_02_定制设置.png
+
+      - desc: 进入清扫顺序界面
+        click: 清扫顺序
+
+      - desc: 重新识别房间坐标
+        room_zones: true
+
+      - desc: 设置清扫顺序并保存
+        room_click: 1
+        wait: 2
+      - room_click: 1
+        wait: 2
+
+      - desc: 保存清扫顺序
+        click: 保存
+
+      - desc: 返回主界面
+        back: true
+
+      - desc: 进入清洁偏好
+        click: 清洁偏好
+
+      - desc: 下滑找到定制模式开关
+        swipe: up
+
+      - desc: 打开定制模式开关
+        switch_to: 打开
+        switch_label: 定制模式
+
+      - desc: 确认清洁偏好
+        if_click: 确认,确定
+        wait: 5
+
+      - desc: 重新识别房间分区
+        room_zones: true
+
+      - desc: 展开房间定制属性
+        room_click: 1
+        wait: 2
+      - room_click: 1
+        wait: 2
+
+      - desc: 检查定制开关是否生效
+        diff: screenshots/定制清扫_00_定制前.png
+        threshold: 0.99
+
+      - desc: 开始定制清扫
+        click: 开始清扫.png
+        wait: 10
+
+      - desc: 确认设备处于清扫状态
+        assert: 清扫中
+        timeout: 30
+        screenshot: screenshots/定制清扫_03_清扫中.png
+
+      - desc: 等待清扫完成并返回充电
+        assert: 充电中,充电完成
+        timeout: 0
+        screenshot: screenshots/定制清扫_04_清扫完成.png
+
+      - desc: 展开清扫数据
+        click: 展开清扫数据.png
+
+      - desc: 等待清扫数据出现
+        wait_for: 面积,清扫面积
+
+      - desc: 抓取主页清扫面积和时间
+        grab: 面积,时间
+        screenshot: screenshots/定制清扫_05_主界面清扫数据.png
+
+      - desc: 进入设置界面
+        click: 进入设置.png
+
+      - desc: 进入清扫记录界面
+        click: 清扫记录
+        screenshot: screenshots/定制清扫_06_清扫记录界面.png
+
+      - desc: 点击最新一条清扫记录
+        latest_record: true
+        screenshot: screenshots/定制清扫_07_最新记录.png
+
+      - desc: 对比清扫面积和时间是否一致
+        match: 面积,时间
+
+      - desc: 返回设置界面
+        back: true
+
+      - desc: 返回主界面
+        back: true
+      - back: true
+
+      - desc: 进入清洁偏好
+        click: 清洁偏好
+
+      - desc: 下滑找到定制模式开关
+        swipe: up
+
+      - desc: 关闭定制模式开关
+        switch_to: 关闭
+        switch_label: 定制模式
+
+      - desc: 确认清洁偏好
+        if_click: 确认,确定

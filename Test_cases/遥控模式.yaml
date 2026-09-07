@@ -1,0 +1,57 @@
+module: 遥控模式
+
+cases:
+  - name: 遥控模式完整流程
+    priority: P1
+    wait: 5
+    steps:
+      - desc: 遥控前截图（对比基准）
+        screenshot: screenshots/遥控模式_00_遥控前.png
+
+      - desc: 进入设置界面
+        click: 进入设置.png
+
+      - desc: 进入遥控界面
+        click: 遥控控制
+        screenshot: screenshots/遥控模式_01_遥控界面.png
+
+      - desc: 点击遥控下桩
+        click: 前进按钮.png
+        wait: 3
+
+      - desc: 长按前进4秒
+        long_click: 前进按钮.png
+        duration: 4
+
+      - desc: 长按左转2秒
+        long_click: 左转按钮.png
+        duration: 2
+
+      - desc: 长按右转2秒
+        long_click: 右转按钮.png
+        duration: 2
+
+      - desc: 长按前进4秒
+        long_click: 前进按钮.png
+        duration: 2
+
+      - desc: 退出遥控模式
+        click: 退出
+        wait: 2
+
+      - desc: 确认退出
+        if_click: 确认,确定
+
+      - desc: 返回主界面
+        back: true
+
+      - desc: 检查遥控操作是否生效（对比遥控前后截图）
+        compare: screenshots/遥控模式_00_遥控前.png
+        threshold: 0.6
+
+      - desc: 点击回充
+        click: 开始回充.png
+        wait: 3
+
+      - desc: 确认回充
+        if_click: 确认,确定
