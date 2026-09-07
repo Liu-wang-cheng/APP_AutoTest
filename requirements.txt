@@ -9,3 +9,4 @@ numpy==2.5.1
 pillow==12.3.0
 ddddocr==1.6.1
 PySide6==6.11.2
+pypinyin==0.55.0

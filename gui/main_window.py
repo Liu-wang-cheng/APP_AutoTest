@@ -13,14 +13,15 @@ import yaml
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QAction, QIntValidator, QDoubleValidator, QColor, QPixmap
 from PySide6.QtWidgets import (
-    QAbstractItemView, QCheckBox, QComboBox, QDoubleSpinBox, QFileDialog,
-    QFrame, QGridLayout, QHBoxLayout, QHeaderView, QLabel, QLineEdit,
-    QMainWindow, QMenu, QMessageBox, QPlainTextEdit, QPushButton, QScrollArea,
-    QSplitter, QTabWidget, QTableWidget, QTableWidgetItem, QToolButton,
-    QVBoxLayout, QWidget,
+    QAbstractItemView, QApplication, QCheckBox, QComboBox, QDoubleSpinBox,
+    QFileDialog, QFrame, QGridLayout, QHBoxLayout, QHeaderView, QLabel,
+    QLineEdit, QMainWindow, QMenu, QMessageBox, QPlainTextEdit,
+    QPushButton, QScrollArea, QSplitter, QTabWidget, QTableWidget,
+    QTableWidgetItem, QToolButton, QVBoxLayout, QWidget,
 )
 
-from common.driver import BASE_DIR, load_config
+from common import app_detect
+from common.driver import BASE_DIR, load_config, update_config
 from gui import schema
 from gui.runner_thread import RunWorker
 
@@ -360,6 +361,7 @@ class MainWindow(QMainWindow):
         v.setContentsMargins(10, 8, 10, 8)
         v.setSpacing(8)
         v.addWidget(self._build_toolbar())
+        v.addWidget(self._build_env_strip())
         v.addWidget(self._build_chip_strip())
         v.addWidget(self._make_cards_area(), 3)
         v.addWidget(self._make_bottom(), 2)
@@ -368,6 +370,7 @@ class MainWindow(QMainWindow):
 
         self._load_case_into_ui()
         self.render_cards()
+        self._fill_env_from_config()
 
     # ── 顶部工具栏 ──
     def _build_toolbar(self):
@@ -403,11 +406,6 @@ class MainWindow(QMainWindow):
         lay.addWidget(self.add_btn)
 
         lay.addStretch()
-        lay.addWidget(QLabel("设备:"))
-        self.device_combo = QComboBox()
-        self._fill_devices()
-        lay.addWidget(self.device_combo)
-
         pre_btn = QPushButton("前置条件 ▾")
         pre_menu = QMenu(pre_btn)
         self.pre_actions = {}
@@ -435,6 +433,196 @@ class MainWindow(QMainWindow):
         self.status_label.setStyleSheet("color:#64748b;")
         lay.addWidget(self.status_label)
         return bar
+
+    def _build_env_strip(self):
+        """环境配置条: 被测APP(名称→自动检测包名/启动页) + 设备(自动检测在线设备)"""
+        strip = QFrame()
+        strip.setObjectName("chipStrip")
+        lay = QHBoxLayout(strip)
+        lay.setContentsMargins(10, 7, 10, 7)
+        lay.setSpacing(6)
+
+        lay.addWidget(QLabel("被测APP"))
+        self.app_name_edit = QLineEdit()
+        self.app_name_edit.setFixedWidth(100)
+        self.app_name_edit.setToolTip("被测APP名称(中文/英文均可),作为包名自动检测依据")
+        self.app_name_edit.setProperty("cfg_key", "app.name")
+        self.app_name_edit.editingFinished.connect(self._save_env_field)
+        lay.addWidget(self.app_name_edit)
+
+        self.detect_btn = QPushButton("🔍 检测")
+        self.detect_btn.setToolTip("按APP名称在设备已装应用中匹配包名,并自动解析启动页")
+        self.detect_btn.clicked.connect(self.on_detect_app)
+        lay.addWidget(self.detect_btn)
+
+        lay.addWidget(QLabel("包名"))
+        self.pkg_edit = QLineEdit()
+        self.pkg_edit.setFixedWidth(160)
+        self.pkg_edit.setProperty("cfg_key", "app.package")
+        self.pkg_edit.editingFinished.connect(self._save_env_field)
+        lay.addWidget(self.pkg_edit)
+
+        lay.addWidget(QLabel("启动页"))
+        self.act_edit = QLineEdit()
+        self.act_edit.setFixedWidth(180)
+        self.act_edit.setProperty("cfg_key", "app.main_activity")
+        self.act_edit.editingFinished.connect(self._save_env_field)
+        lay.addWidget(self.act_edit)
+
+        sep = QLabel("|")
+        sep.setStyleSheet("color:#e2e8f0;")
+        lay.addWidget(sep)
+
+        lay.addWidget(QLabel("设备"))
+        self.device_combo = QComboBox()
+        self.device_combo.setMinimumWidth(190)
+        self.device_combo.setToolTip("自动检测 adb 在线的真机/模拟器,选择执行设备")
+        self.device_combo.currentIndexChanged.connect(self._on_device_selected)
+        lay.addWidget(self.device_combo)
+
+        lay.addWidget(QLabel("名称"))
+        self.device_name_edit = QLineEdit()
+        self.device_name_edit.setFixedWidth(76)
+        self.device_name_edit.setToolTip("设备备注名,修改后同步保存到配置文件")
+        self.device_name_edit.editingFinished.connect(self._save_device_name)
+        lay.addWidget(self.device_name_edit)
+
+        refresh_btn = QPushButton("↻")
+        refresh_btn.setFixedWidth(30)
+        refresh_btn.setToolTip("重新检测在线设备")
+        refresh_btn.clicked.connect(self._refresh_devices)
+        lay.addWidget(refresh_btn)
+
+        lay.addStretch()
+        self.env_status = QLabel("")
+        self.env_status.setStyleSheet("color:#94a3b8;")
+        lay.addWidget(self.env_status)
+        return strip
+
+    def _fill_env_from_config(self):
+        cfg = {}
+        try:
+            cfg = load_config()
+        except Exception:
+            pass
+        app = cfg.get("app", {})
+        self.app_name_edit.setText(app.get("name", ""))
+        self.pkg_edit.setText(app.get("package", ""))
+        self.act_edit.setText(app.get("main_activity", ""))
+        self._refresh_devices()
+
+    # ── 设备检测 ──
+    def _refresh_devices(self):
+        """adb devices 自动检测真机/模拟器,配置里有备注名的一并显示"""
+        self.device_combo.blockSignals(True)
+        self.device_combo.clear()
+        names = {}
+        try:
+            cfg = load_config()
+            names = {d["id"]: d.get("name", "")
+                     for d in cfg.get("device", {}).get("list", [])}
+        except Exception:
+            pass
+        try:
+            devices = app_detect.list_devices()
+        except Exception as e:
+            devices = []
+            self.env_status.setText(f"adb 检测失败: {e}")
+        if not devices:
+            self.device_combo.addItem("未检测到设备(检查 adb)", None)
+        for dev in devices:
+            did = dev["id"]
+            label = f"{names[did]} ({did})" if names.get(did) else did
+            if dev["state"] != "device":
+                label += f" [{dev['state']}]"
+            self.device_combo.addItem(label, did)
+        self.device_combo.blockSignals(False)
+        self._on_device_selected()
+
+    def _current_device_id(self):
+        return self.device_combo.currentData()
+
+    def _on_device_selected(self):
+        did = self._current_device_id()
+        if not did:
+            self.device_name_edit.clear()
+            return
+        name = ""
+        try:
+            cfg = load_config()
+            name = next((d.get("name", "") for d in cfg.get("device", {}).get("list", [])
+                         if d["id"] == did), "")
+        except Exception:
+            pass
+        self.device_name_edit.setText(name)
+
+    def _save_device_name(self):
+        """设备备注名 → 写回 config.yaml(设备不存在则追加条目)"""
+        did = self._current_device_id()
+        if not did:
+            return
+        name = self.device_name_edit.text().strip()
+        update_config({f"device.name:{did}": name or did})
+        self.env_status.setText(f"设备名称已保存: {name or did}")
+        self._refresh_devices()
+
+    # ── APP 配置 ──
+    def _save_env_field(self):
+        """APP 名称/包名/启动页编辑 → 写回 config.yaml"""
+        w = self.sender()
+        key = w.property("cfg_key")
+        value = w.text().strip()
+        if not value:
+            return
+        try:
+            update_config({key: value})
+            self.env_status.setText(f"配置已保存: {key} = {value}")
+        except Exception as e:
+            QMessageBox.critical(self, "保存配置失败", str(e))
+
+    def on_detect_app(self):
+        """按 APP 名称在设备已装应用中匹配包名,并解析启动页"""
+        app_name = self.app_name_edit.text().strip()
+        if not app_name:
+            QMessageBox.warning(self, "提示", "请先填写被测APP名称")
+            return
+        device_id = self._current_device_id()
+        if not device_id:
+            QMessageBox.warning(self, "提示", "未检测到在线设备,无法检测包名")
+            return
+        self.env_status.setText("检测中...")
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        try:
+            packages = app_detect.list_packages(device_id)
+            matched = app_detect.match_packages(app_name, packages)
+            if not matched:
+                QMessageBox.warning(
+                    self, "未匹配到APP",
+                    f"按名称「{app_name}」未匹配到已装应用。\n"
+                    "可换个别名(如英文名)重试,或直接手动填写包名。")
+                self.env_status.setText("")
+                return
+            if len(matched) == 1 or matched[0][1] > matched[1][1]:
+                package = matched[0][0]
+            else:
+                from PySide6.QtWidgets import QInputDialog
+                options = [p for p, _ in matched[:8]]
+                sel, ok = QInputDialog.getItem(
+                    self, "选择APP", "匹配到多个应用,请选择:", options, 0, False)
+                if not ok:
+                    self.env_status.setText("")
+                    return
+                package = sel
+            activity = app_detect.detect_main_activity(device_id, package) or ""
+            self.pkg_edit.setText(package)
+            self.act_edit.setText(activity)
+            update_config({"app.package": package, "app.main_activity": activity})
+            self.env_status.setText(f"检测完成: {package} → {activity or '启动页未识别,请手填'}")
+        except Exception as e:
+            QMessageBox.critical(self, "检测失败", f"{type(e).__name__}: {e}")
+            self.env_status.setText("")
+        finally:
+            QApplication.restoreOverrideCursor()
 
     def _build_chip_strip(self):
         """用例信息行 + 常用组件快捷条"""
@@ -789,19 +977,6 @@ class MainWindow(QMainWindow):
         self.run_btn.setEnabled(True)
         self.stop_btn.setEnabled(False)
         self.worker = None
-
-    def _fill_devices(self):
-        try:
-            cfg = load_config()
-        except Exception:
-            cfg = {"device": {"list": []}}
-        seen = set()
-        for dev in cfg.get("device", {}).get("list", []):
-            self.device_combo.addItem(f"{dev.get('name', dev['id'])} ({dev['id']})", dev["id"])
-            seen.add(dev["id"])
-        default = cfg.get("device", {}).get("default")
-        if default and default != "auto" and default not in seen:
-            self.device_combo.addItem(f"默认 ({default})", default)
 
     def closeEvent(self, event):
         if self.worker:

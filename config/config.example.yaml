@@ -1,0 +1,28 @@
+# config.yaml 模板: 复制为 config/config.yaml 后按实际环境修改
+# (GUI 里修改 APP/设备配置会自动同步回 config.yaml)
+#
+# 注: 本机若启用了文档透明加密,config.yaml 经程序改写后在本机工具链内
+#     读写正常,但不入库(见 .gitignore),团队共享以本模板为准。
+
+# ── APP 配置 ──
+app:
+  name: 涂鸦智能              # 被测APP名称(GUI 可改,作为包名自动检测依据)
+  package: com.tuya.smartiot  # 可在 GUI 点「🔍检测」自动识别
+  main_activity: com.smart.ThingSplashActivity
+
+# ── 设备配置 ──
+device:
+  default: 127.0.0.1:5555     # --device auto 时使用
+  list:
+    - id: 127.0.0.1:5555
+      name: 模拟器             # GUI 里可改备注名,自动同步
+
+# ── 目标设备 ──
+target_device: SE3L            # APP 内进入哪个设备页面
+
+# ── 执行配置 ──
+runner:
+  step_interval: 3           # 每步间隔（秒）
+  default_timeout: 30        # assert 超时（秒），0 = 无限等待
+  click_timeout: 10          # click 超时（秒），0 = 无限等待
+  screenshot_on_fail: true   # 失败自动截图

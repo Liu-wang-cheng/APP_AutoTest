@@ -8,6 +8,10 @@ reports/
 Test_img/screenshots/
 *.log
 
+# 实际环境配置(含设备序列号等机器相关信息,且程序回写后在本机会被
+# 透明加密成密文,入库无意义)——团队共享用 config/config.example.yaml
+config/config.yaml
+
 # 设备层级 dump 残留
 /*.xml
 
