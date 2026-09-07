@@ -1,13 +1,38 @@
-import time
-import re
-import os
 import logging
+import operator
+import os
+import re
+import subprocess
+import time
+
 import cv2
 import numpy as np
 from PIL import Image
 import uiautomator2 as u2
 
+from common import vision
+from common.driver import BASE_DIR
+
 log = logging.getLogger("vacuum_test")
+
+# ── 可调参数集中定义(校准依据见各使用处) ──
+SWITCH_BLUE_RATIO = 0.34   # 开关区域蓝色通道占比: 打开>0.34, 关闭(灰)≈0.33
+SWITCH_SATURATION = 30     # 开关区域 HSV 平均饱和度: 有色(开)>30, 灰(关)<30
+SWITCH_TMPL_THRESHOLD = 0.7  # 开关 SIFT 失败时,归一化模板匹配的置信度下限
+POLL_SHORT_N = 3           # 前 N 次轮询用 1s 短间隔(元素可能马上出现)
+POLL_MID_N = 10            # 到第 N 次用 2s 中间隔
+POLL_SHORT = 1
+POLL_MID = 2
+POLL_MAX = 5               # 轮询间隔封顶 5s(原 30s 会让刚出现的元素白等半小时级)
+
+# 数值断言算子映射(顺序即匹配优先级,>= 必须在 > 之前)
+_NUM_OPS = {
+    ">=": operator.ge,
+    "<=": operator.le,
+    ">": operator.gt,
+    "<": operator.lt,
+    "==": operator.eq,
+}
 
 
 def d_serial(d):
@@ -21,28 +46,62 @@ def d_serial(d):
 class ActionRunner:
     """YAML 步骤执行引擎"""
 
-    IMAGE_DIR = "Test_img/templates"  # 模板图片固定目录
+    IMAGE_DIR = vision.TEMPLATE_DIR  # 模板图片固定目录(绝对路径)
 
-    def __init__(self, device: u2.Device, config: dict, case_wait=None):
+    def __init__(self, device: u2.Device, config: dict, case_wait=None, case_name=""):
         self.d = device
         self._device_id = getattr(device, 'serial', None)
+        self.case_name = case_name  # 用于失败截图命名,避免跨用例覆盖
         # 用例级 wait 优先，否则用全局 step_interval
         self.interval = case_wait if case_wait is not None else config.get("step_interval", 3)
         self.timeout = config.get("default_timeout", 30)
         self.click_timeout = config.get("click_timeout", 10)
-        self.confidence = config.get("template_confidence", 0.8)
         self.results = []
         self.store = {}  # grab/match 数据暂存
-        # 加载定位器配置（用于 ${section.key} 引用，换 APP 时集中修改）
+        # 执行过程中动态写入的状态,集中在此初始化
         self._locators = {}
+        self._last_compare_msg = None
+        self._pending_sub_results = None
+        self._debug_map_path = None
+        self._stored_zones = []
+        self._next_room_idx = 0
+        self._ocr = None  # ddddocr 懒加载(加载慢且非所有用例用到)
+        # 加载定位器配置（用于 ${section.key} 引用，换 APP 时集中修改）
         try:
-            import yaml, os
-            loc_path = os.path.join("config", "locators.yaml")
+            import yaml
+            loc_path = os.path.join(BASE_DIR, "config", "locators.yaml")
             if os.path.exists(loc_path):
                 with open(loc_path, encoding="utf-8") as f:
                     self._locators = yaml.safe_load(f) or {}
         except Exception as e:
             log.warning(f"[locators] 加载失败: {e}")
+
+    def _ensure_ocr(self):
+        """OCR 引擎懒加载"""
+        if self._ocr is None:
+            import ddddocr
+            self._ocr = ddddocr.DdddOcr(show_ad=False)
+        return self._ocr
+
+    def _poll_sleep(self, check_count):
+        """轮询间隔: 1s → 2s → 5s 封顶(保证刚出现的元素尽快被发现)"""
+        if check_count <= POLL_SHORT_N:
+            time.sleep(POLL_SHORT)
+        elif check_count <= POLL_MID_N:
+            time.sleep(POLL_MID)
+        else:
+            time.sleep(POLL_MAX)
+
+    def _failure_screenshot(self, step_index):
+        """失败截图存到 reports/failures/,文件名带用例名避免跨用例覆盖"""
+        prefix = f"{self.case_name}_" if self.case_name else ""
+        fail_path = os.path.join(BASE_DIR, "reports", "failures", f"{prefix}step_{step_index:02d}_fail.png")
+        try:
+            os.makedirs(os.path.dirname(fail_path), exist_ok=True)
+            self.d.screenshot(fail_path)
+            return fail_path
+        except Exception:
+            return ""
 
     def _ensure_device(self):
         """操作前心跳检测，掉线自动重连（最多3次）"""
@@ -87,7 +146,6 @@ class ActionRunner:
         for i, step in enumerate(steps):
             step = self._resolve_step(step)  # 解析 ${section.key} 定位器引用
             desc = self._step_desc(step)
-            self._ensure_device()  # 操作前心跳检测+自动重连
             # retry: 失败自动重试次数（默认0=不重试）
             retry = step.get("retry", 0) if isinstance(step, dict) else 0
             max_attempts = retry + 1
@@ -113,12 +171,7 @@ class ActionRunner:
                         time.sleep(2)
                     else:
                         # 最终失败：截图 + 诊断
-                        screenshot = ""
-                        try:
-                            self.d.screenshot(f"reports/failures/step_{i:02d}_fail.png")
-                            screenshot = f"reports/failures/step_{i:02d}_fail.png"
-                        except Exception:
-                            pass
+                        screenshot = self._failure_screenshot(i)
                         try:
                             xml = self.d.dump_hierarchy()
                             texts = [t for t in re.findall(r'text="([^"]+)"', xml) if t.strip()]
@@ -156,7 +209,9 @@ class ActionRunner:
             path = step["screenshot"]
             # screenshots/ 开头的路径补全 Test_img/ 前缀（reports/ 等其他路径原样）
             if path.startswith("screenshots/"):
-                path = f"Test_img/{path}"
+                path = os.path.join(BASE_DIR, "Test_img", path)
+            elif not os.path.isabs(path):
+                path = os.path.join(BASE_DIR, path)
             os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
             self.d.screenshot(path)
             screenshot = path
@@ -272,38 +327,38 @@ class ActionRunner:
                 try:
                     info = el.info
                     if not info.get("clickable"):
-                        xml = self.d.dump_hierarchy()
-                        import re
-                        text_val = info.get("text", "")
-                        idx = xml.find(f'text="{text_val}"')
-                        if idx > 0:
-                            # 找包含此文本的 *_Row 子树（Row 内的标签文本和搜索文本匹配）
-                            import re
-                            for rm in re.finditer(
-                                r'content-desc="(\w+_Row)"[^>]*bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', xml):
-                                row_start = rm.start()
-                                row_end = xml.find('content-desc="', rm.end())
-                                if row_end < 0:
-                                    row_end = len(xml)
-                                subtree = xml[row_start:row_end]
-                                # 检查搜索文本是否在这个 Row 的子树中
-                                if value in subtree or (text_val and text_val in subtree):
-                                    if self.d(description=rm.group(1)).exists(timeout=1):
-                                        self.d(description=rm.group(1)).click()
-                                    else:
-                                        row_cx = (int(rm.group(2)) + int(rm.group(4))) // 2
-                                        row_cy = (int(rm.group(3)) + int(rm.group(5))) // 2
-                                        self.d.click(row_cx, row_cy)
-                                    return
+                        # 非 clickable 时尝试点击所在的 *_Row 整行（RN 列表行）
+                        if self._click_row_fallback(value, info.get("text", "")):
+                            return
                 except Exception as e:
-                    print(f"[DEBUG] 异常: {e}")
+                    log.debug(f"[click] 行点击回退异常: {e}")
                 el.click()
                 return
             check_count += 1
-            if check_count <= 10:
-                time.sleep(2)
-            else:
-                time.sleep(30)
+            self._poll_sleep(check_count)
+
+    def _click_row_fallback(self, value, text_val):
+        """在层级 XML 中查找包含目标文本的 *_Row 子树并点击其中心
+
+        Row 内的标签文本与搜索文本(或元素自身文本)匹配即命中,
+        优先用 content-desc 定位,失败则按 bounds 中心点坐标点击。
+        """
+        xml = self.d.dump_hierarchy()
+        for rm in re.finditer(
+                r'content-desc="(\w+_Row)"[^>]*bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', xml):
+            row_end = xml.find('content-desc="', rm.end())
+            if row_end < 0:
+                row_end = len(xml)
+            subtree = xml[rm.start():row_end]
+            # 搜索文本或元素文本在这个 Row 的子树中才算命中
+            if value in subtree or (text_val and text_val in subtree):
+                if self.d(description=rm.group(1)).exists(timeout=1):
+                    self.d(description=rm.group(1)).click()
+                else:
+                    self.d.click((int(rm.group(2)) + int(rm.group(4))) // 2,
+                                 (int(rm.group(3)) + int(rm.group(5))) // 2)
+                return True
+        return False
 
     def _assert_locator(self, value, timeout=None):
         timeout = timeout if timeout is not None else self.timeout
@@ -318,10 +373,7 @@ class ActionRunner:
                 if self._find_element(v).exists(timeout=1):
                     return
             check_count += 1
-            if check_count <= 10:
-                time.sleep(2)
-            else:
-                time.sleep(30)
+            self._poll_sleep(check_count)
 
     def _find_element(self, value):
         # #N后缀 → 第N个匹配（如 "虚拟墙#2" 点第2个虚拟墙）
@@ -350,7 +402,7 @@ class ActionRunner:
         timeout = timeout if timeout is not None else self.click_timeout
         pos = self._match_template(img_name, timeout=timeout)
         if pos is None:
-            raise TimeoutError(f"click 超时({self.click_timeout}s)模板匹配失败: {img_name}")
+            raise TimeoutError(f"click 超时({timeout}s)模板匹配失败: {img_name}")
         self.d.click(pos[0], pos[1])
 
     def _assert_template(self, img_name, timeout=None):
@@ -360,22 +412,11 @@ class ActionRunner:
             raise AssertionError(f"超时({timeout}s)图片未找到: {img_name}")
 
     def _match_template(self, img_name, timeout=None, min_matches=4):
-        """SIFT 特征点匹配定位图标
-        - 只比图标的特征点(角点/边缘/轮廓)，不比背景像素
-        - 小模板自动放大 3x，保证 SIFT 有足够像素
-        - 中位数定位 + 离群点过滤，抗假阳性
-        """
+        """SIFT 特征点匹配定位图标(匹配算法见 common/vision.py,模板特征已缓存)"""
         timeout = timeout if timeout is not None else self.timeout
-        img_path = f"{self.IMAGE_DIR}/{img_name}"
+        img_path = os.path.join(self.IMAGE_DIR, img_name)
         end_time = time.time() + timeout if timeout > 0 else None
         check_count = 0
-
-        # SIFT 检测器（降低门槛以适配简单小图标）
-        sift = cv2.SIFT_create(
-            contrastThreshold=0.01,
-            edgeThreshold=5,
-            nOctaveLayers=5,
-        )
 
         while True:
             if end_time and time.time() >= end_time:
@@ -383,54 +424,12 @@ class ActionRunner:
 
             screen = self.d.screenshot(format="opencv")
             screen_gray = cv2.cvtColor(screen, cv2.COLOR_BGR2GRAY)
-            pos = self._find_sift(screen_gray, img_path, sift, min_matches)
+            pos = vision.find_in_gray(screen_gray, img_path, min_matches)
             if pos is not None:
                 return pos
 
             check_count += 1
-            if check_count <= 10:
-                time.sleep(2)
-            else:
-                time.sleep(30)
-
-    def _find_sift(self, screenshot_gray, template_path, sift, min_matches=4, ratio=0.7):
-        """SIFT 特征点匹配定位图标"""
-        # 1. 读取模板，小图自动放大
-        pil_img = Image.open(template_path).convert("L")
-        tpl = np.array(pil_img)
-        h, w = tpl.shape
-        if w < 100 or h < 100:
-            tpl = cv2.resize(tpl, (w * 3, h * 3), interpolation=cv2.INTER_CUBIC)
-
-        # 2. SIFT 检测特征点
-        kp1, des1 = sift.detectAndCompute(tpl, None)
-        kp2, des2 = sift.detectAndCompute(screenshot_gray, None)
-
-        if des1 is None or des2 is None or len(des1) < 2 or len(des2) < 2:
-            return None
-
-        # 3. BFMatcher + Lowe ratio test
-        bf = cv2.BFMatcher()
-        try:
-            raw_matches = bf.knnMatch(des1, des2, k=2)
-        except cv2.error:
-            return None
-
-        good = [m for m, n in raw_matches if m.distance < ratio * n.distance]
-
-        if len(good) < min_matches:
-            return None
-
-        # 4. 中位数定位 + 离群点过滤（< 40px）
-        pts = np.array([kp2[m.trainIdx].pt for m in good])
-        median = np.median(pts, axis=0)
-        dists = np.linalg.norm(pts - median, axis=1)
-        inliers = pts[dists < 40]
-        if len(inliers) < min_matches:
-            return None
-
-        mean = np.mean(inliers, axis=0).astype(int)
-        return (int(mean[0]), int(mean[1]))
+            self._poll_sleep(check_count)
 
     # ── 抓取/对比数据 ──
     def _do_grab(self, keywords):
@@ -459,14 +458,16 @@ class ActionRunner:
             found = self._extract_value(texts, kw)
             # 预约时间特殊处理：从层级中取第一个非状态栏(y>80)的 HH:MM
             if found is None and kw == "预约时间":
-                import re as _re2
                 xml = self.d.dump_hierarchy()
-                items = _re2.findall(r'text="(?:\d{4}-\d{2}-\d{2} )?(\d{1,2}:\d{2})"[^>]*bounds="\[\d+,(\d+)\]', xml)
+                items = re.findall(r'text="(?:\d{4}-\d{2}-\d{2} )?(\d{1,2}:\d{2})"[^>]*bounds="\[\d+,(\d+)\]', xml)
                 times = [t for t, y in items if int(y) > 80]
                 if times:
                     found = times[0]
             match_results.append(f"{kw}={found}")
-            if found is not None and found != stored:
+            if found is None:
+                # grab 在主页抓到过、记录页却找不到 → 判失败,防止数据缺失假通过
+                mismatches.append(f"主页={stored}, 记录页未找到'{kw}'")
+            elif found != stored:
                 try:
                     if abs(float(stored) - float(found)) <= 1:
                         continue
@@ -485,21 +486,18 @@ class ActionRunner:
         switch_label: 可选，通过同行文本标签（如"定制模式"）自动定位开关
         """
         expect_on = state in ("on", "打开", "开", True)
-        # 判断当前状态（内部会缓存开关位置到 self._last_switch_pos）
-        is_on = self._get_switch_state(area, switch_tpl, switch_label)
+        is_on, pos = self._get_switch_state(area, switch_tpl, switch_label)
         if is_on == expect_on:
             log.info(f"[switch] 已是{'打开' if expect_on else '关闭'}状态，跳过")
             self._last_compare_msg = f"开关={'打开' if expect_on else '关闭'}(无需切换)"
             return
-        # 用 _get_switch_state 已定位的开关位置点击
-        pos = getattr(self, '_last_switch_pos', None)
         if pos is None:
             raise RuntimeError("无法定位开关位置")
         self.d.click(pos[0], pos[1])
         log.info(f"[switch] 点击开关({pos[0]},{pos[1]})")
         time.sleep(3)
         # 验证
-        is_on = self._get_switch_state(area, switch_tpl, switch_label)
+        is_on, _ = self._get_switch_state(area, switch_tpl, switch_label)
         if is_on == expect_on:
             log.info(f"[switch] 切换成功→{'打开' if expect_on else '关闭'}")
             self._last_compare_msg = f"开关={'打开' if expect_on else '关闭'}"
@@ -507,7 +505,7 @@ class ActionRunner:
             raise AssertionError(f"开关切换失败，当前{'打开' if is_on else '关闭'}")
 
     def _get_switch_state(self, area=None, switch_tpl=None, switch_label=None):
-        """获取开关状态：优先颜色检测
+        """获取开关状态及位置，返回 (is_on, pos)：优先颜色检测
         switch_tpl: 用于定位开关的模板图片名（默认 勿扰打开.png）
         area: 可选 [x1,y1,x2,y2] 直接指定开关区域
         switch_label: 可选，通过同行文本标签（如"定制模式"）自动定位开关
@@ -515,8 +513,8 @@ class ActionRunner:
         screen = self.d.screenshot(format="opencv")
         if area:
             x1, y1, x2, y2 = area
+            pos = ((x1 + x2) // 2, (y1 + y2) // 2)
             crop = screen[y1:y2, x1:x2]
-            self._last_switch_pos = ((x1 + x2) // 2, (y1 + y2) // 2)
         elif switch_label:
             el = self.d(textContains=switch_label)
             if not el.exists(timeout=3):
@@ -530,44 +528,41 @@ class ActionRunner:
             y1 = max(0, b["top"] - 15)
             x2 = scr_w - 30
             y2 = min(screen.shape[0], b["bottom"] + 15)
+            pos = ((x1 + x2) // 2, (y1 + y2) // 2)
             crop = screen[y1:y2, x1:x2]
-            self._last_switch_pos = ((x1 + x2) // 2, (y1 + y2) // 2)
         else:
             tpl_name = switch_tpl or "勿扰打开.png"
-            tpl_path = f"{self.IMAGE_DIR}/{tpl_name}"
-            from PIL import Image as _PI
-            tpl = np.array(_PI.open(tpl_path).convert("L"))
-            h, w = tpl.shape
+            tpl_path = os.path.join(self.IMAGE_DIR, tpl_name)
+            h, w = np.array(Image.open(tpl_path).convert("L")).shape[:2]
             pos = None
+            right_gray = None
             # 只在右半屏搜索（开关始终在右侧，避免左侧UI误匹配）
-            screen_w = screen.shape[1]
-            half = screen_w // 2
-            right_screen = screen[:, half:, :]
-            right_gray = cv2.cvtColor(right_screen, cv2.COLOR_BGR2GRAY)
-            sift = cv2.SIFT_create(contrastThreshold=0.01, edgeThreshold=5, nOctaveLayers=5)
+            half = screen.shape[1] // 2
             for _ in range(2):
-                pos = self._find_sift(right_gray, tpl_path, sift, min_matches=3)
-                if pos: pos = (pos[0] + half, pos[1]); break
+                right_gray = cv2.cvtColor(screen[:, half:, :], cv2.COLOR_BGR2GRAY)
+                found = vision.find_in_gray(right_gray, tpl_path, min_matches=3)
+                if found:
+                    pos = (found[0] + half, found[1])
+                    break
                 time.sleep(0.3)
                 screen = self.d.screenshot(format="opencv")
-                right_screen = screen[:, half:, :]
-                right_gray = cv2.cvtColor(right_screen, cv2.COLOR_BGR2GRAY)
             if not pos:
+                # SIFT 失败时回退归一化模板匹配
+                tpl = np.array(Image.open(tpl_path).convert("L"))
                 r = cv2.matchTemplate(right_gray, tpl, cv2.TM_CCORR_NORMED)
                 _, v, _, loc = cv2.minMaxLoc(r)
-                if v >= 0.7: pos = (loc[0] + half + w//2, loc[1] + h//2)
-            if not pos: raise AssertionError(f"未定位到开关模板: {tpl_name}")
-            self._last_switch_pos = pos
+                if v >= SWITCH_TMPL_THRESHOLD:
+                    pos = (loc[0] + half + w // 2, loc[1] + h // 2)
+            if not pos:
+                raise AssertionError(f"未定位到开关模板: {tpl_name}")
             # 以匹配位为中心扩散 2x 采样颜色（3x会稀释蓝色信号导致ON误判为OFF）
-            x1 = max(0, pos[0] - w)
-            y1 = max(0, pos[1] - h)
-            x2 = min(screen.shape[1], pos[0] + w)
-            y2 = min(screen.shape[0], pos[1] + h)
+            x1, y1 = max(0, pos[0] - w), max(0, pos[1] - h)
+            x2, y2 = min(screen.shape[1], pos[0] + w), min(screen.shape[0], pos[1] + h)
             crop = screen[y1:y2, x1:x2]
-        # 蓝色通道占比：打开=蓝色>0.34，关闭=灰色≈0.33
+        # 蓝色通道占比：打开=蓝色>阈值，关闭=灰色≈0.33
         bgr_mean = np.mean(crop, axis=(0, 1))
         blue_ratio = bgr_mean[0] / (bgr_mean[0] + bgr_mean[1] + bgr_mean[2] + 1)
-        return blue_ratio > 0.34
+        return blue_ratio > SWITCH_BLUE_RATIO, pos
 
     def _do_assert_switch(self, state, area=None):
         """判断开关状态：打开=高饱和度颜色(蓝/绿)，关闭=灰色(低饱和度)
@@ -595,7 +590,7 @@ class ActionRunner:
         # HSV 饱和度判断：开关有色=打开，灰色=关闭
         hsv = cv2.cvtColor(crop, cv2.COLOR_BGR2HSV)
         mean_sat = hsv[:, :, 1].mean()
-        is_on = mean_sat > 30  # 均值饱和度>30=有色=打开
+        is_on = mean_sat > SWITCH_SATURATION  # 均值饱和度超阈值=有色=打开
         # 期望状态
         expect_on = state in ("on", "打开", "开", True)
         expect_off = state in ("off", "关闭", "关", False)
@@ -618,8 +613,6 @@ class ActionRunner:
         add_tpl:  YAML指定的添加按钮模板图，如 "添加预约.png"
         max_tasks: 任务数达此值时先删旧任务再添加，默认 2
         """
-        import re
-
         # ── 1. 自动统计任务数 ──
         xml = self.d.dump_hierarchy()
         cells = re.findall(r'content-desc="(Timer_TimerCell\d+)"', xml)
@@ -775,20 +768,18 @@ class ActionRunner:
             if not too_close:
                 merged.append(z)
         zones = merged
-        import os
-        os.makedirs("reports/debug", exist_ok=True)
+        debug_dir = os.path.join(BASE_DIR, "reports", "debug")
+        os.makedirs(debug_dir, exist_ok=True)
         # 标注检测区域（红框）+ 分区中心（绿点）
         debug = screen.copy()
         cv2.rectangle(debug, (x1, y1), (x2, y2), (0, 0, 255), 3)
         for cx, cy, _ in zones[:8]:
             cv2.circle(debug, (cx, cy), 10, (0, 255, 0), -1)
         # 用 PIL 保存，支持中文路径
-        import os
-        os.makedirs("reports/debug", exist_ok=True)
-        Image.fromarray(cv2.cvtColor(screen, cv2.COLOR_BGR2RGB)).save("reports/debug/map_screen.png")
-        Image.fromarray(cv2.cvtColor(roi, cv2.COLOR_BGR2RGB)).save("reports/debug/map_roi.png")
-        Image.fromarray(mask_all).save("reports/debug/map_mask.png")
-        path = f"reports/debug/map_{label}.png"
+        Image.fromarray(cv2.cvtColor(screen, cv2.COLOR_BGR2RGB)).save(os.path.join(debug_dir, "map_screen.png"))
+        Image.fromarray(cv2.cvtColor(roi, cv2.COLOR_BGR2RGB)).save(os.path.join(debug_dir, "map_roi.png"))
+        Image.fromarray(mask_all).save(os.path.join(debug_dir, "map_mask.png"))
+        path = os.path.join(debug_dir, f"map_{label}.png")
         Image.fromarray(cv2.cvtColor(debug, cv2.COLOR_BGR2RGB)).save(path)
         self._debug_map_path = path
         if not zones:
@@ -799,6 +790,22 @@ class ActionRunner:
         msg = f"识别到 {len(self._stored_zones)} 个房间分区"
         log.info(f"[room_zones] {msg}")
         self._last_compare_msg = msg
+
+    def _click_dialog_confirm(self):
+        """点击弹窗确认按钮：优先按文本/描述定位，失败回退屏幕等比位置
+
+        等比位置按 1080x1920 校准(原硬编码 558,1389),换分辨率设备也能用
+        """
+        for how, val in [("text", "确认"), ("text", "确定"), ("desc", "Popup_Confirm")]:
+            el = self.d(description=val) if how == "desc" else self.d(text=val)
+            if el.exists(timeout=1):
+                el.click()
+                log.info(f"[dialog] 点击确认按钮({val})")
+                return True
+        w, h = self.d.window_size()
+        self.d.click(int(w * 558 / 1080), int(h * 1389 / 1920))
+        log.info("[dialog] 未找到确认按钮,按等比位置点击")
+        return True
 
     def _do_merge_zones(self):
         """合并房间：已在合并模式，依次尝试相邻分区对直到生效"""
@@ -815,7 +822,7 @@ class ActionRunner:
                     self.d(text="合并").click(); time.sleep(3)
                     self._wait_loading()
                 if self.d(textContains="提示").exists(timeout=2):
-                    self.d.click(558, 1389); time.sleep(2)
+                    self._click_dialog_confirm(); time.sleep(2)
                     log.info(f"[merge] {i},{j} 不相邻")
                     continue
                 if self.d(textContains="请选择").exists(timeout=2) or \
@@ -831,7 +838,6 @@ class ActionRunner:
         """根据设备当前时间+offset分钟，用 OCR+滑动精确设置时间选择器
         circular: True=循环滚轮(最短路径环绕)，False=单向滚轮(纯数值不环绕)
         """
-        import subprocess, ddddocr
         # 1. 获取设备当前时间
         try:
             cur = subprocess.check_output(
@@ -846,8 +852,7 @@ class ActionRunner:
         log.info(f"[set_time] 当前{ch:02d}:{cm:02d} +{offset}min → 目标{th:02d}:{tm:02d}")
 
         # 3. OCR 识别滚轮当前值（懒加载）
-        if not hasattr(self, '_ocr'):
-            self._ocr = ddddocr.DdddOcr(show_ad=False)
+        self._ensure_ocr()
 
         # 4. 自动识别滚轮区域（DatePicker_ 或 Timer_TimerPicker_）
         hour_b = self._wheel_bounds(self._find_wheel_desc("Hour"))
@@ -858,7 +863,10 @@ class ActionRunner:
             h_w = (hour_b["right"] - hour_b["left"]) // 4
             m_w = (min_b["right"] - min_b["left"]) // 8
         else:
-            hx, mx, h_w, m_w = 276, 810, 110, 28
+            # 无滚轮控件时的兜底位置(按 1080x1920 校准的等比坐标)
+            w, h = self.d.window_size()
+            hx, mx = int(w * 276 / 1080), int(w * 810 / 1080)
+            h_w, m_w = int(w * 110 / 1080), int(w * 28 / 1080)
         self._adjust_wheel("hour", hx, th, 24, step=60, crop_w=h_w, circular=circular)
         self._adjust_wheel("minute", mx, tm, 60, step=35, crop_w=m_w, circular=circular)
         self.store["预约时间"] = f"{th:02d}:{tm:02d}"
@@ -881,22 +889,20 @@ class ActionRunner:
 
     def _adjust_wheel(self, name, cx, target, mod, step=50, crop_w=60, circular=False):
         """计数法：探测方向+每格步长→计数滑动（不反复OCR）→验证→小步补救"""
-        import cv2 as _cv2
-        from PIL import Image as _Image
-        if not hasattr(self, '_ocr'):
-            import ddddocr
-            self._ocr = ddddocr.DdddOcr(show_ad=False)
+        self._ensure_ocr()
         b = self._wheel_bounds(self._find_wheel_desc(name.capitalize()))
-        cy = (b["top"] + b["bottom"]) // 2 if b else 1525
+        # 兜底 cy 按 1080x1920 校准等比换算
+        _, wh = self.d.window_size()
+        cy = (b["top"] + b["bottom"]) // 2 if b else int(wh * 1525 / 1920)
         y1, y2 = cy - 35, cy + 35
 
         def read_val():
             screen = self.d.screenshot(format="opencv")
             crop = screen[y1:y2, cx-crop_w:cx+crop_w]
-            crop = _cv2.resize(crop, (crop.shape[1]*2, crop.shape[0]*2),
-                               interpolation=_cv2.INTER_CUBIC)
-            gray = _cv2.cvtColor(crop, _cv2.COLOR_BGR2GRAY)
-            raw = self._ocr.classification(_Image.fromarray(gray)).strip()
+            crop = cv2.resize(crop, (crop.shape[1]*2, crop.shape[0]*2),
+                              interpolation=cv2.INTER_CUBIC)
+            gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+            raw = self._ocr.classification(Image.fromarray(gray)).strip()
             try:
                 return int(raw)
             except Exception:
@@ -1046,11 +1052,13 @@ class ActionRunner:
             self._next_room_idx = next_idx + 1
         else:
             # count 超出分区数：连点剩余全部（兼容旧语义）
+            remaining = len(zones) - next_idx
             for cx, cy in zones[next_idx:]:
                 self.d.click(cx, cy)
                 time.sleep(2)
             self._next_room_idx = len(zones)
-            log.info(f"[WARNING] {msg}")
+            msg = f"连点剩余 {remaining} 个分区(要求 {count}, 可用 {len(zones)})"
+            log.info(f"[room_click] {msg}")
             self._last_compare_msg = msg
     def _do_swipe(self, direction):
         """滑动: left/right/up/down/fast-left/fast-right 或 四元组 [sx,sy,ex,ey]"""
@@ -1077,8 +1085,11 @@ class ActionRunner:
         只比较中间区域（地图区），忽略状态栏和底部控制区"""
         screen = self.d.screenshot(format="opencv")
         cur = cv2.cvtColor(screen, cv2.COLOR_BGR2GRAY)
+        # 基准图与 screenshot 步骤的保存规则一致: screenshots/ 前缀补 Test_img/
+        if not os.path.isabs(baseline):
+            prefix = "Test_img" if baseline.startswith("screenshots/") else ""
+            baseline = os.path.join(BASE_DIR, prefix, baseline)
         try:
-            from PIL import Image
             ref_pil = Image.open(baseline).convert("L")
             ref = np.array(ref_pil)
         except Exception as e:
@@ -1096,7 +1107,7 @@ class ActionRunner:
         msg = f"相似度 {similarity:.1%}"
         if inverse:
             # diff 模式：相似度 < 阈值（即有差异）则通过
-            # 默认 0.95 = 只要变化超过 5% 就算通过
+            # 默认 0.99 = 只要变化超过 1% 就算通过
             if similarity > threshold:
                 raise AssertionError(f"{msg}，几乎无变化")
         else:
@@ -1131,7 +1142,7 @@ class ActionRunner:
         passed = False
 
         # 数值比较: "电量 > 50"
-        for op in (">=", "<=", ">", "<", "=="):
+        for op, fn in _NUM_OPS.items():
             if op in condition:
                 keyword, expected = condition.split(op, 1)
                 keyword = keyword.strip()
@@ -1139,8 +1150,8 @@ class ActionRunner:
                 val = self._extract_value(self._get_all_texts(), keyword)
                 if val:
                     try:
-                        passed = eval(f"float({val}) {op} float({expected})")
-                    except Exception:
+                        passed = bool(fn(float(val), float(expected)))
+                    except (TypeError, ValueError):
                         pass
                 break
         else:

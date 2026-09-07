@@ -1,30 +1,29 @@
-import pytest
-import subprocess
-import time
-import re
-import logging
 import os
-import shutil
-import glob
+import re
+import subprocess
+import sys
+import time
+
 import cv2
-import numpy as np
-from PIL import Image
-from common.driver import load_config
+import pytest
+
+from common import vision
+from common.driver import BASE_DIR, load_config
 from common.excel_report import ExcelReport
 from common.logger import setup_logger
 
 
 # 初始化循环日志（5MB）
-log = setup_logger("reports/test.log")
+log = setup_logger(os.path.join(BASE_DIR, "reports", "test.log"))
 
 
 def _clean_debug_dir():
     """每次运行前清空 debug 调试目录（避免历史调试产物越积越多）"""
-    debug_dir = "reports/debug"
+    debug_dir = os.path.join(BASE_DIR, "reports", "debug")
     if os.path.isdir(debug_dir):
-        for f in glob.glob(os.path.join(debug_dir, "*")):
+        for f in os.listdir(debug_dir):
             try:
-                os.remove(f)
+                os.remove(os.path.join(debug_dir, f))
             except OSError:
                 pass
 
@@ -56,49 +55,20 @@ def _is_charging(d):
 
 def _click_template(d, img_name, timeout=10):
     """SIFT 定位并点击模板图片，成功返回坐标，失败返回 None"""
-    from PIL import Image as PILImage
-    img_path = f"Test_img/templates/{img_name}"
-    if not d.screenshot:
-        return None
-    screen = d.screenshot(format="opencv")
-    gray = cv2.cvtColor(screen, cv2.COLOR_BGR2GRAY)
-
-    pil_img = PILImage.open(img_path).convert("L")
-    tpl = np.array(pil_img)
-    h, w = tpl.shape
-    if w < 100 or h < 100:
-        tpl = cv2.resize(tpl, (w * 3, h * 3), interpolation=cv2.INTER_CUBIC)
-
-    sift = cv2.SIFT_create(contrastThreshold=0.01, edgeThreshold=5, nOctaveLayers=5)
-    kp1, des1 = sift.detectAndCompute(tpl, None)
-    kp2, des2 = sift.detectAndCompute(gray, None)
-    if des1 is None or des2 is None or len(des1) < 2 or len(des2) < 2:
-        return None
-
-    bf = cv2.BFMatcher()
-    try:
-        raw = bf.knnMatch(des1, des2, k=2)
-    except cv2.error:
-        return None
-    good = [m for m, n in raw if m.distance < 0.7 * n.distance]
-    if len(good) < 4:
-        return None
-
-    pts = np.array([kp2[m.trainIdx].pt for m in good])
-    median = np.median(pts, axis=0)
-    dists = np.linalg.norm(pts - median, axis=1)
-    inliers = pts[dists < 40]
-    if len(inliers) < 4:
-        return None
-
-    mean = np.mean(inliers, axis=0)
-    cx, cy = int(mean[0]), int(mean[1])
-    d.click(cx, cy)
-    return (cx, cy)
+    img_path = os.path.join(vision.TEMPLATE_DIR, img_name)
+    end = time.time() + timeout
+    while time.time() < end:
+        screen = d.screenshot(format="opencv")
+        pos = vision.find_in_gray(cv2.cvtColor(screen, cv2.COLOR_BGR2GRAY), img_path)
+        if pos:
+            d.click(*pos)
+            return pos
+        time.sleep(2)
+    return None
 
 
 @pytest.fixture(scope="function")
-def device(request):
+def device(request, report):
     """每个用例前后重启 APP，进入设备页，确保充电且电量 >50%"""
     import uiautomator2 as u2
     cfg = load_config()
@@ -113,6 +83,15 @@ def device(request):
 
     d = u2.connect(device_id)
     d.implicitly_wait(10)
+
+    # 报告填入真实设备信息（SN / App 版本），失败不影响执行
+    try:
+        report.set_device_info(
+            sn=getattr(d, "serial", "") or "",
+            app_version=d.app_version(app_cfg["package"]),
+        )
+    except Exception:
+        pass
 
     # ── 1. 重启 APP ──
     d.app_stop(app_cfg["package"])
@@ -158,21 +137,22 @@ def device(request):
         print("[前置] 地图已加载")
     else:
         print("[前置] 等待地图加载...")
-        d(textContains="地图编辑").wait(timeout=30)
-        print("[前置] 地图加载完成")
+        if not d(textContains="地图编辑").wait(timeout=30):
+            print("[前置] 警告: 30s 内未检测到地图加载，继续执行")
 
-    # ── 5. 确保电量 > 50% ──
+    # ── 5. 确保电量 > 50%（兜底 30 分钟，防止无限等待） ──
     battery = _get_battery_level(d)
     if battery >= 50:
         print(f"[前置] 电量 {battery}%，达标")
     elif battery > 0:
         print(f"[前置] 电量 {battery}%，不足 50%，等待充电...")
-        while True:
+        wait_end = time.time() + 1800
+        while time.time() < wait_end:
             time.sleep(30)
             battery = _get_battery_level(d)
-            if battery >= 50 or battery < 0:
+            if battery >= 50 or battery <= 0:
                 break
-        print(f"[前置] 电量已达 {battery}%")
+        print(f"[前置] 电量等待结束，当前 {battery}%")
 
     yield d
 
@@ -190,9 +170,11 @@ def report():
 @pytest.fixture(scope="session", autouse=True)
 def mock_server(request):
     if request.config.getoption("--mode") == "mock":
-        proc = subprocess.Popen(["python", "mock_server/server.py"])
+        script = os.path.join(BASE_DIR, "mock_server", "server.py")
+        proc = subprocess.Popen([sys.executable, script], cwd=BASE_DIR)
         time.sleep(2)
         yield
-        proc.terminate()
+        if proc.poll() is None:
+            proc.terminate()
     else:
         yield

@@ -23,13 +23,30 @@ class ExcelReport:
         bottom=Side(style="thin", color="B0B0B0"),
     )
 
-    def __init__(self, path="reports/test_report.xlsx"):
+    def __init__(self, path=None):
+        # 默认按时间戳命名,历史报告不互相覆盖(不建子目录)
+        if path is None:
+            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+            reports_dir = os.path.join(
+                os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "reports")
+            os.makedirs(reports_dir, exist_ok=True)
+            path = os.path.join(reports_dir, f"test_report_{ts}.xlsx")
         self.path = path
         self.wb = Workbook()
         self.summary_ws = self.wb.active
         self.summary_ws.title = "汇总"
         self._cases = {}
         self._summary_row = 7
+        # 设备信息(会话开始时由 conftest 填入真实值)
+        self._device_info = {"sn": "待获取", "app_version": "待获取",
+                             "固件版本": "待获取", "基站版本": "待获取"}
+
+    def set_device_info(self, sn="", app_version=""):
+        """填入真实设备信息,失败时保留占位符"""
+        if sn:
+            self._device_info["sn"] = sn
+        if app_version:
+            self._device_info["app_version"] = app_version
 
     def add_result(self, case_name, passed, error="", screenshot=""):
         if case_name not in self._cases:
@@ -125,7 +142,7 @@ class ExcelReport:
         # ── 设备信息 ──
         ws.merge_cells(start_row=3, start_column=1, end_row=3, end_column=ncols)
         ws.cell(row=3, column=1,
-                value="项目名称: 待获取     设备SN: 待获取     固件版本: 待获取     基站版本: 待获取").font = Font(
+                value=f"设备SN: {info['sn']}     App版本: {info['app_version']}     固件版本: {info['固件版本']}     基站版本: {info['基站版本']}").font = Font(
             name="Microsoft YaHei", size=10, color="1F4E79")
         ws.cell(row=3, column=1).alignment = Alignment(horizontal="center")
 
