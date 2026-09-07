@@ -42,7 +42,7 @@ QLabel { background: transparent; }
 
 QPushButton {
     background: #ffffff; border: 1px solid #d9dee6; border-radius: 6px;
-    padding: 5px 14px; color: #333;
+    padding: 4px 12px; color: #333;
 }
 QPushButton:hover { border-color: #2563eb; color: #2563eb; }
 QPushButton:pressed { background: #eef4ff; }
@@ -84,7 +84,7 @@ QPushButton#chipBtn:hover { border-color: #2563eb; color: #2563eb; background: #
 
 QTabWidget::pane { border: 1px solid #e4e8ee; border-radius: 6px; background: #ffffff; top: -1px; }
 QTabBar::tab {
-    background: transparent; color: #64748b; padding: 7px 18px;
+    background: transparent; color: #64748b; padding: 5px 14px;
     border: none; border-bottom: 2px solid transparent;
 }
 QTabBar::tab:selected { color: #2563eb; border-bottom: 2px solid #2563eb; }
@@ -173,8 +173,8 @@ class StepCard(QFrame):
         self.setObjectName("stepCardOpen" if self.expanded else "stepCard")
         self.setCursor(Qt.PointingHandCursor if not self.expanded else Qt.ArrowCursor)
         lay = QVBoxLayout(self)
-        lay.setContentsMargins(12, 7, 10, 9)
-        lay.setSpacing(6)
+        lay.setContentsMargins(12, 5, 10, 7)
+        lay.setSpacing(5)
         self._build_header(lay)
         if self.expanded:
             self._build_form(lay)
@@ -358,8 +358,8 @@ class MainWindow(QMainWindow):
 
         root = QWidget()
         v = QVBoxLayout(root)
-        v.setContentsMargins(10, 8, 10, 8)
-        v.setSpacing(8)
+        v.setContentsMargins(8, 6, 8, 6)
+        v.setSpacing(5)
         v.addWidget(self._build_toolbar())
         v.addWidget(self._build_env_strip())
         v.addWidget(self._build_chip_strip())
@@ -439,13 +439,13 @@ class MainWindow(QMainWindow):
         strip = QFrame()
         strip.setObjectName("chipStrip")
         lay = QHBoxLayout(strip)
-        lay.setContentsMargins(10, 7, 10, 7)
+        lay.setContentsMargins(8, 5, 8, 5)
         lay.setSpacing(6)
 
-        lay.addWidget(QLabel("被测APP"))
+        lay.addWidget(QLabel("测试APP"))
         self.app_name_edit = QLineEdit()
         self.app_name_edit.setFixedWidth(100)
-        self.app_name_edit.setToolTip("被测APP名称(中文/英文均可),作为包名自动检测依据")
+        self.app_name_edit.setToolTip("测试APP名称(中文/英文均可),作为包名自动检测依据")
         self.app_name_edit.setProperty("cfg_key", "app.name")
         self.app_name_edit.editingFinished.connect(self._save_env_field)
         lay.addWidget(self.app_name_edit)
@@ -475,16 +475,16 @@ class MainWindow(QMainWindow):
 
         lay.addWidget(QLabel("设备"))
         self.device_combo = QComboBox()
-        self.device_combo.setMinimumWidth(190)
+        self.device_combo.setMinimumWidth(170)
         self.device_combo.setToolTip("自动检测 adb 在线的真机/模拟器,选择执行设备")
-        self.device_combo.currentIndexChanged.connect(self._on_device_selected)
         lay.addWidget(self.device_combo)
 
-        lay.addWidget(QLabel("名称"))
+        lay.addWidget(QLabel("设备名称"))
         self.device_name_edit = QLineEdit()
-        self.device_name_edit.setFixedWidth(76)
-        self.device_name_edit.setToolTip("设备备注名,修改后同步保存到配置文件")
-        self.device_name_edit.editingFinished.connect(self._save_device_name)
+        self.device_name_edit.setFixedWidth(64)
+        self.device_name_edit.setToolTip("APP 内的扫地机设备名称(如 SE3L),前置阶段自动点击进入该设备页")
+        self.device_name_edit.setProperty("cfg_key", "target_device")
+        self.device_name_edit.editingFinished.connect(self._save_env_field)
         lay.addWidget(self.device_name_edit)
 
         refresh_btn = QPushButton("↻")
@@ -509,6 +509,7 @@ class MainWindow(QMainWindow):
         self.app_name_edit.setText(app.get("name", ""))
         self.pkg_edit.setText(app.get("package", ""))
         self.act_edit.setText(app.get("main_activity", ""))
+        self.device_name_edit.setText(cfg.get("target_device", ""))
         self._refresh_devices()
 
     # ── 设备检测 ──
@@ -537,42 +538,19 @@ class MainWindow(QMainWindow):
                 label += f" [{dev['state']}]"
             self.device_combo.addItem(label, did)
         self.device_combo.blockSignals(False)
-        self._on_device_selected()
 
     def _current_device_id(self):
         return self.device_combo.currentData()
 
-    def _on_device_selected(self):
-        did = self._current_device_id()
-        if not did:
-            self.device_name_edit.clear()
-            return
-        name = ""
-        try:
-            cfg = load_config()
-            name = next((d.get("name", "") for d in cfg.get("device", {}).get("list", [])
-                         if d["id"] == did), "")
-        except Exception:
-            pass
-        self.device_name_edit.setText(name)
-
-    def _save_device_name(self):
-        """设备备注名 → 写回 config.yaml(设备不存在则追加条目)"""
-        did = self._current_device_id()
-        if not did:
-            return
-        name = self.device_name_edit.text().strip()
-        update_config({f"device.name:{did}": name or did})
-        self.env_status.setText(f"设备名称已保存: {name or did}")
-        self._refresh_devices()
-
-    # ── APP 配置 ──
+    # ── APP/设备配置 ──
     def _save_env_field(self):
-        """APP 名称/包名/启动页编辑 → 写回 config.yaml"""
-        w = self.sender()
+        """测试APP/包名/启动页/设备名称 编辑 → 写回 config.yaml"""
+        self._save_cfg_field(self.sender())
+
+    def _save_cfg_field(self, w):
         key = w.property("cfg_key")
         value = w.text().strip()
-        if not value:
+        if not key or not value:
             return
         try:
             update_config({key: value})
@@ -629,7 +607,7 @@ class MainWindow(QMainWindow):
         strip = QFrame()
         strip.setObjectName("chipStrip")
         lay = QHBoxLayout(strip)
-        lay.setContentsMargins(10, 7, 10, 7)
+        lay.setContentsMargins(8, 5, 8, 5)
         lay.setSpacing(6)
 
         lay.addWidget(QLabel("组"))

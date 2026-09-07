@@ -45,10 +45,16 @@ assert "# ── APP 配置 ──" in same and "被测APP名称" in before
 # 还原
 update_config({"app.name": cfg["app"]["name"],
                "device.name:127.0.0.1:5555": cfg["device"]["list"][0].get("name", "模拟器")})
+# 顶层标量 target_device(APP 内设备名称): 同值字节不变 / 异值生效且保注释
+update_config({"target_device": cfg.get("target_device", "SE3L")})
+update_config({"target_device": "临时设备名"})
+cfg_t = load_config()
+assert cfg_t["target_device"] == "临时设备名"
+update_config({"target_device": cfg.get("target_device", "SE3L")})
 with open(CONFIG_PATH, encoding="utf-8") as f:
-    restored = f.read()
-assert load_config()["app"]["name"] == cfg["app"]["name"]
-print("2. update_config 回写/保注释/还原 OK")
+    final_text = f.read()
+assert "进入哪个设备页面" in final_text, "行内注释丢失"
+print("2. update_config 回写/保注释/还原/顶层标量 OK")
 
 # ── 3. 真机端到端检测 ──
 devices = app_detect.list_devices()
@@ -78,13 +84,12 @@ assert w.pkg_edit.text() == cfg["app"]["package"]
 combo_ids = [w.device_combo.itemData(i) for i in range(w.device_combo.count())]
 assert device_id in combo_ids, combo_ids
 assert w._current_device_id() == device_id
-# 切换设备 → 名称框联动
-w.device_name_edit.setText("笔记本验证机")
-w._save_device_name()
-saved = load_config()
-entry = next(d for d in saved["device"]["list"] if d["id"] == device_id)
-assert entry["name"] == "笔记本验证机", entry
-update_config({f"device.name:{device_id}": "模拟器"})  # 还原
-print("4. GUI 环境条/设备检测/名称回写 OK")
+# 设备名称 = APP 内设备名称(target_device) 同步
+assert w.device_name_edit.text() == "SE3L"
+w.device_name_edit.setText("SE9L-TEST")
+w._save_cfg_field(w.device_name_edit)
+assert load_config()["target_device"] == "SE9L-TEST"
+update_config({"target_device": "SE3L"})  # 还原
+print("4. GUI 环境条/设备检测/设备名称(target_device)回写 OK")
 print()
 print("=== 环境检测链路全部通过 ===")

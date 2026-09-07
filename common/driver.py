@@ -20,7 +20,8 @@ def update_config(updates):
     """原位更新 config.yaml 的标量键,保留注释与格式(GUI 配置同步入口)
 
     updates 支持的键:
-      'app.name' / 'app.package' / 'app.main_activity'  → 对应标量
+      'app.name' / 'app.package' / 'app.main_activity'  → app 段标量
+      'target_device'                                   → 顶层标量(APP 内设备名称)
       'device.name:<设备id>'                            → 设备列表项的 name(无则补)
     """
     with open(CONFIG_PATH, encoding="utf-8") as f:
@@ -28,11 +29,29 @@ def update_config(updates):
     for spec, value in updates.items():
         if spec.startswith("device.name:"):
             lines = _set_device_name(lines, spec.split(":", 1)[1], value)
-        else:
+        elif "." in spec:
             section, key = spec.split(".", 1)
             lines = _set_scalar(lines, section, key, value)
+        else:
+            lines = _set_top_scalar(lines, spec, value)
     with open(CONFIG_PATH, "w", encoding="utf-8") as f:
         f.writelines(lines)
+
+
+def _set_top_scalar(lines, key, value):
+    """更新顶层零缩进标量(如 target_device),保留行内注释;不存在则追加末尾"""
+    val = _fmt_scalar(value)
+    key_re = re.compile(r"^(" + re.escape(key) + r":)([^\n#]*?)(\s+#.*)?$")
+    for i, line in enumerate(lines):
+        m = key_re.match(line.rstrip("\r\n"))
+        if m:
+            eol = "\r\n" if line.endswith("\r\n") else "\n"
+            lines[i] = f"{m.group(1)} {val}{m.group(3) or ''}{eol}"
+            return lines
+    if lines and not lines[-1].endswith("\n"):
+        lines[-1] += "\n"
+    lines.append(f"{key}: {val}\n")
+    return lines
 
 
 def _fmt_scalar(value):
