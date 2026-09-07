@@ -222,6 +222,9 @@ class StepCard(QFrame):
     def _refresh_summary(self):
         self.summary_label.setText(schema.step_summary(self.step))
         badges = []
+        else_items = self.step.get("else")
+        if isinstance(else_items, list) and else_items:
+            badges.append(f"▸else {len(else_items)}步")
         if self.step.get("screenshot"):
             badges.append("📷")
         if self.step.get("timeout"):
@@ -485,6 +488,9 @@ class MainWindow(QMainWindow):
         tip.setStyleSheet("color:#b6c0cd;")
         lay.addWidget(tip)
         lay.addStretch()
+        self.step_count_label = QLabel("")
+        self.step_count_label.setStyleSheet("color:#2563eb; font-weight:bold;")
+        lay.addWidget(self.step_count_label)
         return strip
 
     # ── 步骤卡片列表 ──
@@ -503,9 +509,11 @@ class MainWindow(QMainWindow):
         while self.cards_lay.count() > 1:  # 末尾 stretch 保留
             item = self.cards_lay.takeAt(0)
             if item.widget():
+                item.widget().hide()  # 先隐藏再延迟销毁,杜绝重渲染瞬间残留
                 item.widget().deleteLater()
         for i in range(len(self.steps)):
             self.cards_lay.insertWidget(self.cards_lay.count() - 1, StepCard(self, i))
+        self.step_count_label.setText(f"共 {len(self.steps)} 步")
         self._refresh_yaml_text()
 
     def expand_card(self, index):
