@@ -10,14 +10,14 @@ import json
 import os
 
 import yaml
-from PySide6.QtCore import QPoint, QRect, QSize, Qt, QTimer
+from PySide6.QtCore import QPoint, QRect, QSettings, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QAction, QColor, QDoubleValidator, QIntValidator, QPixmap
 from PySide6.QtWidgets import (
-    QAbstractItemView, QApplication, QCheckBox, QComboBox, QDoubleSpinBox,
-    QFileDialog, QFrame, QGridLayout, QHBoxLayout, QHeaderView, QLabel,
-    QLayout, QLineEdit, QMainWindow, QMenu, QMessageBox, QPlainTextEdit,
-    QPushButton, QScrollArea, QSplitter, QTabWidget, QTableWidget,
-    QTableWidgetItem, QToolButton, QVBoxLayout, QWidget,
+    QAbstractItemView, QApplication, QCheckBox, QComboBox, QDialog,
+    QDoubleSpinBox, QFileDialog, QFrame, QGridLayout, QHBoxLayout,
+    QHeaderView, QLabel, QLayout, QLineEdit, QMainWindow, QMenu, QMessageBox,
+    QPlainTextEdit, QPushButton, QScrollArea, QSplitter, QTabWidget,
+    QTableWidget, QTableWidgetItem, QToolButton, QVBoxLayout, QWidget,
 )
 
 from common import app_detect
@@ -116,6 +116,87 @@ QMenu::separator { height: 1px; background: #eef1f5; margin: 4px 8px; }
 QMessageBox { background: #ffffff; }
 QSplitter::handle { background: transparent; }
 """
+
+
+class ClickableLabel(QLabel):
+    """可点击的图片预览标签"""
+    clicked = Signal()
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self.clicked.emit()
+        super().mousePressEvent(event)
+
+
+class ImageViewDialog(QDialog):
+    """截图独立查看窗口: 按钮/滚轮缩放,滚动条平移"""
+
+    def __init__(self, path, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(f"截图查看 - {os.path.basename(path)}")
+        self.resize(880, 660)
+        self._pix = QPixmap(path)
+        self._zoom = None  # None = 适应窗口
+        self.image_label = QLabel(alignment=Qt.AlignCenter)
+        self.image_label.setStyleSheet("background:#222;")
+        self._scroll = QScrollArea()
+        self._scroll.setWidget(self.image_label)
+        self._scroll.setWidgetResizable(False)
+
+        bar = QHBoxLayout()
+        for text, fn in [("缩小", self._zoom_out), ("放大", self._zoom_in),
+                         ("适应窗口", self._fit), ("1:1", self._orig)]:
+            b = QPushButton(text)
+            b.clicked.connect(fn)
+            bar.addWidget(b)
+        tip = QLabel("滚轮缩放 · 拖动滚动条平移")
+        tip.setStyleSheet("color:#94a3b8;")
+        bar.addWidget(tip)
+        bar.addStretch()
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(8, 8, 8, 8)
+        root.addLayout(bar)
+        root.addWidget(self._scroll)
+        self._fit()
+
+    def _apply(self):
+        if self._pix.isNull():
+            return
+        pm = self._pix
+        if self._zoom is None:  # 适应窗口
+            scaled = pm.scaled(self._scroll.viewport().size(),
+                               Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        else:
+            scaled = pm.scaled(max(1, int(pm.width() * self._zoom)),
+                               max(1, int(pm.height() * self._zoom)),
+                               Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        self.image_label.setPixmap(scaled)
+        self.image_label.adjustSize()
+
+    def _set_zoom(self, z):
+        self._zoom = max(0.1, min(8.0, z))
+        self._apply()
+
+    def _zoom_in(self):
+        self._set_zoom((self._zoom or 1.0) * 1.25)
+
+    def _zoom_out(self):
+        self._set_zoom((self._zoom or 1.0) / 1.25)
+
+    def _fit(self):
+        self._zoom = None
+        self._apply()
+
+    def _orig(self):
+        self._set_zoom(1.0)
+
+    def wheelEvent(self, event):
+        delta = event.angleDelta().y()
+        if delta > 0:
+            self._zoom_in()
+        elif delta < 0:
+            self._zoom_out()
 
 
 class FlowLayout(QLayout):
@@ -382,10 +463,10 @@ class StepCard(QFrame):
         fv.setContentsMargins(26, 0, 4, 0)
         fv.setSpacing(5)
 
-        # 名称(desc)始终可编辑
+        # 测试步骤描述(desc)始终可编辑
         desc_grid = QGridLayout()
         desc_grid.setHorizontalSpacing(10)
-        self._add_field(desc_grid, 0, {"key": "desc", "label": "名称",
+        self._add_field(desc_grid, 0, {"key": "desc", "label": "测试步骤描述",
                                        "type": "text", "hint": "显示在报告和结果面板"})
         fv.addLayout(desc_grid)
 
@@ -515,6 +596,7 @@ class MainWindow(QMainWindow):
         self.case_idx = 0
         self.worker = None
         self.expanded_key = None  # 展开的卡片: (顶层序号,) 或 (父序号, 子序号)
+        self._preview_path = None  # 当前预览的截图路径
 
         root = QWidget()
         v = QVBoxLayout(root)
@@ -527,6 +609,16 @@ class MainWindow(QMainWindow):
         v.addWidget(self._make_bottom(), 2)
         self.setCentralWidget(root)
         self.setStyleSheet(STYLESHEET)
+
+        # 快捷键: Ctrl+S 保存
+        from PySide6.QtGui import QKeySequence, QShortcut
+        QShortcut(QKeySequence("Ctrl+S"), self, self.on_save)
+
+        # 记住上次窗口大小/位置(笔记本外接屏切换也友好)
+        self._settings = QSettings("vacuum_test", "case_studio")
+        geo = self._settings.value("win/geometry")
+        if geo is not None:
+            self.restoreGeometry(geo)
 
         self._load_case_into_ui()
         self.render_cards()
@@ -788,7 +880,16 @@ class MainWindow(QMainWindow):
         self.step_count_label = QLabel("")
         self.step_count_label.setStyleSheet("color:#2563eb; font-weight:bold;")
         lay.addWidget(self.step_count_label)
+        collapse_btn = QPushButton("收起全部")
+        collapse_btn.setObjectName("chipBtn")
+        collapse_btn.setToolTip("折叠全部展开中的步骤卡片")
+        collapse_btn.clicked.connect(self._collapse_all)
+        lay.addWidget(collapse_btn)
         return strip
+
+    def _collapse_all(self):
+        self.expanded_key = None
+        self.render_cards()
 
     # ── 步骤卡片列表 ──
     def _make_cards_area(self):
@@ -947,17 +1048,20 @@ class MainWindow(QMainWindow):
 
         # 执行结果
         result_split = QSplitter(Qt.Horizontal)
-        self.result_table = QTableWidget(0, 4)
-        self.result_table.setHorizontalHeaderLabels(["#", "结果", "步骤", "错误信息"])
+        self.result_table = QTableWidget(0, 5)
+        self.result_table.setHorizontalHeaderLabels(["#", "结果", "步骤", "耗时", "错误信息"])
         self.result_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
         self.result_table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.result_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.result_table.verticalHeader().setVisible(False)
         self.result_table.cellDoubleClicked.connect(self.on_result_row)
+        self.result_table.itemSelectionChanged.connect(self._on_result_selection)
         result_split.addWidget(self.result_table)
-        self.preview = QLabel("双击结果行查看截图")
+        self.preview = ClickableLabel("单击结果行显示对应截图\n点击图片可放大查看")
         self.preview.setAlignment(Qt.AlignCenter)
         self.preview.setMinimumWidth(240)
+        self.preview.clicked.connect(self._zoom_preview)
+        self.preview.setCursor(Qt.PointingHandCursor)
         result_split.addWidget(self.preview)
         result_split.setSizes([620, 300])
         self.tabs.addTab(result_split, "执行结果")
@@ -1076,7 +1180,7 @@ class MainWindow(QMainWindow):
         device_id = self.device_combo.currentData()
         pre = {k: a.isChecked() for k, a in self.pre_actions.items()}
         self.result_table.setRowCount(0)
-        self.preview.setText("双击结果行查看截图")
+        self._set_preview_placeholder("单击结果行显示对应截图\n点击图片可放大查看")
 
         self.worker = RunWorker(device_id, self.case_path, pre)
         self.worker.step_done.connect(self.on_step_done)
@@ -1098,8 +1202,11 @@ class MainWindow(QMainWindow):
         row = self.result_table.rowCount()
         self.result_table.insertRow(row)
         passed = result.get("passed")
+        elapsed = result.get("elapsed")
         values = [str(row + 1), "PASS" if passed else "FAIL",
-                  result.get("desc", ""), result.get("error", "")]
+                  result.get("desc", ""),
+                  f"{elapsed:.1f}s" if isinstance(elapsed, (int, float)) else "",
+                  result.get("error", "")]
         for col, val in enumerate(values):
             item = QTableWidgetItem(val)
             if col == 1:
@@ -1111,19 +1218,43 @@ class MainWindow(QMainWindow):
         if shot and os.path.exists(shot):
             self._show_screenshot(shot)
 
+    def _on_result_selection(self):
+        """单击/键盘选中结果行 → 预览该步骤截图(无截图显示占位)"""
+        row = self.result_table.currentRow()
+        if row < 0:
+            return
+        item = self.result_table.item(row, 0)
+        shot = item.data(Qt.UserRole) if item else ""
+        if shot and os.path.exists(shot):
+            self._show_screenshot(shot)
+        else:
+            self._set_preview_placeholder("该步骤无截图")
+
     def on_result_row(self, row, _col):
         shot = self.result_table.item(row, 0).data(Qt.UserRole)
         if shot and os.path.exists(shot):
             self._show_screenshot(shot)
         else:
-            self.preview.setText("该步骤无截图")
+            self._set_preview_placeholder("该步骤无截图")
+
+    def _set_preview_placeholder(self, text):
+        self._preview_path = None
+        self.preview.setPixmap(QPixmap())
+        self.preview.setText(text)
 
     def _show_screenshot(self, path):
+        self._preview_path = path
         pix = QPixmap(path)
         if not pix.isNull():
             self.preview.setPixmap(
                 pix.scaled(self.preview.width(), self.preview.height(),
                            Qt.KeepAspectRatio, Qt.SmoothTransformation))
+
+    def _zoom_preview(self):
+        """点击预览图 → 独立窗口放大查看"""
+        if self._preview_path and os.path.exists(self._preview_path):
+            dlg = ImageViewDialog(self._preview_path, self)
+            dlg.exec()
 
     def on_run_finished(self, passed, message):
         self.status_label.setText(("✔ " if passed else "✘ ") + message)
@@ -1133,6 +1264,7 @@ class MainWindow(QMainWindow):
         self.worker = None
 
     def closeEvent(self, event):
+        self._settings.setValue("win/geometry", self.saveGeometry())
         if self.worker:
             if QMessageBox.question(self, "正在执行", "用例正在执行,停止并退出?") == QMessageBox.Yes:
                 self.worker.request_stop()

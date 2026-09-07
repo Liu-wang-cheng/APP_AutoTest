@@ -500,3 +500,62 @@ class TestGuiSaveAndRun:
     def test_停止按钮防护(self, window):
         assert window.worker is None
         window.on_stop()  # 无 worker 时不应抛异常
+
+
+class TestGuiPreview:
+    """测试步骤描述标签 / 选中行显示截图 / 截图查看器"""
+
+    def test_步骤描述标签改名(self, window):
+        from PySide6.QtWidgets import QLabel
+        window.on_new()
+        window.add_step("click")
+        card = _card_widgets(window)[0]
+        labels = [l.text() for l in card.findChildren(QLabel)]
+        assert "测试步骤描述" in labels
+        assert "名称" not in labels
+
+    def test_选中行显示对应截图(self, window, tmp_path):
+        from PIL import Image
+        shot = str(tmp_path / "shot.png")
+        Image.new("RGB", (80, 60), (200, 30, 30)).save(shot)
+        window.result_table.setRowCount(0)
+        window.on_step_done({"desc": "有图步骤", "passed": True, "error": "",
+                             "screenshot": shot})
+        window.on_step_done({"desc": "无图步骤", "passed": True, "error": "",
+                             "screenshot": ""})
+        window.result_table.setCurrentCell(0, 0)
+        _qapp.processEvents()
+        pm = window.preview.pixmap()
+        assert pm is not None and not pm.isNull()
+        window.result_table.setCurrentCell(1, 0)
+        _qapp.processEvents()
+        assert window.preview.pixmap().isNull()
+        assert "无截图" in window.preview.text()
+
+    def test_查看器缩放与适应(self, tmp_path):
+        from PIL import Image
+        from gui.main_window import ImageViewDialog
+        p = str(tmp_path / "big.png")
+        Image.new("RGB", (400, 300), (10, 120, 240)).save(p)
+        dlg = ImageViewDialog(p)
+        assert dlg._zoom is None  # 默认适应窗口
+        dlg._set_zoom(2.0)
+        assert dlg.image_label.pixmap().width() == 800
+        dlg._zoom_out()
+        assert dlg._zoom == 1.6
+        dlg._zoom_in()
+        assert dlg._zoom == 2.0
+        dlg._orig()
+        assert dlg._zoom == 1.0
+        dlg._fit()
+        assert dlg._zoom is None
+        dlg.close()
+
+    def test_耗时列(self, window):
+        window.result_table.setRowCount(0)
+        window.on_step_done({"desc": "s1", "passed": True, "error": "",
+                             "screenshot": "", "elapsed": 3.2})
+        assert window.result_table.item(0, 3).text() == "3.2s"
+        window.on_step_done({"desc": "s2", "passed": True, "error": "",
+                             "screenshot": ""})
+        assert window.result_table.item(1, 3).text() == ""

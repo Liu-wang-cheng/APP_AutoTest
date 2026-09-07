@@ -99,7 +99,18 @@ class RunWorker(QThread):
                 self.status.emit(f"执行用例: {case_name}")
                 runner = ActionRunner(d, cfg["runner"],
                                       case_wait=case.get("wait"), case_name=case_name)
-                runner.on_result = lambda r: self.step_done.emit(dict(r))
+                # 包装结果回调: 计算每步耗时(相对上一步完成时刻)
+                import time as _time
+                last_ts = {"t": _time.time()}
+
+                def on_result(r):
+                    now = _time.time()
+                    r2 = dict(r)
+                    r2["elapsed"] = round(now - last_ts["t"], 1)
+                    last_ts["t"] = now
+                    self.step_done.emit(r2)
+
+                runner.on_result = on_result
                 self.runner = runner
                 passed = runner.run_steps(steps)
                 self.runner = None

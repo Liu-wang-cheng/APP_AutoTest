@@ -1,46 +1,41 @@
 module: 快速建图
-
 cases:
-  - name: 快速建图完整流程
-    priority: P1
-    wait: 5
-    steps:
-      - desc: 检查是否无图状态
-        if: 扫地机器人
-        else:
-          - desc: 进入设置界面
-            click: 进入设置.png
-            screenshot: screenshots/快速建图_02_进入设置界面.png
-            wait: 3
-          - desc: 进入地图管理
-            click: 地图管理
-            screenshot: screenshots/快速建图_03_进入地图管理.png
-            wait: 3
-          - desc: 重置首页地图
-            click: 重置首页地图
-            screenshot: screenshots/快速建图_04_重置首页地图.png
-            wait: 3
-          - desc: 返回设置界面
-            wait: 3
-            back: True
-          - desc: 返回主界面
-            wait: 3
-            back: True
-        screenshot: screenshots/快速建图_01_无图状态.png
-
-      - desc: 启动建图（优先快速建图，否则开始清扫）
-        find_click:
-          - 快速建图
-          - 开始清扫
-        screenshot: screenshots/快速建图_05_启动建图.png
-
-      - desc: 确认设备处于建图或清扫状态
-        assert: 建图,清扫中
-        timeout: 60
-        screenshot: screenshots/快速建图_06_建图中.png
-
-      - desc: 等待建图完成并返回充电
-        assert: 充电中,充电完成
-        timeout: 0
-        screenshot: screenshots/快速建图_07_建图完成.png
-
+- name: 快速建图完整流程
+  priority: P1
+  wait: 5
+  steps:
+  - desc: 检查是否无图状态
+    if: 扫地机器人
+    else:
+    - desc: 进入设置界面
+      click: 进入设置.png
+      screenshot: screenshots/快速建图_02_进入设置界面.png
+      wait: 3
+    - desc: 进入地图管理
+      click: 地图管理
+      screenshot: screenshots/快速建图_03_进入地图管理.png
+      wait: 3
+    - desc: 重置首页地图
+      click: 重置首页地图
+      screenshot: screenshots/快速建图_04_重置首页地图.png
+      wait: 3
+    - desc: 返回设置界面
+      wait: 3
+      back: true
+    - desc: 返回主界面
+      wait: 3
+      back: true
+    screenshot: screenshots/快速建图_01_无图状态.png
+  - desc: 启动建图（优先快速建图，否则开始清扫）
+    find_click:
+    - 快速建图
+    - 开始清扫
+    screenshot: screenshots/快速建图_05_启动建图.png
+  - desc: 确认设备处于建图或清扫状态
+    assert: 建图,清扫中
+    timeout: 60
+    screenshot: screenshots/快速建图_06_建图中.png
+  - desc: 等待建图完成并返回充电
+    assert: 充电中,充电完成
+    timeout: 0
+    screenshot: screenshots/快速建图_07_建图完成.png
