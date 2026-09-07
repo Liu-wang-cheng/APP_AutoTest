@@ -14,8 +14,8 @@ def main():
     app = QApplication(sys.argv)
     app.setApplicationName("vacuum_case_studio")
     win = MainWindow()
-    # 默认 1120x640,适配 1366x768 笔记本;用户仍可自由拉伸
-    win.resize(1120, 640)
+    # 默认 1000x600;顶部横条为流式布局,窗口任意拖小会自动换行
+    win.resize(1000, 600)
     win.show()
     sys.exit(app.exec())
 

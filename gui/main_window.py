@@ -10,12 +10,12 @@ import json
 import os
 
 import yaml
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QAction, QIntValidator, QDoubleValidator, QColor, QPixmap
+from PySide6.QtCore import QPoint, QRect, QSize, Qt
+from PySide6.QtGui import QAction, QColor, QDoubleValidator, QIntValidator, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QCheckBox, QComboBox, QDoubleSpinBox,
     QFileDialog, QFrame, QGridLayout, QHBoxLayout, QHeaderView, QLabel,
-    QLineEdit, QMainWindow, QMenu, QMessageBox, QPlainTextEdit,
+    QLayout, QLineEdit, QMainWindow, QMenu, QMessageBox, QPlainTextEdit,
     QPushButton, QScrollArea, QSplitter, QTabWidget, QTableWidget,
     QTableWidgetItem, QToolButton, QVBoxLayout, QWidget,
 )
@@ -104,6 +104,66 @@ QMenu::separator { height: 1px; background: #eef1f5; margin: 4px 8px; }
 QMessageBox { background: #ffffff; }
 QSplitter::handle { background: transparent; }
 """
+
+
+class FlowLayout(QLayout):
+    """流式布局: 窗口变窄时控件自动换行,顶部横条不再顶死最小宽度"""
+
+    def __init__(self, parent=None, margin=6, spacing=6):
+        super().__init__(parent)
+        self.setContentsMargins(margin, margin, margin, margin)
+        self.setSpacing(spacing)
+        self._items = []
+
+    def addItem(self, item):
+        self._items.append(item)
+
+    def count(self):
+        return len(self._items)
+
+    def itemAt(self, i):
+        return self._items[i] if 0 <= i < len(self._items) else None
+
+    def takeAt(self, i):
+        return self._items.pop(i) if 0 <= i < len(self._items) else None
+
+    def expandingDirections(self):
+        return Qt.Orientations(Qt.Orientation(0))
+
+    def hasHeightForWidth(self):
+        return True
+
+    def heightForWidth(self, width):
+        return self._do_layout(QRect(0, 0, width, 0), True)
+
+    def setGeometry(self, rect):
+        super().setGeometry(rect)
+        self._do_layout(rect, False)
+
+    def sizeHint(self):
+        return self.minimumSize()
+
+    def minimumSize(self):
+        size = QSize()
+        for item in self._items:
+            size = size.expandedTo(item.minimumSize())
+        m = self.contentsMargins()
+        return size + QSize(m.left() + m.right(), m.top() + m.bottom())
+
+    def _do_layout(self, rect, test_only):
+        m = self.contentsMargins()
+        x, y = rect.x() + m.left(), rect.y() + m.top()
+        right, line_height = rect.right() - m.right(), 0
+        for item in self._items:
+            w, h = item.sizeHint().width(), item.sizeHint().height()
+            if x + w > right and line_height > 0:  # 放不下 → 换行
+                x, y = rect.x() + m.left(), y + line_height + self.spacing()
+                line_height = 0
+            if not test_only:
+                item.setGeometry(QRect(QPoint(x, y), QSize(w, h)))
+            x += w + self.spacing()
+            line_height = max(line_height, h)
+        return y + line_height + m.bottom() - rect.y()
 
 
 def _make_field_widget(field, value):
@@ -435,16 +495,30 @@ class MainWindow(QMainWindow):
         return bar
 
     def _build_env_strip(self):
-        """环境配置条: 被测APP(名称→自动检测包名/启动页) + 设备(自动检测在线设备)"""
+        """环境配置条(流式布局,窗口窄时自动换行): 设备优先,其次测试APP"""
         strip = QFrame()
         strip.setObjectName("chipStrip")
-        lay = QHBoxLayout(strip)
-        lay.setContentsMargins(8, 5, 8, 5)
-        lay.setSpacing(6)
+        lay = FlowLayout(strip, margin=5, spacing=6)
 
+        # ── 设备(最前) ──
+        lay.addWidget(QLabel("设备"))
+        self.device_combo = QComboBox()
+        self.device_combo.setToolTip("自动检测 adb 在线的真机/模拟器,选择执行设备")
+        lay.addWidget(self.device_combo)
+
+        refresh_btn = QPushButton("↻")
+        refresh_btn.setToolTip("重新检测在线设备")
+        refresh_btn.clicked.connect(self._refresh_devices)
+        lay.addWidget(refresh_btn)
+
+        sep = QLabel("|")
+        sep.setStyleSheet("color:#e2e8f0;")
+        lay.addWidget(sep)
+
+        # ── 测试APP ──
         lay.addWidget(QLabel("测试APP"))
         self.app_name_edit = QLineEdit()
-        self.app_name_edit.setFixedWidth(100)
+        self.app_name_edit.setFixedWidth(88)
         self.app_name_edit.setToolTip("测试APP名称(中文/英文均可),作为包名自动检测依据")
         self.app_name_edit.setProperty("cfg_key", "app.name")
         self.app_name_edit.editingFinished.connect(self._save_env_field)
@@ -457,43 +531,26 @@ class MainWindow(QMainWindow):
 
         lay.addWidget(QLabel("包名"))
         self.pkg_edit = QLineEdit()
-        self.pkg_edit.setFixedWidth(160)
+        self.pkg_edit.setFixedWidth(150)
         self.pkg_edit.setProperty("cfg_key", "app.package")
         self.pkg_edit.editingFinished.connect(self._save_env_field)
         lay.addWidget(self.pkg_edit)
 
         lay.addWidget(QLabel("启动页"))
         self.act_edit = QLineEdit()
-        self.act_edit.setFixedWidth(180)
+        self.act_edit.setFixedWidth(150)
         self.act_edit.setProperty("cfg_key", "app.main_activity")
         self.act_edit.editingFinished.connect(self._save_env_field)
         lay.addWidget(self.act_edit)
 
-        sep = QLabel("|")
-        sep.setStyleSheet("color:#e2e8f0;")
-        lay.addWidget(sep)
-
-        lay.addWidget(QLabel("设备"))
-        self.device_combo = QComboBox()
-        self.device_combo.setMinimumWidth(170)
-        self.device_combo.setToolTip("自动检测 adb 在线的真机/模拟器,选择执行设备")
-        lay.addWidget(self.device_combo)
-
         lay.addWidget(QLabel("设备名称"))
         self.device_name_edit = QLineEdit()
-        self.device_name_edit.setFixedWidth(64)
+        self.device_name_edit.setFixedWidth(60)
         self.device_name_edit.setToolTip("APP 内的扫地机设备名称(如 SE3L),前置阶段自动点击进入该设备页")
         self.device_name_edit.setProperty("cfg_key", "target_device")
         self.device_name_edit.editingFinished.connect(self._save_env_field)
         lay.addWidget(self.device_name_edit)
 
-        refresh_btn = QPushButton("↻")
-        refresh_btn.setFixedWidth(30)
-        refresh_btn.setToolTip("重新检测在线设备")
-        refresh_btn.clicked.connect(self._refresh_devices)
-        lay.addWidget(refresh_btn)
-
-        lay.addStretch()
         self.env_status = QLabel("")
         self.env_status.setStyleSheet("color:#94a3b8;")
         lay.addWidget(self.env_status)
@@ -603,12 +660,10 @@ class MainWindow(QMainWindow):
             QApplication.restoreOverrideCursor()
 
     def _build_chip_strip(self):
-        """用例信息行 + 常用组件快捷条"""
+        """用例信息行 + 常用组件快捷条(流式布局)"""
         strip = QFrame()
         strip.setObjectName("chipStrip")
-        lay = QHBoxLayout(strip)
-        lay.setContentsMargins(8, 5, 8, 5)
-        lay.setSpacing(6)
+        lay = FlowLayout(strip, margin=5, spacing=6)
 
         lay.addWidget(QLabel("组"))
         self.module_edit = QLineEdit()
@@ -653,7 +708,6 @@ class MainWindow(QMainWindow):
         tip = QLabel("更多动作见右上「＋添加步骤」;点卡片展开编辑参数")
         tip.setStyleSheet("color:#b6c0cd;")
         lay.addWidget(tip)
-        lay.addStretch()
         self.step_count_label = QLabel("")
         self.step_count_label.setStyleSheet("color:#2563eb; font-weight:bold;")
         lay.addWidget(self.step_count_label)
