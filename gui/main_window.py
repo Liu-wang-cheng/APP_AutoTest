@@ -213,6 +213,12 @@ class StepCard(QFrame):
             head.addWidget(b)
         lay.addLayout(head)
 
+    def mousePressEvent(self, event):
+        """点击折叠卡片 → 原位展开(展开态不响应,避免编辑时误收起)"""
+        if not self.expanded and event.button() == Qt.LeftButton:
+            self.main.expand_card(self.index)
+        super().mousePressEvent(event)
+
     def _refresh_summary(self):
         self.summary_label.setText(schema.step_summary(self.step))
         badges = []
