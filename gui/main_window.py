@@ -151,19 +151,35 @@ class FlowLayout(QLayout):
         return size + QSize(m.left() + m.right(), m.top() + m.bottom())
 
     def _do_layout(self, rect, test_only):
+        """两遍扫描: 先分行并记录行高,再把行内控件按垂直居中放置"""
         m = self.contentsMargins()
-        x, y = rect.x() + m.left(), rect.y() + m.top()
-        right, line_height = rect.right() - m.right(), 0
+        left = rect.x() + m.left()
+        max_right = rect.right() - m.right()
+        spacing = self.spacing()
+
+        # 第一遍: 分行
+        lines, cur, cur_h, row_x = [], [], 0, left
         for item in self._items:
             w, h = item.sizeHint().width(), item.sizeHint().height()
-            if x + w > right and line_height > 0:  # 放不下 → 换行
-                x, y = rect.x() + m.left(), y + line_height + self.spacing()
-                line_height = 0
-            if not test_only:
-                item.setGeometry(QRect(QPoint(x, y), QSize(w, h)))
-            x += w + self.spacing()
-            line_height = max(line_height, h)
-        return y + line_height + m.bottom() - rect.y()
+            if cur and row_x + w > max_right:  # 放不下 → 换行
+                lines.append((cur, cur_h))
+                cur, cur_h, row_x = [], 0, left
+            cur.append((item, w, h))
+            cur_h = max(cur_h, h)
+            row_x += w + spacing
+        if cur:
+            lines.append((cur, cur_h))
+
+        # 第二遍: 行内垂直居中
+        y = rect.y() + m.top()
+        for row, row_h in lines:
+            x = left
+            for item, w, h in row:
+                if not test_only:
+                    item.setGeometry(QRect(QPoint(x, y + (row_h - h) // 2), QSize(w, h)))
+                x += w + spacing
+            y += row_h + spacing
+        return y - spacing + m.bottom() - rect.y()
 
 
 def _make_field_widget(field, value):
@@ -345,7 +361,7 @@ class StepCard(QFrame):
     def _add_field(self, grid, row, field):
         lbl = QLabel(field["label"])
         lbl.setObjectName("fieldLabel")
-        grid.addWidget(lbl, row, 0, Qt.AlignTop)
+        grid.addWidget(lbl, row, 0)
         w, getter = _make_field_widget(field, self.step.get(field["key"]))
         w.setMinimumWidth(240)
         w.setMaximumWidth(430)
