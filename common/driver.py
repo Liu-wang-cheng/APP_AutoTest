@@ -16,15 +16,17 @@ def load_config():
         return yaml.safe_load(f)
 
 
-def update_config(updates):
+def update_config(updates, path=None):
     """原位更新 config.yaml 的标量键,保留注释与格式(GUI 配置同步入口)
 
     updates 支持的键:
       'app.name' / 'app.package' / 'app.main_activity'  → app 段标量
       'target_device'                                   → 顶层标量(APP 内设备名称)
       'device.name:<设备id>'                            → 设备列表项的 name(无则补)
+    path: 目标文件(默认 config/config.yaml),测试可指向临时文件
     """
-    with open(CONFIG_PATH, encoding="utf-8") as f:
+    path = path or CONFIG_PATH
+    with open(path, encoding="utf-8") as f:
         lines = f.readlines()
     for spec, value in updates.items():
         if spec.startswith("device.name:"):
@@ -34,7 +36,7 @@ def update_config(updates):
             lines = _set_scalar(lines, section, key, value)
         else:
             lines = _set_top_scalar(lines, spec, value)
-    with open(CONFIG_PATH, "w", encoding="utf-8") as f:
+    with open(path, "w", encoding="utf-8") as f:
         f.writelines(lines)
 
 
@@ -105,13 +107,13 @@ def _set_device_name(lines, device_id, value):
             return lines
     for i, line in enumerate(lines):
         if re.match(r"^\s*list:\s*(#.*)?$", line.rstrip("\n")):
-            insert_at = i + 1
+            # 追加到 list 块末尾(最后一个非空缩进行之后)
             j = i + 1
+            last = i + 1
             while j < len(lines) and lines[j].strip() and lines[j].startswith(" "):
-                if lines[j].lstrip().startswith("- "):
-                    insert_at = j + 1
                 j += 1
-            lines.insert(insert_at, f"    - id: {device_id}\n")
-            lines.insert(insert_at + 1, f"      name: {val}\n")
+                last = j
+            lines.insert(last, f"    - id: {device_id}\n")
+            lines.insert(last + 1, f"      name: {val}\n")
             return lines
     return lines

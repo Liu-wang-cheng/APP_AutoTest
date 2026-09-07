@@ -124,12 +124,12 @@ ACTIONS = [
          "hint": "文本 / 电量>50 / 图片名 / resource-id;条件成立跳过本步"},
         {"key": "threshold", "label": "相似度阈值", "type": "float",
          "hint": "条件为图片时,填写则用图像对比判断"},
-    ], "tip": "else 分支子步骤请用「YAML 源码」页编辑"},
+    ], "tip": "条件不成立时执行 else 子步骤;展开卡片后可在下方添加/编辑"},
     {"key": "if not", "label": "条件不满足则跳过", "category": "流程控制", "fields": [
         {"key": "if not", "label": "条件", "type": "text", "required": True,
          "hint": "同「条件满足则跳过」,判断结果取反"},
         {"key": "threshold", "label": "相似度阈值", "type": "float"},
-    ], "tip": "else 分支子步骤请用「YAML 源码」页编辑"},
+    ], "tip": "条件成立时执行 else 子步骤;展开卡片后可在下方添加/编辑"},
 ]
 
 ACTION_BY_KEY = {a["key"]: a for a in ACTIONS}
@@ -169,6 +169,9 @@ def serialize_step(step):
                 continue
             out[k] = v
             continue
+        if k == "else" and isinstance(v, list):  # else 子步骤递归清理(必须在 int4 分支前)
+            out[k] = [serialize_step(s) for s in v]
+            continue
         if isinstance(v, list):  # int4
             if v:
                 out[k] = v
@@ -192,7 +195,7 @@ def serialize_step(step):
 
 
 def validate_step(step):
-    """返回错误信息列表(空列表=通过)"""
+    """返回错误信息列表(空列表=通过);else 子步骤递归校验"""
     errors = []
     action = None
     for key in step:
@@ -208,11 +211,15 @@ def validate_step(step):
             errors.append(f"「{f['label']}」必填")
     if errors and action.get("tip"):
         errors.append(action["tip"])
+    for i, sub in enumerate(step.get("else") or []):
+        if isinstance(sub, dict):
+            for err in validate_step(sub):
+                errors.append(f"else子步骤{i + 1}: {err}")
     return errors
 
 
 def step_summary(step):
-    """生成步骤卡片的一行摘要"""
+    """生成步骤卡片的一行摘要(优先显示步骤说明 desc)"""
     action_key = None
     for key in step:
         if key in ACTION_BY_KEY:
@@ -228,8 +235,16 @@ def step_summary(step):
         val = ",".join(f"{k}={v}" for k, v in val.items() if v not in (None, ""))
     elif isinstance(val, list):
         val = f"[{','.join(map(str, val))}]"
-    main = f"{action['label']}: {val}" if val not in (True, "") else action["label"]
+    detail = f"{action['label']}: {val}" if val not in (True, "") else action["label"]
+    desc = str(step.get("desc", "")).strip()
+    if desc and desc != action["label"]:
+        main = f"{desc} · {detail}"
+    else:
+        main = detail
     badges = []
+    else_items = step.get("else")
+    if isinstance(else_items, list) and else_items:
+        badges.append(f"▸else {len(else_items)}步")
     if step.get("screenshot"):
         badges.append("📷")
     if step.get("wait"):

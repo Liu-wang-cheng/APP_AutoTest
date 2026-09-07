@@ -140,6 +140,7 @@ class ExcelReport:
         ws.cell(row=2, column=1).alignment = Alignment(horizontal="center")
 
         # ── 设备信息 ──
+        info = self._device_info
         ws.merge_cells(start_row=3, start_column=1, end_row=3, end_column=ncols)
         ws.cell(row=3, column=1,
                 value=f"设备SN: {info['sn']}     App版本: {info['app_version']}     固件版本: {info['固件版本']}     基站版本: {info['基站版本']}").font = Font(

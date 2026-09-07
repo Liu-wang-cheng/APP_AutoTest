@@ -66,8 +66,19 @@ def match_packages(app_name, packages):
         best = max((len(k) for k in kws if k in low), default=0)
         if best:
             scored.append((pkg, best))
-    scored.sort(key=lambda x: (-x[1], x[0]))
+    # 同分时取更短的包名(更接近厂商根包,如 com.tuya.smartiot 优先于
+    # com.example.tuya.helper 这类内嵌关键词的包)
+    scored.sort(key=lambda x: (-x[1], len(x[0]), x[0]))
     return scored
+
+
+def _parse_brief_activity(text, package):
+    """解析 resolve-activity --brief 输出中的 '包名/活动' 行,返回活动名或 None"""
+    for line in text.splitlines():
+        line = line.strip()
+        if line.startswith(package + "/"):
+            return line.split("/", 1)[1].strip()
+    return None
 
 
 def detect_main_activity(device_id, package):
@@ -75,10 +86,9 @@ def detect_main_activity(device_id, package):
     try:
         out = _adb_shell(device_id, "cmd", "package", "resolve-activity", "--brief",
                          "-c", "android.intent.category.LAUNCHER", package)
-        for line in out.splitlines():
-            line = line.strip()
-            if line.startswith(package + "/"):
-                return line.split("/", 1)[1].strip()
+        activity = _parse_brief_activity(out, package)
+        if activity:
+            return activity
     except Exception:
         pass
     try:

@@ -44,7 +44,7 @@ class RunWorker(QThread):
         self._stop_requested = False
 
     def request_stop(self):
-        """界面停止按钮调用: 置位引擎停止标志,当前步骤结束后尽快退出"""
+        """界面停止按钮调用: 置位停止标志,前置等待与当前步骤尽快退出"""
         self._stop_requested = True
         if self.runner:
             self.runner.stop()
@@ -54,6 +54,8 @@ class RunWorker(QThread):
         handler = _QtLogHandler(self.log_line.emit)
         root_log = logging.getLogger("vacuum_test")
         root_log.addHandler(handler)
+        report = None
+        report_saved = False
         try:
             cfg = load_config()
 
@@ -85,7 +87,8 @@ class RunWorker(QThread):
                 # 前置: 首个用例按勾选项全量执行,后续用例只重启 APP
                 if first:
                     self.status.emit(f"前置准备({case_name})...")
-                    session.prepare(d, cfg, **self.pre)
+                    session.prepare(d, cfg, should_cancel=lambda: self._stop_requested,
+                                    **self.pre)
                     first = False
                 else:
                     self.status.emit(f"重启 APP({case_name})...")
@@ -124,6 +127,7 @@ class RunWorker(QThread):
                     self.status.emit(f"用例通过: {case_name}")
 
             report.save()
+            report_saved = True
             self.status.emit(f"报告已生成: {report.path}")
             if self._stop_requested:
                 self.finished_run.emit(False, "已手动停止")
@@ -138,3 +142,10 @@ class RunWorker(QThread):
             self.finished_run.emit(False, f"执行异常: {e}")
         finally:
             root_log.removeHandler(handler)
+            # 中途异常也保住已执行部分的报告
+            if report is not None and not report_saved:
+                try:
+                    report.save()
+                    self.status.emit(f"报告已生成(部分执行): {report.path}")
+                except Exception:
+                    pass

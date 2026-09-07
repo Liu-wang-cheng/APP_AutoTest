@@ -37,6 +37,20 @@ def pytest_addoption(parser):
     parser.addoption("--case", default="", help="指定用例名（模糊匹配），空=全部")
 
 
+def pytest_collection_modifyitems(config, items):
+    """安全阀: 真机用例必须显式 --mode real 才会执行
+
+    在收集阶段跳过,device 前置 fixture 完全不会启动——防止裸跑
+    pytest tests/ 时误操控扫地机。
+    """
+    if config.getoption("--mode") == "real":
+        return
+    skip_real = pytest.mark.skip(reason="真机用例: 需加 --mode real 才执行(防止误操控扫地机)")
+    for item in items:
+        if "test_yaml_runner" in item.nodeid:
+            item.add_marker(skip_real)
+
+
 @pytest.fixture(scope="function")
 def device(request, report):
     """每个用例前后重启 APP，进入设备页，确保充电且电量 >50%(流程见 common/session.py)"""

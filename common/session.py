@@ -69,8 +69,8 @@ def restart_app(d, cfg, enter_page=True):
             log.warning(f"[前置] 未找到设备 {device_name}")
 
 
-def ensure_charging(d, timeout=1200, on_progress=None):
-    """确保设备处于充电状态(未充电则回充),默认超时 20 分钟"""
+def ensure_charging(d, timeout=1200, on_progress=None, should_cancel=None):
+    """确保设备处于充电状态(未充电则回充),默认超时 20 分钟;should_cancel 可中断等待"""
     if is_charging(d):
         log.info("[前置] 设备处于充电状态")
         return True
@@ -85,6 +85,9 @@ def ensure_charging(d, timeout=1200, on_progress=None):
         if is_charging(d):
             log.info("[前置] 设备已进入充电状态")
             return True
+        if should_cancel and should_cancel():
+            log.info("[前置] 收到停止请求，中断充电等待")
+            return False
         elapsed = int(time.time() - end) + timeout
         batt = get_battery_level(d)
         msg = f"等待充电中... 已等 {elapsed}s, 电量 {batt}%"
@@ -110,8 +113,8 @@ def ensure_map_loaded(d, timeout=30):
     return ok
 
 
-def ensure_battery(d, min_level=50, timeout=1800, on_progress=None):
-    """确保电量达标,默认 >50%,兜底 30 分钟防止无限等待"""
+def ensure_battery(d, min_level=50, timeout=1800, on_progress=None, should_cancel=None):
+    """确保电量达标,默认 >50%,兜底 30 分钟防止无限等待;should_cancel 可中断等待"""
     battery = get_battery_level(d)
     if battery < 0:
         log.info("[前置] 未读取到电量信息，跳过电量检查")
@@ -122,6 +125,9 @@ def ensure_battery(d, min_level=50, timeout=1800, on_progress=None):
     log.info(f"[前置] 电量 {battery}%，不足 {min_level}%，等待充电...")
     end = time.time() + timeout
     while time.time() < end:
+        if should_cancel and should_cancel():
+            log.info("[前置] 收到停止请求，中断电量等待")
+            return False
         time.sleep(30)
         battery = get_battery_level(d)
         if battery >= min_level or battery <= 0:
@@ -131,13 +137,15 @@ def ensure_battery(d, min_level=50, timeout=1800, on_progress=None):
 
 
 def prepare(d, cfg, restart=True, charging=True, map_load=True, battery=True,
-            on_progress=None):
-    """完整前置流程,按需组合(GUI 勾选项 / pytest 全开)"""
+            on_progress=None, should_cancel=None):
+    """完整前置流程,按需组合(GUI 勾选项 / pytest 全开);should_cancel 支持中途取消"""
     if restart:
         restart_app(d, cfg)
+    if should_cancel and should_cancel():
+        return
     if charging:
-        ensure_charging(d, on_progress=on_progress)
+        ensure_charging(d, on_progress=on_progress, should_cancel=should_cancel)
     if map_load:
         ensure_map_loaded(d)
     if battery:
-        ensure_battery(d, on_progress=on_progress)
+        ensure_battery(d, on_progress=on_progress, should_cancel=should_cancel)

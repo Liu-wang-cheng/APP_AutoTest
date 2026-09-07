@@ -27,6 +27,14 @@ from gui.runner_thread import RunWorker
 
 CASES_DIR = os.path.join(BASE_DIR, "Test_cases")
 
+
+def _safe_relpath(path):
+    """相对路径展示;跨盘符等无法计算时退回原路径"""
+    try:
+        return os.path.relpath(path, BASE_DIR)
+    except ValueError:
+        return path
+
 # 分类 → 组件标签颜色
 CATEGORY_COLORS = {
     "操作": "#2563eb", "断言": "#ea580c", "数据": "#7c3aed", "开关": "#0d9488",
@@ -69,6 +77,10 @@ QComboBox::drop-down { border: none; width: 18px; }
 QFrame#stepCard { background: #ffffff; border: 1px solid #e4e8ee; border-radius: 8px; }
 QFrame#stepCard:hover { border-color: #c6d2e6; }
 QFrame#stepCardOpen { background: #ffffff; border: 1px solid #2563eb; border-radius: 8px; }
+/* else 子步骤卡片(缩进、浅底、左侧描边) */
+QFrame#subStepCard { background: #f8fafc; border: 1px solid #e4e8ee; border-left: 3px solid #c7d4ea; border-radius: 6px; }
+QFrame#subStepCard:hover { border-color: #c6d2e6; }
+QFrame#subStepCardOpen { background: #f8fafc; border: 1px solid #2563eb; border-left: 3px solid #2563eb; border-radius: 6px; }
 QLabel#numLabel { color: #b0b9c6; font-weight: bold; font-size: 13px; }
 QLabel#chip { color: white; border-radius: 9px; padding: 2px 9px; font-size: 11px; }
 QLabel#summary { color: #1e293b; font-weight: bold; }
@@ -188,6 +200,23 @@ class FlowLayout(QLayout):
         return y - spacing + m.bottom() - rect.y()
 
 
+def make_action_menu(parent, on_pick):
+    """按分类构造动作选择菜单;on_pick(action_key) 在选中时回调"""
+    menu = QMenu(parent)
+    for cat in schema.CATEGORY_ORDER:
+        menu.addSection(cat)
+        for a in schema.ACTIONS:
+            if a["category"] == cat:
+                act = QAction(a["label"], menu)
+                act.triggered.connect(lambda _, k=a["key"]: on_pick(k))
+                menu.addAction(act)
+    menu.addSection("其他")
+    wait_act = QAction("延时等待", menu)
+    wait_act.triggered.connect(lambda: on_pick("__wait"))
+    menu.addAction(wait_act)
+    return menu
+
+
 def _make_field_widget(field, value):
     """按 schema 字段类型建控件,返回 (widget, 取值getter)"""
     t = field["type"]
@@ -210,9 +239,18 @@ def _make_field_widget(field, value):
         w = QLineEdit(",".join(map(str, value)) if value else "")
         w.setPlaceholderText(hint or "x1,y1,x2,y2")
         return w, _int4_of(w)
+    # text: 未编辑时保留原值(列表/数字等非字符串类型不被表单转成字符串)
     w = QLineEdit("" if value is None else str(value))
     w.setPlaceholderText(hint)
-    return w, lambda: w.text()
+    original_value = value
+    original_display = "" if value is None else str(value)
+
+    def text_getter(w=w):
+        if w.text() == original_display:
+            return original_value
+        return w.text()
+
+    return w, text_getter
 
 
 def _int_of(w):
@@ -243,19 +281,39 @@ def _int4_of(w):
 
 
 class StepCard(QFrame):
-    """单个步骤卡片: 折叠=摘要行,展开=参数表单(高级参数另收一层)"""
+    """单个步骤卡片: 折叠=摘要行,展开=参数表单(高级参数另收一层)
 
-    def __init__(self, main, index):
+    sub_index 为 None 时是顶层步骤卡片;否则是 else 子步骤卡片(缩进显示)。
+    """
+
+    def __init__(self, main, index, parent_index=None, sub_index=None):
         super().__init__()
         self.main = main
         self.index = index
-        self.step = main.steps[index]
+        self.parent_index = parent_index
+        self.sub_index = sub_index
+        self.is_sub = sub_index is not None
+        if self.is_sub:
+            self.step = main.steps[parent_index].setdefault("else", [])[sub_index]
+        else:
+            self.step = main.steps[index]
         self.getters = {}
-        self.expanded = (main.expanded_idx == index)
-        self.setObjectName("stepCardOpen" if self.expanded else "stepCard")
+        self.widgets = {}  # 表单控件引用(测试/程序化设值用)
+        self.key = (index,) if not self.is_sub else (parent_index, sub_index)
+        if self.is_sub:
+            self.expanded = (main.expanded_key == self.key)
+        else:
+            # 顶层卡片: 本身展开,或其 else 子步骤处于展开态,都视为打开
+            ek = main.expanded_key
+            self.expanded = (ek == self.key or
+                             (isinstance(ek, tuple) and len(ek) == 2 and ek[0] == index))
+        if self.is_sub:
+            self.setObjectName("subStepCardOpen" if self.expanded else "subStepCard")
+        else:
+            self.setObjectName("stepCardOpen" if self.expanded else "stepCard")
         self.setCursor(Qt.PointingHandCursor if not self.expanded else Qt.ArrowCursor)
         lay = QVBoxLayout(self)
-        lay.setContentsMargins(12, 5, 10, 7)
+        lay.setContentsMargins(30 if self.is_sub else 12, 5, 10, 7)
         lay.setSpacing(5)
         self._build_header(lay)
         if self.expanded:
@@ -265,9 +323,13 @@ class StepCard(QFrame):
     def _build_header(self, lay):
         head = QHBoxLayout()
         head.setSpacing(8)
-        num = QLabel(str(self.index + 1))
+        if self.is_sub:
+            num = QLabel(f"{self.sub_index + 1})")
+            num.setFixedWidth(18)
+        else:
+            num = QLabel(str(self.index + 1))
+            num.setFixedWidth(18)
         num.setObjectName("numLabel")
-        num.setFixedWidth(18)
         num.setAlignment(Qt.AlignCenter)
         head.addWidget(num)
 
@@ -282,10 +344,16 @@ class StepCard(QFrame):
         head.addWidget(self.summary_label, 1)
         self._refresh_summary()
 
-        for text, tip, fn in [("▲", "上移", lambda: self.main.move_step(self.index, -1)),
-                              ("▼", "下移", lambda: self.main.move_step(self.index, 1)),
-                              ("⧉", "复制", lambda: self.main.dup_step(self.index)),
-                              ("✕", "删除", lambda: self.main.del_step(self.index))]:
+        if self.is_sub:
+            ops = [("▲", "上移", lambda: self.main.move_sub(self.parent_index, self.sub_index, -1)),
+                   ("▼", "下移", lambda: self.main.move_sub(self.parent_index, self.sub_index, 1)),
+                   ("✕", "删除", lambda: self.main.del_sub(self.parent_index, self.sub_index))]
+        else:
+            ops = [("▲", "上移", lambda: self.main.move_step(self.index, -1)),
+                   ("▼", "下移", lambda: self.main.move_step(self.index, 1)),
+                   ("⧉", "复制", lambda: self.main.dup_step(self.index)),
+                   ("✕", "删除", lambda: self.main.del_step(self.index))]
+        for text, tip, fn in ops:
             b = QToolButton()
             b.setText(text)
             b.setToolTip(tip)
@@ -299,26 +367,12 @@ class StepCard(QFrame):
     def mousePressEvent(self, event):
         """点击折叠卡片 → 原位展开(展开态不响应,避免编辑时误收起)"""
         if not self.expanded and event.button() == Qt.LeftButton:
-            self.main.expand_card(self.index)
+            self.main.expand_card(self.key)
         super().mousePressEvent(event)
 
     def _refresh_summary(self):
+        # 徽标(else/截图/超时/等待/重试)统一在 schema.step_summary 里拼装
         self.summary_label.setText(schema.step_summary(self.step))
-        badges = []
-        else_items = self.step.get("else")
-        if isinstance(else_items, list) and else_items:
-            badges.append(f"▸else {len(else_items)}步")
-        if self.step.get("screenshot"):
-            badges.append("📷")
-        if self.step.get("timeout"):
-            badges.append(f"⏱{self.step['timeout']}s")
-        if self.step.get("wait"):
-            badges.append(f"+{self.step['wait']}s")
-        if self.step.get("retry"):
-            badges.append(f"↻{self.step['retry']}")
-        # 徽标并入摘要尾部,避免再建控件
-        if badges:
-            self.summary_label.setText(self.summary_label.text() + "   " + " ".join(badges))
 
     # ── 展开态: 参数表单 ──
     def _build_form(self, lay):
@@ -327,6 +381,13 @@ class StepCard(QFrame):
         fv = QVBoxLayout(form)
         fv.setContentsMargins(26, 0, 4, 0)
         fv.setSpacing(5)
+
+        # 名称(desc)始终可编辑
+        desc_grid = QGridLayout()
+        desc_grid.setHorizontalSpacing(10)
+        self._add_field(desc_grid, 0, {"key": "desc", "label": "名称",
+                                       "type": "text", "hint": "显示在报告和结果面板"})
+        fv.addLayout(desc_grid)
 
         if action:
             grid = QGridLayout()
@@ -362,7 +423,23 @@ class StepCard(QFrame):
         self.adv_grid_host.setVisible(False)
         fv.addWidget(self.adv_grid_host)
 
+        # if / if not: else 子步骤管理区(子卡片在 render_cards 中紧随其后渲染)
+        if action and action["key"] in ("if", "if not"):
+            self._build_else_section(fv)
+
         lay.addWidget(form)
+
+    def _build_else_section(self, fv):
+        row = QHBoxLayout()
+        lbl = QLabel("else 分支(条件不满足时执行,子步骤见下方缩进卡片)")
+        lbl.setObjectName("fieldLabel")
+        row.addWidget(lbl)
+        add_btn = QPushButton("＋ 子步骤")
+        add_btn.setObjectName("chipBtn")
+        add_btn.setMenu(make_action_menu(add_btn, lambda k: self.main.add_sub(self.index, k)))
+        row.addWidget(add_btn)
+        row.addStretch()
+        fv.addLayout(row)
 
     def _add_field(self, grid, row, field):
         lbl = QLabel(field["label"])
@@ -372,6 +449,7 @@ class StepCard(QFrame):
         w.setMinimumWidth(240)
         w.setMaximumWidth(430)
         grid.addWidget(w, row, 1)
+        self.widgets[field["key"]] = w
         self.getters[field["key"]] = getter
         signal = w.toggled if isinstance(w, QCheckBox) else w.editingFinished
         signal.connect(self._write_back)
@@ -436,7 +514,7 @@ class MainWindow(QMainWindow):
         self.data = self._empty_data()
         self.case_idx = 0
         self.worker = None
-        self.expanded_idx = -1
+        self.expanded_key = None  # 展开的卡片: (顶层序号,) 或 (父序号, 子序号)
 
         root = QWidget()
         v = QVBoxLayout(root)
@@ -472,19 +550,7 @@ class MainWindow(QMainWindow):
 
         self.add_btn = QPushButton("＋ 添加步骤")
         self.add_btn.setStyleSheet("color:#2563eb; border-color:#b9cff5;")
-        menu = QMenu(self.add_btn)
-        for cat in schema.CATEGORY_ORDER:
-            menu.addSection(cat)
-            for a in schema.ACTIONS:
-                if a["category"] == cat:
-                    act = QAction(a["label"], menu)
-                    act.triggered.connect(lambda _, k=a["key"]: self.add_step(k))
-                    menu.addAction(act)
-        menu.addSection("其他")
-        act = QAction("延时等待", menu)
-        act.triggered.connect(lambda: self.add_step("__wait"))
-        menu.addAction(act)
-        self.add_btn.setMenu(menu)
+        self.add_btn.setMenu(make_action_menu(self.add_btn, self.add_step))
         lay.addWidget(self.add_btn)
 
         lay.addStretch()
@@ -553,27 +619,7 @@ class MainWindow(QMainWindow):
         self.detect_btn.clicked.connect(self.on_detect_app)
         lay.addWidget(self.detect_btn)
 
-        # 包名/启动页默认隐藏,点「检测」后显示 5 秒再收起(值始终保存在配置里)
-        self.pkg_label = QLabel("包名")
-        lay.addWidget(self.pkg_label)
-        self.pkg_edit = QLineEdit()
-        self.pkg_edit.setFixedWidth(150)
-        self.pkg_edit.setProperty("cfg_key", "app.package")
-        self.pkg_edit.editingFinished.connect(self._save_env_field)
-        lay.addWidget(self.pkg_edit)
-
-        self.act_label = QLabel("启动页")
-        lay.addWidget(self.act_label)
-        self.act_edit = QLineEdit()
-        self.act_edit.setFixedWidth(150)
-        self.act_edit.setProperty("cfg_key", "app.main_activity")
-        self.act_edit.editingFinished.connect(self._save_env_field)
-        lay.addWidget(self.act_edit)
-
-        self._pkg_act_widgets = [self.pkg_label, self.pkg_edit,
-                                 self.act_label, self.act_edit]
-        for wdg in self._pkg_act_widgets:
-            wdg.setVisible(False)
+        # 包名/启动页不常驻界面: 点「检测」后结果直接显示在右侧状态文字,并写入配置
 
         lay.addWidget(QLabel("设备名称"))
         self.device_name_edit = QLineEdit()
@@ -596,8 +642,6 @@ class MainWindow(QMainWindow):
             pass
         app = cfg.get("app", {})
         self.app_name_edit.setText(app.get("name", ""))
-        self.pkg_edit.setText(app.get("package", ""))
-        self.act_edit.setText(app.get("main_activity", ""))
         self.device_name_edit.setText(cfg.get("target_device", ""))
         self._refresh_devices()
 
@@ -632,25 +676,13 @@ class MainWindow(QMainWindow):
         return self.device_combo.currentData()
 
     # ── APP/设备配置 ──
-    def _show_pkg_act(self, duration_ms=5000):
-        """显示包名/启动页字段,超时自动收起"""
-        for wdg in self._pkg_act_widgets:
-            wdg.setVisible(True)
-        self.env_strip_lay.invalidate()
-        self.env_strip.updateGeometry()
-        QTimer.singleShot(duration_ms, self._hide_pkg_act)
-
-    def _hide_pkg_act(self):
-        for wdg in self._pkg_act_widgets:
-            wdg.setVisible(False)
-        self.env_strip_lay.invalidate()
-        self.env_strip.updateGeometry()
-
     def _save_env_field(self):
         """测试APP/包名/启动页/设备名称 编辑 → 写回 config.yaml"""
         self._save_cfg_field(self.sender())
 
     def _save_cfg_field(self, w):
+        if w is None:
+            return
         key = w.property("cfg_key")
         value = w.text().strip()
         if not key or not value:
@@ -695,11 +727,9 @@ class MainWindow(QMainWindow):
                     return
                 package = sel
             activity = app_detect.detect_main_activity(device_id, package) or ""
-            self.pkg_edit.setText(package)
-            self.act_edit.setText(activity)
             update_config({"app.package": package, "app.main_activity": activity})
-            self.env_status.setText(f"检测完成: {package} → {activity or '启动页未识别,请手填'}")
-            self._show_pkg_act()  # 检测结果展示 5 秒后自动收起
+            self.env_status.setText(
+                f"检测结果: {package} → {activity or '启动页未识别'}(已写入配置)")
         except Exception as e:
             QMessageBox.critical(self, "检测失败", f"{type(e).__name__}: {e}")
             self.env_status.setText("")
@@ -779,12 +809,19 @@ class MainWindow(QMainWindow):
                 item.widget().hide()  # 先隐藏再延迟销毁,杜绝重渲染瞬间残留
                 item.widget().deleteLater()
         for i in range(len(self.steps)):
+            step = self.steps[i]
             self.cards_lay.insertWidget(self.cards_lay.count() - 1, StepCard(self, i))
+            # 父卡片(或其子步骤)展开时,else 子步骤以缩进子卡片紧随其后
+            ek = self.expanded_key
+            if ek and ek[0] == i and isinstance(step.get("else"), list):
+                for j in range(len(step["else"])):
+                    self.cards_lay.insertWidget(
+                        self.cards_lay.count() - 1, StepCard(self, i, parent_index=i, sub_index=j))
         self.step_count_label.setText(f"共 {len(self.steps)} 步")
         self._refresh_yaml_text()
 
-    def expand_card(self, index):
-        self.expanded_idx = index
+    def expand_card(self, key):
+        self.expanded_key = key
         self.render_cards()
 
     def on_card_edited(self):
@@ -797,13 +834,12 @@ class MainWindow(QMainWindow):
         else:
             step = schema.new_step(key)
         self.steps.append(step)
-        self.expanded_idx = len(self.steps) - 1
+        self.expanded_key = (len(self.steps) - 1,)
         self.render_cards()
         self._scroll_to_end()
 
     def _scroll_to_end(self):
         bar = self.cards_scroll.verticalScrollBar()
-        from PySide6.QtCore import QTimer
         QTimer.singleShot(0, lambda: bar.setValue(bar.maximum()))
 
     def move_step(self, index, delta):
@@ -811,19 +847,58 @@ class MainWindow(QMainWindow):
         if not (0 <= new < len(self.steps)):
             return
         self.steps[index], self.steps[new] = self.steps[new], self.steps[index]
-        if self.expanded_idx == index:
-            self.expanded_idx = new
+        if self.expanded_key == (index,):
+            self.expanded_key = (new,)
         self.render_cards()
 
     def dup_step(self, index):
         self.steps.insert(index + 1, copy.deepcopy(self.steps[index]))
-        self.expanded_idx = index + 1
+        self.expanded_key = (index + 1,)
         self.render_cards()
 
     def del_step(self, index):
         del self.steps[index]
-        if self.expanded_idx >= len(self.steps):
-            self.expanded_idx = len(self.steps) - 1
+        if self.expanded_key and self.expanded_key[0] >= len(self.steps):
+            self.expanded_key = (len(self.steps) - 1,) if self.steps else None
+        self.render_cards()
+
+    # ── else 子步骤操作 ──
+    def _else_list(self, parent_index):
+        return self.steps[parent_index].setdefault("else", [])
+
+    def add_sub(self, parent_index, action_key):
+        if action_key == "__wait":
+            step = {"desc": "延时等待", "wait": 10}
+        else:
+            step = schema.new_step(action_key)
+        else_list = self._else_list(parent_index)
+        else_list.append(step)
+        self.expanded_key = (parent_index, len(else_list) - 1)
+        self.render_cards()
+        self._scroll_to_end()
+
+    def move_sub(self, parent_index, sub_index, delta):
+        else_list = self.steps[parent_index].get("else") or []
+        new = sub_index + delta
+        if not (0 <= new < len(else_list)):
+            return
+        else_list[sub_index], else_list[new] = else_list[new], else_list[sub_index]
+        if self.expanded_key == (parent_index, sub_index):
+            self.expanded_key = (parent_index, new)
+        self.render_cards()
+
+    def dup_sub(self, parent_index, sub_index):
+        else_list = self._else_list(parent_index)
+        else_list.insert(sub_index + 1, copy.deepcopy(else_list[sub_index]))
+        self.expanded_key = (parent_index, sub_index + 1)
+        self.render_cards()
+
+    def del_sub(self, parent_index, sub_index):
+        else_list = self.steps[parent_index].get("else") or []
+        if 0 <= sub_index < len(else_list):
+            del else_list[sub_index]
+        if self.expanded_key and len(self.expanded_key) == 2 and self.expanded_key[0] == parent_index:
+            self.expanded_key = (parent_index,)  # 收回到父卡片
         self.render_cards()
 
     # ── 数据模型 ──
@@ -916,7 +991,7 @@ class MainWindow(QMainWindow):
         self.case_path = None
         self.data = self._empty_data()
         self.case_idx = 0
-        self.expanded_idx = -1
+        self.expanded_key = None
         self.file_label.setText("未打开文件")
         self._load_case_into_ui()
         self.render_cards()
@@ -938,8 +1013,8 @@ class MainWindow(QMainWindow):
         self.case_path = path
         self.data = data
         self.case_idx = 0
-        self.expanded_idx = -1
-        self.file_label.setText(os.path.relpath(path, BASE_DIR))
+        self.expanded_key = None
+        self.file_label.setText(_safe_relpath(path))
         self._load_case_into_ui()
         self.render_cards()
 
@@ -966,7 +1041,7 @@ class MainWindow(QMainWindow):
             return
         with open(self.case_path, "w", encoding="utf-8") as f:
             yaml.safe_dump(self._dump_data(), f, allow_unicode=True, sort_keys=False)
-        self.file_label.setText(os.path.relpath(self.case_path, BASE_DIR))
+        self.file_label.setText(_safe_relpath(self.case_path))
         self.status_label.setText(f"已保存: {os.path.basename(self.case_path)}")
         self.log_view.appendPlainText(f"[保存] {self.case_path}")
 
@@ -987,7 +1062,7 @@ class MainWindow(QMainWindow):
             return
         self.data = data
         self.case_idx = 0
-        self.expanded_idx = -1
+        self.expanded_key = None
         self._load_case_into_ui()
         self.render_cards()
 
