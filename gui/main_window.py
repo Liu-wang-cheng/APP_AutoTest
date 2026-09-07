@@ -10,7 +10,7 @@ import json
 import os
 
 import yaml
-from PySide6.QtCore import QPoint, QRect, QSize, Qt
+from PySide6.QtCore import QPoint, QRect, QSize, Qt, QTimer
 from PySide6.QtGui import QAction, QColor, QDoubleValidator, QIntValidator, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QCheckBox, QComboBox, QDoubleSpinBox,
@@ -146,12 +146,15 @@ class FlowLayout(QLayout):
     def minimumSize(self):
         size = QSize()
         for item in self._items:
+            wid = item.widget()
+            if wid is not None and not wid.isVisible():
+                continue  # 隐藏控件不占位
             size = size.expandedTo(item.minimumSize())
         m = self.contentsMargins()
         return size + QSize(m.left() + m.right(), m.top() + m.bottom())
 
     def _do_layout(self, rect, test_only):
-        """两遍扫描: 先分行并记录行高,再把行内控件按垂直居中放置"""
+        """两遍扫描: 先分行并记录行高,再把行内控件按垂直居中放置(跳过隐藏控件)"""
         m = self.contentsMargins()
         left = rect.x() + m.left()
         max_right = rect.right() - m.right()
@@ -160,6 +163,9 @@ class FlowLayout(QLayout):
         # 第一遍: 分行
         lines, cur, cur_h, row_x = [], [], 0, left
         for item in self._items:
+            wid = item.widget()
+            if wid is not None and not wid.isVisible():
+                continue
             w, h = item.sizeHint().width(), item.sizeHint().height()
             if cur and row_x + w > max_right:  # 放不下 → 换行
                 lines.append((cur, cur_h))
@@ -482,7 +488,7 @@ class MainWindow(QMainWindow):
         lay.addWidget(self.add_btn)
 
         lay.addStretch()
-        pre_btn = QPushButton("前置条件 ▾")
+        pre_btn = QPushButton("前置条件")
         pre_menu = QMenu(pre_btn)
         self.pre_actions = {}
         for key, label in [("restart", "重启 APP"), ("charging", "等待充电"),
@@ -515,6 +521,8 @@ class MainWindow(QMainWindow):
         strip = QFrame()
         strip.setObjectName("chipStrip")
         lay = FlowLayout(strip, margin=5, spacing=6)
+        self.env_strip = strip
+        self.env_strip_lay = lay
 
         # ── 设备(最前) ──
         lay.addWidget(QLabel("设备"))
@@ -545,19 +553,27 @@ class MainWindow(QMainWindow):
         self.detect_btn.clicked.connect(self.on_detect_app)
         lay.addWidget(self.detect_btn)
 
-        lay.addWidget(QLabel("包名"))
+        # 包名/启动页默认隐藏,点「检测」后显示 5 秒再收起(值始终保存在配置里)
+        self.pkg_label = QLabel("包名")
+        lay.addWidget(self.pkg_label)
         self.pkg_edit = QLineEdit()
         self.pkg_edit.setFixedWidth(150)
         self.pkg_edit.setProperty("cfg_key", "app.package")
         self.pkg_edit.editingFinished.connect(self._save_env_field)
         lay.addWidget(self.pkg_edit)
 
-        lay.addWidget(QLabel("启动页"))
+        self.act_label = QLabel("启动页")
+        lay.addWidget(self.act_label)
         self.act_edit = QLineEdit()
         self.act_edit.setFixedWidth(150)
         self.act_edit.setProperty("cfg_key", "app.main_activity")
         self.act_edit.editingFinished.connect(self._save_env_field)
         lay.addWidget(self.act_edit)
+
+        self._pkg_act_widgets = [self.pkg_label, self.pkg_edit,
+                                 self.act_label, self.act_edit]
+        for wdg in self._pkg_act_widgets:
+            wdg.setVisible(False)
 
         lay.addWidget(QLabel("设备名称"))
         self.device_name_edit = QLineEdit()
@@ -616,6 +632,20 @@ class MainWindow(QMainWindow):
         return self.device_combo.currentData()
 
     # ── APP/设备配置 ──
+    def _show_pkg_act(self, duration_ms=5000):
+        """显示包名/启动页字段,超时自动收起"""
+        for wdg in self._pkg_act_widgets:
+            wdg.setVisible(True)
+        self.env_strip_lay.invalidate()
+        self.env_strip.updateGeometry()
+        QTimer.singleShot(duration_ms, self._hide_pkg_act)
+
+    def _hide_pkg_act(self):
+        for wdg in self._pkg_act_widgets:
+            wdg.setVisible(False)
+        self.env_strip_lay.invalidate()
+        self.env_strip.updateGeometry()
+
     def _save_env_field(self):
         """测试APP/包名/启动页/设备名称 编辑 → 写回 config.yaml"""
         self._save_cfg_field(self.sender())
@@ -669,6 +699,7 @@ class MainWindow(QMainWindow):
             self.act_edit.setText(activity)
             update_config({"app.package": package, "app.main_activity": activity})
             self.env_status.setText(f"检测完成: {package} → {activity or '启动页未识别,请手填'}")
+            self._show_pkg_act()  # 检测结果展示 5 秒后自动收起
         except Exception as e:
             QMessageBox.critical(self, "检测失败", f"{type(e).__name__}: {e}")
             self.env_status.setText("")
