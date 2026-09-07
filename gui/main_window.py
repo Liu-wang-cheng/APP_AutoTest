@@ -128,6 +128,16 @@ class ClickableLabel(QLabel):
         super().mousePressEvent(event)
 
 
+class ClickableFrame(QFrame):
+    """可点击的卡片头部行"""
+    clicked = Signal()
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self.clicked.emit()
+        super().mousePressEvent(event)
+
+
 class ImageViewDialog(QDialog):
     """截图独立查看窗口: 按钮/滚轮缩放,滚动条平移"""
 
@@ -402,7 +412,12 @@ class StepCard(QFrame):
 
     # ── 折叠态: 编号 + 组件标签 + 摘要 + 徽标 + 操作按钮 ──
     def _build_header(self, lay):
-        head = QHBoxLayout()
+        header = ClickableFrame()
+        header.setStyleSheet("QFrame { background: transparent; }")
+        header.setCursor(Qt.PointingHandCursor)
+        header.clicked.connect(self._header_clicked)
+        head = QHBoxLayout(header)
+        head.setContentsMargins(0, 0, 0, 0)
         head.setSpacing(8)
         if self.is_sub:
             num = QLabel(f"{self.sub_index + 1})")
@@ -443,13 +458,30 @@ class StepCard(QFrame):
                 b.setStyleSheet("QToolButton:hover { color:#dc2626; background:#fef2f2; }")
             b.clicked.connect(fn)
             head.addWidget(b)
-        lay.addLayout(head)
+        lay.addWidget(header)
 
     def mousePressEvent(self, event):
-        """点击折叠卡片 → 原位展开(展开态不响应,避免编辑时误收起)"""
+        """点击卡片非头部区域: 折叠态 → 展开;展开态不响应(避免编辑时误收起)"""
         if not self.expanded and event.button() == Qt.LeftButton:
             self.main.expand_card(self.key)
         super().mousePressEvent(event)
+
+    def _header_clicked(self):
+        """点击头部行: 展开/收回(toggle);子步骤收回时回到父级"""
+        if self.is_sub:
+            if self.main.expanded_key == self.key:
+                self.main.expand_card((self.parent_index,))
+            else:
+                self.main.expand_card(self.key)
+            return
+        if self.main.expanded_key == self.key:
+            self.main.expand_card(None)
+        elif isinstance(self.main.expanded_key, tuple) and \
+                len(self.main.expanded_key) == 2 and self.main.expanded_key[0] == self.index:
+            # 父卡片因子步骤展开而打开: 点击头部切换到编辑父卡片本身
+            self.main.expand_card(self.key)
+        else:
+            self.main.expand_card(self.key)
 
     def _refresh_summary(self):
         # 徽标(else/截图/超时/等待/重试)统一在 schema.step_summary 里拼装
@@ -631,9 +663,12 @@ class MainWindow(QMainWindow):
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(8)
 
-        for text, fn in [("新建", self.on_new), ("打开", self.on_open), ("保存", self.on_save)]:
+        for text, fn, attr in [("新建", self.on_new, "new_btn"),
+                               ("打开", self.on_open, "open_btn"),
+                               ("保存", self.on_save, "save_btn")]:
             b = QPushButton(text)
             b.clicked.connect(fn)
+            setattr(self, attr, b)
             lay.addWidget(b)
         self.file_label = QLabel("未打开文件")
         self.file_label.setStyleSheet("color:#94a3b8;")
@@ -846,6 +881,13 @@ class MainWindow(QMainWindow):
         self.case_name_edit.setFixedWidth(120)
         self.case_name_edit.editingFinished.connect(self._sync_header)
         lay.addWidget(self.case_name_edit)
+
+        # 多 case 文件的用例切换器(单 case 文件自动隐藏)
+        self.case_combo = QComboBox()
+        self.case_combo.setToolTip("该文件包含多个用例,选择当前编辑的用例")
+        self.case_combo.currentIndexChanged.connect(self._on_case_switched)
+        self.case_combo.setVisible(False)
+        lay.addWidget(self.case_combo)
         lay.addWidget(QLabel("优先级"))
         self.priority_combo = QComboBox()
         self.priority_combo.addItems(["P0", "P1", "P2"])
@@ -863,6 +905,7 @@ class MainWindow(QMainWindow):
         line.setStyleSheet("color:#e2e8f0;")
         lay.addWidget(line)
 
+        self._quick_btns = []
         for key in QUICK_ACTIONS:
             if key == "__wait":
                 label, cat = "延时", "流程控制"
@@ -874,6 +917,7 @@ class MainWindow(QMainWindow):
             b.setToolTip(f"添加「{label}」步骤(分类: {cat})")
             b.clicked.connect(lambda _, k=key: self.add_step(k))
             lay.addWidget(b)
+            self._quick_btns.append(b)
         tip = QLabel("更多动作见右上「＋添加步骤」;点卡片展开编辑参数")
         tip.setStyleSheet("color:#b6c0cd;")
         lay.addWidget(tip)
@@ -922,6 +966,10 @@ class MainWindow(QMainWindow):
         self._refresh_yaml_text()
 
     def expand_card(self, key):
+        # 收起焦点控件,触发 editingFinished 把未提交的编辑写回步骤
+        focused = self.focusWidget()
+        if focused is not None:
+            focused.clearFocus()
         self.expanded_key = key
         self.render_cards()
 
@@ -930,6 +978,8 @@ class MainWindow(QMainWindow):
 
     # ── 步骤操作 ──
     def add_step(self, key):
+        if self.worker:
+            return
         if key == "__wait":
             step = {"desc": "延时等待", "wait": 10}
         else:
@@ -944,6 +994,8 @@ class MainWindow(QMainWindow):
         QTimer.singleShot(0, lambda: bar.setValue(bar.maximum()))
 
     def move_step(self, index, delta):
+        if self.worker:
+            return
         new = index + delta
         if not (0 <= new < len(self.steps)):
             return
@@ -953,11 +1005,15 @@ class MainWindow(QMainWindow):
         self.render_cards()
 
     def dup_step(self, index):
+        if self.worker:
+            return
         self.steps.insert(index + 1, copy.deepcopy(self.steps[index]))
         self.expanded_key = (index + 1,)
         self.render_cards()
 
     def del_step(self, index):
+        if self.worker:
+            return
         del self.steps[index]
         if self.expanded_key and self.expanded_key[0] >= len(self.steps):
             self.expanded_key = (len(self.steps) - 1,) if self.steps else None
@@ -968,6 +1024,8 @@ class MainWindow(QMainWindow):
         return self.steps[parent_index].setdefault("else", [])
 
     def add_sub(self, parent_index, action_key):
+        if self.worker:
+            return
         if action_key == "__wait":
             step = {"desc": "延时等待", "wait": 10}
         else:
@@ -979,6 +1037,8 @@ class MainWindow(QMainWindow):
         self._scroll_to_end()
 
     def move_sub(self, parent_index, sub_index, delta):
+        if self.worker:
+            return
         else_list = self.steps[parent_index].get("else") or []
         new = sub_index + delta
         if not (0 <= new < len(else_list)):
@@ -989,12 +1049,16 @@ class MainWindow(QMainWindow):
         self.render_cards()
 
     def dup_sub(self, parent_index, sub_index):
+        if self.worker:
+            return
         else_list = self._else_list(parent_index)
         else_list.insert(sub_index + 1, copy.deepcopy(else_list[sub_index]))
         self.expanded_key = (parent_index, sub_index + 1)
         self.render_cards()
 
     def del_sub(self, parent_index, sub_index):
+        if self.worker:
+            return
         else_list = self.steps[parent_index].get("else") or []
         if 0 <= sub_index < len(else_list):
             del else_list[sub_index]
@@ -1033,7 +1097,46 @@ class MainWindow(QMainWindow):
         c["priority"] = self.priority_combo.currentText()
         txt = self.case_wait_edit.text().strip()
         c["wait"] = int(txt) if txt.isdigit() else None
+        self._refresh_case_item_text()
         self._refresh_yaml_text()
+
+    # ── 多 case 切换器 ──
+    def _refresh_case_selector(self):
+        cases = self.data.get("cases", [])
+        self.case_combo.blockSignals(True)
+        self.case_combo.clear()
+        for i, c in enumerate(cases):
+            self.case_combo.addItem(f"{i + 1}. {c.get('name', '未命名')}")
+        self.case_combo.setCurrentIndex(self.case_idx)
+        self.case_combo.blockSignals(False)
+        self.case_combo.setVisible(len(cases) > 1)
+
+    def _refresh_case_item_text(self):
+        if self.case_combo.count() > self.case_idx:
+            self.case_combo.blockSignals(True)
+            self.case_combo.setItemText(
+                self.case_idx, f"{self.case_idx + 1}. {self.current_case.get('name', '未命名')}")
+            self.case_combo.blockSignals(False)
+
+    def _on_case_switched(self, index):
+        if index < 0 or index == self.case_idx:
+            return
+        self.case_idx = index
+        self.expanded_key = None
+        self._load_case_into_ui()
+        self.render_cards()
+
+    # ── 执行期间锁定编排区 ──
+    def _set_locked(self, locked):
+        self._locked = locked
+        widgets = [self.new_btn, self.open_btn, self.save_btn, self.add_btn,
+                   self.case_name_edit, self.module_edit, self.priority_combo,
+                   self.case_wait_edit, self.case_combo,
+                   self.yaml_refresh_btn, self.yaml_apply_btn]
+        widgets += self._quick_btns
+        for w in widgets:
+            w.setEnabled(not locked)
+        self.cards_scroll.widget().setEnabled(not locked)  # 卡片区只读(仍可滚动)
 
     def _find_action(self, step):
         for key in step:
@@ -1072,10 +1175,11 @@ class MainWindow(QMainWindow):
         self.yaml_edit = QPlainTextEdit()
         sv.addWidget(self.yaml_edit)
         srow = QHBoxLayout()
-        for text, fn in [("← 从卡片刷新", self._refresh_yaml_text),
-                         ("应用到卡片 →", self._apply_yaml_text)]:
+        for text, fn, attr in [("← 从卡片刷新", self._refresh_yaml_text, "yaml_refresh_btn"),
+                               ("应用到卡片 →", self._apply_yaml_text, "yaml_apply_btn")]:
             b = QPushButton(text)
             b.clicked.connect(fn)
+            setattr(self, attr, b)
             srow.addWidget(b)
         srow.addStretch()
         sv.addLayout(srow)
@@ -1092,6 +1196,8 @@ class MainWindow(QMainWindow):
 
     # ── 文件操作 ──
     def on_new(self):
+        if self.worker:
+            return
         self.case_path = None
         self.data = self._empty_data()
         self.case_idx = 0
@@ -1099,8 +1205,11 @@ class MainWindow(QMainWindow):
         self.file_label.setText("未打开文件")
         self._load_case_into_ui()
         self.render_cards()
+        self._refresh_case_selector()
 
     def on_open(self):
+        if self.worker:
+            return
         path, _ = QFileDialog.getOpenFileName(
             self, "打开用例", CASES_DIR, "YAML 用例 (*.yaml *.yml)")
         if not path:
@@ -1121,6 +1230,7 @@ class MainWindow(QMainWindow):
         self.file_label.setText(_safe_relpath(path))
         self._load_case_into_ui()
         self.render_cards()
+        self._refresh_case_selector()
 
     def _dump_data(self):
         return {"module": self.data.get("module", "未命名"),
@@ -1128,6 +1238,8 @@ class MainWindow(QMainWindow):
                           for c in self.data.get("cases", [])]}
 
     def on_save(self):
+        if self.worker:
+            return
         if not self.case_path:
             os.makedirs(CASES_DIR, exist_ok=True)
             path, _ = QFileDialog.getSaveFileName(
@@ -1136,10 +1248,13 @@ class MainWindow(QMainWindow):
                 return
             self.case_path = path
         self._sync_header()
+        # 校验全部用例(多 case 文件逐一检查)
         problems = []
-        for i, s in enumerate(self.steps):
-            for err in schema.validate_step(s):
-                problems.append(f"步骤{i + 1}: {err}")
+        for ci, case in enumerate(self.data.get("cases", [])):
+            label = case.get("name") or f"第{ci + 1}个用例"
+            for i, s in enumerate(case.get("steps", [])):
+                for err in schema.validate_step(s):
+                    problems.append(f"用例[{label}] 步骤{i + 1}: {err}")
         if problems and QMessageBox.question(
                 self, "存在参数问题,仍要保存?", "\n".join(problems[:10])) != QMessageBox.Yes:
             return
@@ -1157,6 +1272,8 @@ class MainWindow(QMainWindow):
             yaml.safe_dump(self._dump_data(), allow_unicode=True, sort_keys=False))
 
     def _apply_yaml_text(self):
+        if self.worker:
+            return
         try:
             data = yaml.safe_load(self.yaml_edit.toPlainText()) or {}
             if not isinstance(data, dict):
@@ -1169,6 +1286,7 @@ class MainWindow(QMainWindow):
         self.expanded_key = None
         self._load_case_into_ui()
         self.render_cards()
+        self._refresh_case_selector()
 
     # ── 执行 ──
     def on_run(self):
@@ -1188,6 +1306,7 @@ class MainWindow(QMainWindow):
         self.worker.status.connect(lambda s: self.status_label.setText(s))
         self.worker.finished_run.connect(self.on_run_finished)
         self.worker.start()
+        self._set_locked(True)  # 执行期间锁定编排区
         self.run_btn.setEnabled(False)
         self.stop_btn.setEnabled(True)
         self.tabs.setCurrentIndex(0)
@@ -1261,6 +1380,7 @@ class MainWindow(QMainWindow):
         self.log_view.appendPlainText(f"[结束] {message}")
         self.run_btn.setEnabled(True)
         self.stop_btn.setEnabled(False)
+        self._set_locked(False)
         self.worker = None
 
     def closeEvent(self, event):

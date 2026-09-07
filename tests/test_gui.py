@@ -559,3 +559,94 @@ class TestGuiPreview:
         window.on_step_done({"desc": "s2", "passed": True, "error": "",
                              "screenshot": ""})
         assert window.result_table.item(1, 3).text() == ""
+
+
+class TestGuiLockAndCases:
+    """执行锁定 / 多 case 切换器 / 卡片头部 toggle"""
+
+    def test_执行期间锁定编排区(self, window):
+        window.on_new()
+        window.add_step("click")
+        window.worker = object()  # 模拟执行中
+        window._set_locked(True)
+        assert not window.add_btn.isEnabled()
+        assert not window.save_btn.isEnabled()
+        assert not window.case_name_edit.isEnabled()
+        assert not window.cards_scroll.widget().isEnabled()
+        n = len(window.steps)
+        window.add_step("assert")   # 守卫生效,不添加
+        window.move_step(0, 1)
+        assert len(window.steps) == 1
+        window.worker = None
+        window._set_locked(False)
+        assert window.add_btn.isEnabled()
+        assert window.cards_scroll.widget().isEnabled()
+
+    def test_运行结束自动解锁(self, window):
+        window.worker = object()
+        window._set_locked(True)
+        window.run_btn.setEnabled(False)
+        window.on_run_finished(True, "全部通过")
+        assert window.add_btn.isEnabled()
+        assert window.worker is None
+
+    def test_多case切换器(self, window):
+        window.on_new()
+        window.data = {"module": "M", "cases": [
+            {"name": "用例A", "priority": "P1", "steps": [{"desc": "a", "click": "x"}]},
+            {"name": "用例B", "priority": "P1", "steps": []}]}
+        window.case_idx = 0
+        window.expanded_key = None
+        window._load_case_into_ui()
+        window.render_cards()
+        window._refresh_case_selector()
+        assert window.case_combo.isVisible()
+        assert window.case_combo.count() == 2
+        window.case_combo.setCurrentIndex(1)
+        assert window.case_idx == 1
+        assert window.case_name_edit.text() == "用例B"
+        assert len(window.steps) == 0
+        # 改名联动切换器文字
+        window.case_name_edit.setText("用例B2")
+        window._sync_header()
+        assert "用例B2" in window.case_combo.itemText(1)
+
+    def test_保存校验覆盖所有case(self, window, tmp_path, monkeypatch):
+        from PySide6.QtWidgets import QMessageBox
+        window.on_new()
+        window.data = {"module": "M", "cases": [
+            {"name": "A", "priority": "P1", "steps": [{"desc": "a", "click": "x"}]},
+            {"name": "B", "priority": "P1", "steps": [{"desc": "b", "set_time": ""}]}]}
+        window.case_path = str(tmp_path / "m.yaml")
+        monkeypatch.setattr(QMessageBox, "question",
+                            staticmethod(lambda *a, **k: QMessageBox.No))
+        window.on_save()  # B 的必填为空且选择不保存
+        assert not os.path.exists(window.case_path)
+
+    def test_点击头部收回再展开(self, window):
+        window.on_new()
+        window.add_step("click")
+        assert window.expanded_key == (0,)
+        card = _card_widgets(window)[0]
+        card._header_clicked()  # 再点 → 收回
+        assert window.expanded_key is None
+        card = _card_widgets(window)[0]
+        assert not card.expanded
+        card._header_clicked()  # 又点 → 展开
+        assert window.expanded_key == (0,)
+
+    def test_子步骤点击收回回到父级(self, window):
+        window.on_new()
+        window.steps.append({"desc": "条件", "if": "x",
+                             "else": [{"desc": "子", "click": "y"}]})
+        window.expanded_key = (0,)
+        window.render_cards()
+        window.add_sub(0, "__wait")
+        assert window.expanded_key == (0, 1)
+        cards = _card_widgets(window)
+        sub = [c for c in cards if c.is_sub and c.sub_index == 1][0]
+        sub._header_clicked()
+        assert window.expanded_key == (0,)  # 收回到父级(父表单展开,子列表仍在)
+        cards = _card_widgets(window)
+        assert len(cards) == 3  # 父 + 2 子
+        assert cards[0].expanded and not cards[1].expanded
