@@ -1,4 +1,5 @@
 import logging
+import math
 import operator
 import os
 import re
@@ -24,6 +25,8 @@ POLL_MID_N = 10            # 到第 N 次用 2s 中间隔
 POLL_SHORT = 1
 POLL_MID = 2
 POLL_MAX = 5               # 轮询间隔封顶 5s(原 30s 会让刚出现的元素白等半小时级)
+TRACE_LIMIT = 8            # 失败时回溯保留的步骤数(截图留内存,失败才落盘)
+TRACE_JPEG_QUALITY = 70    # 时序截图质量:够看清页面状态,单张约 100KB
 
 # 数值断言算子映射(顺序即匹配优先级,>= 必须在 > 之前)
 _NUM_OPS = {
@@ -62,6 +65,8 @@ class ActionRunner:
         self.click_timeout = config.get("click_timeout", 10)
         self.results = []
         self.store = {}  # grab/match 数据暂存
+        self._trace = []  # 最近若干步的时序证据(内存,失败时才落盘)
+        self._trace_limit = config.get("trace_limit", TRACE_LIMIT)
         self.stopped = False  # 停止标志,GUI 停止按钮置位
         self.on_result = None  # 结果回调(GUI 实时推送用),签名 fn(result_dict)
         # 执行过程中动态写入的状态,集中在此初始化
@@ -70,6 +75,7 @@ class ActionRunner:
         self._pending_sub_results = None
         self._debug_map_path = None
         self._stored_zones = []
+        self._stored_zone_boxes = []  # 与 _stored_zones 同序的分区外框,供合并排序
         self._next_room_idx = 0
         self._ocr = None  # ddddocr 懒加载(加载慢且非所有用例用到)
         # 加载定位器配置（用于 ${section.key} 引用，换 APP 时集中修改）
@@ -120,6 +126,66 @@ class ActionRunner:
             self._sleep(POLL_MID)
         else:
             self._sleep(POLL_MAX)
+
+    def _trace_capture(self, desc, passed):
+        """记录一步的时序证据:描述 + 截图(JPEG 留在内存,失败时才落盘)
+
+        截图存 JPEG 而不是原始位图:一屏 BGR 约 6MB,留 8 步就是 50MB;
+        JPEG 编码后单张约 100KB。截图失败不影响执行,只丢这一张图。
+        """
+        if not hasattr(self, '_trace'):
+            self._trace = []          # 兼容 __new__ 构造的调用方(如 GUI 测试)
+        limit = getattr(self, '_trace_limit', TRACE_LIMIT)
+        if limit <= 0:
+            return
+        shot = None
+        try:
+            screen = self.d.screenshot(format="opencv")
+            ok, buf = cv2.imencode(
+                ".jpg", screen, [int(cv2.IMWRITE_JPEG_QUALITY), TRACE_JPEG_QUALITY])
+            if ok:
+                shot = buf.tobytes()
+        except Exception as e:
+            log.debug(f"[trace] 截图失败(不影响执行): {e}")
+        self._trace.append({"desc": desc, "passed": passed, "shot": shot})
+        if len(self._trace) > limit:
+            del self._trace[:-limit]
+
+    def _dump_trace(self, step_index, out_root=None):
+        """失败时把时序证据落盘,返回目录(无内容返回 "")
+
+        产出 steps.txt + 每步一张 jpg。steps.txt 每行:
+            序号 <TAB> PASS/FAIL <TAB> 步骤描述 <TAB> 截图文件名
+        这张表就是失败诊断(以及后续接模型做归因)的输入格式。
+        """
+        trace = getattr(self, '_trace', None)
+        if not trace:
+            return ""
+        prefix = f"{self.case_name}_" if self.case_name else ""
+        root = out_root or os.path.join(BASE_DIR, "reports", "failures")
+        out_dir = os.path.join(root, f"{prefix}trace")
+        try:
+            os.makedirs(out_dir, exist_ok=True)
+            lines = []
+            for n, item in enumerate(trace):
+                shot_name = ""
+                if item.get("shot"):
+                    shot_name = f"{n:02d}_{'ok' if item['passed'] else 'fail'}.jpg"
+                    with open(os.path.join(out_dir, shot_name), "wb") as f:
+                        f.write(item["shot"])
+                lines.append("\t".join([
+                    f"{n:02d}",
+                    "PASS" if item["passed"] else "FAIL",
+                    item["desc"],
+                    shot_name,
+                ]))
+            with open(os.path.join(out_dir, "steps.txt"), "w", encoding="utf-8") as f:
+                f.write("\n".join(lines) + "\n")
+            log.error(f"[诊断] 失败前 {len(lines)} 步的时序证据已保存: {out_dir}")
+            return out_dir
+        except Exception as e:
+            log.warning(f"[trace] 落盘失败: {e}")
+            return ""
 
     def _failure_screenshot(self, step_index):
         """失败截图存到 reports/failures/,文件名带用例名避免跨用例覆盖"""
@@ -193,6 +259,7 @@ class ActionRunner:
                         desc = f"{desc} ({self._last_compare_msg})"
                         self._last_compare_msg = None
                     self._append_result({"desc": desc, "passed": True, "error": "", "screenshot": screenshot})
+                    self._trace_capture(desc, True)
                     if getattr(self, '_pending_sub_results', None):
                         for sub in self._pending_sub_results:
                             self._append_result(sub)
@@ -221,6 +288,10 @@ class ActionRunner:
             if not succeeded:
                 err_text = "用户手动停止执行" if (self.stopped or isinstance(last_err, UserStopped)) else str(last_err)
                 self._append_result({"desc": desc, "passed": False, "error": err_text, "screenshot": screenshot})
+                # 真实失败才留时序证据;用户主动停止没有诊断价值
+                if not (self.stopped or isinstance(last_err, UserStopped)):
+                    self._trace_capture(desc, False)
+                    self._dump_trace(i)
                 if getattr(self, '_pending_sub_results', None):
                     for sub in self._pending_sub_results:
                         self._append_result(sub)
@@ -483,10 +554,10 @@ class ActionRunner:
         """抓取页面上包含关键字的文本及相邻数字，存入 self.store"""
         if isinstance(keywords, str):
             keywords = [k.strip() for k in keywords.split(",")]
-        texts = self._get_all_texts()
+        nodes = self._get_all_nodes()   # 带 bounds,供空间邻近匹配
         results = []
         for kw in keywords:
-            val = self._extract_value(texts, kw)
+            val = self._extract_value(nodes, kw)
             if val is None:
                 raise RuntimeError(f"grab 未找到 '{kw}' 的数据")
             self.store[kw] = val
@@ -497,12 +568,12 @@ class ActionRunner:
         """对比当前页面数据与 grab 存储的数据（数值允许 ±1 浮动）"""
         if isinstance(keywords, str):
             keywords = [k.strip() for k in keywords.split(",")]
-        texts = self._get_all_texts()
+        nodes = self._get_all_nodes()   # 带 bounds,供空间邻近匹配
         mismatches = []
         match_results = []
         for kw in keywords:
             stored = self.store.get(kw, "")
-            found = self._extract_value(texts, kw)
+            found = self._extract_value(nodes, kw)
             # 预约时间特殊处理：从层级中取第一个非状态栏(y>80)的 HH:MM
             if found is None and kw == "预约时间":
                 xml = self.d.dump_hierarchy()
@@ -785,31 +856,38 @@ class ActionRunner:
         rh, rw = roi.shape[:2]
         roi_area = rw * rh
         mask_all = np.zeros_like(h)
+        # 诊断计数:在循环外初始化,保证 zones 为空时错误信息里也有数据可看
+        colored_px = int(cv2.countNonZero(color_mask.astype(np.uint8)))
+        n_contours = 0
+        min_area = roi_area * 0.001
         for pk in peaks:
             hue_mask = (h > pk - 8) & (h < pk + 8) & color_mask
             kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (15, 15))
             hue_mask = cv2.morphologyEx(hue_mask.astype(np.uint8), cv2.MORPH_CLOSE, kernel)
             contours, _ = cv2.findContours(hue_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            n_contours += len(contours)
             mask_all = mask_all | hue_mask
             for c in contours:
                 area = cv2.contourArea(c)
-                if area > roi_area * 0.001:
+                if area > min_area:
                     M = cv2.moments(c)
                     if M["m00"] > 0:
                         cx = int(M["m10"] / M["m00"])
                         cy = int(M["m01"] / M["m00"])
                         # 向下偏移避开房间名字（名字通常在上方）
                         cy += int((y2 - y1) * 0.03)
-                        zones.append((cx + x1, cy + y1, area))
-        zones.sort(key=lambda x: -x[2])
+                        bx, by, bw, bh = cv2.boundingRect(c)  # 外框,合并时判相邻用
+                        zones.append((cx + x1, cy + y1, area,
+                                      (bx + x1, by + y1, bx + bw + x1, by + bh + y1)))
+        zones.sort(key=lambda z: -z[2])
         # 去重：合并中心距离过近的分区（同一房间被拆成多块）
         merged = []
         min_dist = min((x2 - x1), (y2 - y1)) * 0.15  # 距离阈值=区域尺寸的15%
         for z in zones:
-            zx, zy, _ = z
+            zx, zy = z[0], z[1]
             too_close = False
-            for mx, my, _ in merged:
-                if abs(zx - mx) < min_dist and abs(zy - my) < min_dist:
+            for m in merged:
+                if abs(zx - m[0]) < min_dist and abs(zy - m[1]) < min_dist:
                     too_close = True
                     break
             if not too_close:
@@ -820,8 +898,11 @@ class ActionRunner:
         # 标注检测区域（红框）+ 分区中心（绿点）
         debug = screen.copy()
         cv2.rectangle(debug, (x1, y1), (x2, y2), (0, 0, 255), 3)
-        for cx, cy, _ in zones[:8]:
+        for z in zones[:8]:
+            cx, cy = z[0], z[1]
             cv2.circle(debug, (cx, cy), 10, (0, 255, 0), -1)
+            bx1, by1, bx2, by2 = z[3]      # 外框:合并排序用的就是它,画出来方便核对
+            cv2.rectangle(debug, (bx1, by1), (bx2, by2), (255, 128, 0), 2)
         # 用 PIL 保存，支持中文路径
         Image.fromarray(cv2.cvtColor(screen, cv2.COLOR_BGR2RGB)).save(os.path.join(debug_dir, "map_screen.png"))
         Image.fromarray(cv2.cvtColor(roi, cv2.COLOR_BGR2RGB)).save(os.path.join(debug_dir, "map_roi.png"))
@@ -830,9 +911,16 @@ class ActionRunner:
         Image.fromarray(cv2.cvtColor(debug, cv2.COLOR_BGR2RGB)).save(path)
         self._debug_map_path = path
         if not zones:
-            raise RuntimeError(f"未识别到房间分区 (contours={len(contours)}, mask={cv2.countNonZero(mask)})")
+            # 分档提示:彩色像素=0 说明地图是灰度/深色主题/根本没加载出来;
+            # 有彩色但没峰值 说明房间颜色太接近或峰值阈值过高;
+            # 有轮廓但没分区 说明色块面积低于下限。
+            raise RuntimeError(
+                f"未识别到房间分区 (彩色像素={colored_px}, 色调峰值={len(peaks)}, "
+                f"轮廓={n_contours}, 有效面积下限={min_area:.0f}px²)"
+            )
         # 只存储，不点击
-        self._stored_zones = [(cx, cy) for cx, cy, _ in zones[:8]]
+        self._stored_zones = [(z[0], z[1]) for z in zones[:8]]
+        self._stored_zone_boxes = [z[3] for z in zones[:8]]
         self._next_room_idx = 0  # 重置点击游标
         msg = f"识别到 {len(self._stored_zones)} 个房间分区"
         log.info(f"[room_zones] {msg}")
@@ -854,31 +942,59 @@ class ActionRunner:
         log.info("[dialog] 未找到确认按钮,按等比位置点击")
         return True
 
+    @staticmethod
+    def _zone_pair_gap(a, b):
+        """两个分区外框的边到边距离;相接或重叠为 0
+
+        用切比雪夫式的轴向边距再取欧氏距离,相邻房间约为 0,
+        隔着一个房间的会明显大于 0。
+        """
+        ax1, ay1, ax2, ay2 = a
+        bx1, by1, bx2, by2 = b
+        dx = max(bx1 - ax2, ax1 - bx2, 0)
+        dy = max(by1 - ay2, ay1 - by2, 0)
+        return math.hypot(dx, dy)
+
+    @staticmethod
+    def _merge_pair_order(zones, boxes):
+        """合并候选对的尝试顺序:几何相邻的排前面
+
+        只有相邻房间能合并。原来盲枚举 (0,1)(0,2)... 每撞一次不相邻就要
+        白花约 10 秒(两次点击 + 全程 sleep + 重进合并模式),而且期间一直在动地图。
+        没有外框信息(旧调用方/识别降级)时退回原枚举顺序,行为不变。
+        """
+        n = len(zones)
+        pairs = [(i, j) for i in range(n) for j in range(i + 1, n)]
+        if len(boxes) != n:
+            return pairs
+        pairs.sort(key=lambda p: ActionRunner._zone_pair_gap(boxes[p[0]], boxes[p[1]]))
+        return pairs
+
     def _do_merge_zones(self):
-        """合并房间：已在合并模式，依次尝试相邻分区对直到生效"""
+        """合并房间：已在合并模式，按几何相邻顺序尝试分区对直到生效"""
         zones = getattr(self, '_stored_zones', [])
+        boxes = getattr(self, '_stored_zone_boxes', [])
         if len(zones) < 2:
             raise RuntimeError(f"合并需要至少 2 个分区，当前仅 {len(zones)} 个")
         log.info(f"[merge] {len(zones)} 个分区")
-        for i in range(len(zones)):
-            for j in range(i + 1, len(zones)):
-                log.info(f"[merge] 尝试对 ({i},{j})")
-                self.d.click(*zones[i]); time.sleep(2)
-                self.d.click(*zones[j]); time.sleep(2)
-                if self.d(text="合并").exists(timeout=2):
-                    self.d(text="合并").click(); time.sleep(3)
-                    self._wait_loading()
-                if self.d(textContains="提示").exists(timeout=2):
-                    self._click_dialog_confirm(); time.sleep(2)
-                    log.info(f"[merge] {i},{j} 不相邻")
-                    continue
-                if self.d(textContains="请选择").exists(timeout=2) or \
-                   self.d(textContains="区域分割").exists(timeout=2):
-                    log.info(f"[merge] {i},{j} 成功")
-                    return
-                # 失败后重进合并模式（旧代码失败后 click room_merge）
-                self.d(textContains="区域合并").click(); time.sleep(3)
-                log.info(f"[merge] {i},{j} 未生效")
+        for i, j in self._merge_pair_order(zones, boxes):
+            log.info(f"[merge] 尝试对 ({i},{j})")
+            self.d.click(*zones[i]); time.sleep(2)
+            self.d.click(*zones[j]); time.sleep(2)
+            if self.d(text="合并").exists(timeout=2):
+                self.d(text="合并").click(); time.sleep(3)
+                self._wait_loading()
+            if self.d(textContains="提示").exists(timeout=2):
+                self._click_dialog_confirm(); time.sleep(2)
+                log.info(f"[merge] {i},{j} 不相邻")
+                continue
+            if self.d(textContains="请选择").exists(timeout=2) or \
+               self.d(textContains="区域分割").exists(timeout=2):
+                log.info(f"[merge] {i},{j} 成功")
+                return
+            # 失败后重进合并模式（旧代码失败后 click room_merge）
+            self.d(textContains="区域合并").click(); time.sleep(3)
+            log.info(f"[merge] {i},{j} 未生效")
         raise RuntimeError(f"所有分区对未成功合并")
 
     def _do_set_time(self, offset, circular=False):
@@ -1129,7 +1245,25 @@ class ActionRunner:
 
     def _do_compare(self, baseline, threshold=0.6, inverse=False):
         """对比当前屏幕与基准图，差异>阈值则断言失败
-        只比较中间区域（地图区），忽略状态栏和底部控制区"""
+        只比较中间区域（地图区），忽略状态栏和底部控制区
+
+        threshold 是相似度门槛，值域为 [0,1]：
+          inverse=False (compare): similarity < threshold 判失败 → 需 threshold <= 1
+          inverse=True  (diff)   : similarity > threshold 判失败 → 需 threshold <  1
+        越界的阈值会让断言恒真或恒假，而报告里看不出任何异常，所以直接拒绝。
+        """
+        if inverse and threshold >= 1:
+            raise ValueError(
+                f"diff 的 threshold={threshold} 非法: 相似度值域为 [0,1], "
+                f"similarity > {threshold} 永不成立, 断言会恒为通过。"
+                f"请改用小于 1 的值(如 0.99)"
+            )
+        if not inverse and threshold > 1:
+            raise ValueError(
+                f"compare 的 threshold={threshold} 非法: 相似度值域为 [0,1], "
+                f"similarity < {threshold} 恒成立, 断言会恒为失败。"
+                f"请改用不超过 1 的值"
+            )
         screen = self.d.screenshot(format="opencv")
         cur = cv2.cvtColor(screen, cv2.COLOR_BGR2GRAY)
         # 基准图与 screenshot 步骤的保存规则一致: screenshots/ 前缀补 Test_img/
@@ -1194,7 +1328,7 @@ class ActionRunner:
                 keyword, expected = condition.split(op, 1)
                 keyword = keyword.strip()
                 expected = expected.strip()
-                val = self._extract_value(self._get_all_texts(), keyword)
+                val = self._extract_value(self._get_all_nodes(), keyword)
                 if val:
                     try:
                         passed = bool(fn(float(val), float(expected)))
@@ -1237,10 +1371,17 @@ class ActionRunner:
             time.sleep(self.interval)
 
     def _extract_value(self, texts, kw):
-        """从文本列表中提取关键字的对应数值
+        """从页面文本中提取关键字的对应数值
         面积优先找'数字+㎡'，时间优先找'数字+min'
         支持模糊匹配: 面积 可匹配 清扫面积, 时间 可匹配 用时
+
+        texts 可以是纯文本列表(按下标邻近,旧行为),也可以是 _get_all_nodes()
+        的 (text, bounds) 列表。有 bounds 时优先用空间邻近——XML 文档顺序不等于
+        视觉顺序,下标法在列顺序变化时会静默取到隔壁指标的数字,而且取到的值
+        看起来完全正常,很难发现。
         """
+        nodes = self._as_nodes(texts)
+        texts = [t for t, _ in nodes]
         # 面积/时间 对应的单位关键词
         unit_map = {
             '面积': '㎡', '清扫面积': '㎡', '时间': 'min', '用时': 'min',
@@ -1252,9 +1393,15 @@ class ActionRunner:
         if kw == '面积': match_words.extend(['清扫面积'])
         if kw == '时间': match_words.extend(['用时', '清扫时间'])
 
-        for i, t in enumerate(texts):
+        for i, (t, box) in enumerate(nodes):
             if kw not in t and not any(mw in t for mw in match_words):
                 continue
+            # 0. 空间邻近优先(预约时间的 HH:MM 特例仍走下标)
+            if box is not None and kw != '预约时间':
+                found = self._value_near_label(nodes, i, prefer_unit)
+                if found is not None:
+                    return found
+            # ── 以下为下标回退(无 bounds,或空间未命中任何候选)──
             # 时间类关键字：找 HH:MM 模式
             if kw == '预约时间':
                 for offset in range(-3, 4):
@@ -1287,10 +1434,94 @@ class ActionRunner:
                 return candidates[0][1]
         return None
 
+    @staticmethod
+    def _as_nodes(items):
+        """把输入规范化为 [(text, bounds|None)];裸字符串视为无 bounds"""
+        out = []
+        for it in items:
+            if isinstance(it, str):
+                out.append((it, None))
+            else:
+                text, box = it
+                out.append((text, box))
+        return out
+
+    @staticmethod
+    def _value_near_label(nodes, idx, prefer_unit):
+        """取标签正上方同列最近的数字,返回字符串;没有可信候选返回 None
+
+        主页清扫数据是"数值在上、标签在下"的两列版面(8㎡ / 清扫面积),所以按
+        垂直邻近 + 同列判定。同列容差取标签自身宽度(至少 60px),避免把隔壁列
+        的数字算进来。带正确单位的候选优先,其次比垂直距离。
+        """
+        _, label_box = nodes[idx]
+        lx1, ly1, lx2, ly2 = label_box
+        lcx = (lx1 + lx2) / 2
+        col_tol = max(60, lx2 - lx1)
+
+        cands = []
+        for j, (t, box) in enumerate(nodes):
+            if j == idx or box is None:
+                continue
+            m = re.match(r'^(\d+\.?\d*)', t.strip())
+            if not m:
+                continue
+            x1, y1, x2, y2 = box
+            if abs((x1 + x2) / 2 - lcx) > col_tol:
+                continue                      # 不在标签所在列
+            vgap = ly1 - y2                   # 标签上沿 - 候选下沿
+            if vgap < -10:
+                continue                      # 候选不在标签上方
+            ok = ActionRunner._unit_attached(nodes, j, prefer_unit)
+            cands.append((0 if ok else 1, abs(vgap), m.group(1)))
+        if not cands:
+            return None
+        cands.sort(key=lambda c: (c[0], c[1]))
+        return cands[0][2]
+
+    @staticmethod
+    def _unit_attached(nodes, j, prefer_unit):
+        """数字节点同一行右侧是否紧跟期望单位(如 8 ㎡)
+
+        单位可能是上标(㎡),竖直中心和数字不完全对齐,所以行判定容差放宽到整行高。
+        """
+        if not prefer_unit:
+            return False
+        _, (x1, y1, x2, y2) = nodes[j]
+        cy = (y1 + y2) / 2
+        h = max(1, y2 - y1)
+        for k, (t, box) in enumerate(nodes):
+            if k == j or box is None or prefer_unit not in t:
+                continue
+            ox1, oy1, ox2, oy2 = box
+            if abs((oy1 + oy2) / 2 - cy) > h:
+                continue                      # 不在同一行
+            gap = ox1 - x2
+            if -5 <= gap <= h * 4:            # 紧邻右侧
+                return True
+        return False
+
     def _get_all_texts(self):
         """获取当前页面所有 TextView 文本"""
         xml = self.d.dump_hierarchy()
         return re.findall(r'text="([^"]*)"', xml)
+
+    def _get_all_nodes(self):
+        """获取页面所有节点的 (文本, bounds),供空间邻近匹配使用
+
+        与 _get_all_texts 的区别是保留 bounds。不筛空文本,保证节点序列与
+        _get_all_texts 的文本序列一致(下标回退路径依赖这一点)。
+        """
+        xml = self.d.dump_hierarchy()
+        nodes = []
+        for tag in re.findall(r'<node\b[^>]*>', xml):
+            tm = re.search(r'\btext="([^"]*)"', tag)
+            if tm is None:
+                continue
+            bm = re.search(r'\bbounds="\[(-?\d+),(-?\d+)\]\[(-?\d+),(-?\d+)\]"', tag)
+            box = tuple(int(g) for g in bm.groups()) if bm else None
+            nodes.append((tm.group(1), box))
+        return nodes
 
     # ── 工具 ──
     def _is_image(self, value):

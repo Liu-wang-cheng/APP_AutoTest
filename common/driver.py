@@ -9,11 +9,44 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 CONFIG_PATH = os.path.join(BASE_DIR, "config", "config.yaml")
 
+# 企业透明加密(DLP)的文件头。这类文件只有白名单进程(如 git.exe)能读到明文,
+# 普通 Python 进程直接读会拿到密文,报出来的是一段 codec traceback。
+_ENCRYPTED_HEADER = b"%TSD-Header"
+
+
+class YamlFileError(ValueError):
+    """YAML 文件无法读取: 编码错误、透明加密、或语法错误"""
+
+
+def load_yaml_file(path):
+    """读取 YAML 文件;失败时抛出带文件名与原因说明的 YamlFileError
+
+    裸 UnicodeDecodeError 既不说是哪个文件也不说为什么,排查成本很高,
+    这里统一翻译成能直接定位问题的一句话。
+    """
+    name = os.path.basename(str(path))
+    try:
+        with open(path, encoding="utf-8") as f:
+            return yaml.safe_load(f) or {}
+    except UnicodeDecodeError:
+        try:
+            with open(path, "rb") as f:
+                head = f.read(16)
+        except OSError:
+            head = b""
+        if head.startswith(_ENCRYPTED_HEADER):
+            raise YamlFileError(
+                f"{name} 读取失败: 检测到企业透明加密文件头 (%TSD-Header-###%), "
+                f"当前进程读到的是密文。处置: 用白名单进程(如 git)从仓库取回明文后重试"
+            ) from None
+        raise YamlFileError(f"{name} 读取失败: 文件不是 UTF-8 编码") from None
+    except yaml.YAMLError as e:
+        raise YamlFileError(f"{name} 解析失败: {e}") from None
+
 
 def load_config():
     """加载统一配置"""
-    with open(CONFIG_PATH, encoding="utf-8") as f:
-        return yaml.safe_load(f)
+    return load_yaml_file(CONFIG_PATH)
 
 
 def update_config(updates, path=None):

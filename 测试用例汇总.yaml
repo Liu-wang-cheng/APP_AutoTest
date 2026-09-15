@@ -1,0 +1,682 @@
+generated: '2026-09-15 17:39:58'
+source: Test_cases/
+modules:
+- module: 全局清扫
+  cases:
+  - name: 全局清扫完整流程
+    priority: P0
+    wait: 5
+    steps:
+    - desc: 点击开始清扫按钮
+      click: 开始清扫.png
+    - desc: 确认设备进入清扫状态
+      assert: 清扫中
+      screenshot: screenshots/全局清扫_01_清扫状态.png
+    - desc: 点击清洁偏好
+      click: 清洁偏好
+      screenshot: screenshots/全局清扫_02_清洁偏好.png
+    - desc: 点击切换强力档吸力
+      click: 强力
+      screenshot: screenshots/全局清扫_03_切换强力档.png
+    - desc: 点击切换安静档吸力
+      click: 安静
+      screenshot: screenshots/全局清扫_04_切换安静档.png
+    - desc: 点击确认返回主界面
+      click: 确认
+    - desc: 点击暂停清扫按钮
+      click: 暂停清扫.png
+      screenshot: screenshots/全局清扫_05_暂停.png
+    - desc: 确认设备已暂停
+      assert: 暂停
+      screenshot: screenshots/全局清扫_06_暂停状态.png
+    - desc: 点击继续清扫按钮
+      click: 继续清扫.png
+      screenshot: screenshots/全局清扫_07_继续清扫.png
+    - desc: 确认设备继续清扫中
+      assert: 清扫中
+      screenshot: screenshots/全局清扫_08_继续清扫状态.png
+    - desc: 等待清扫完成并返回充电
+      assert: 充电中,充电完成
+      timeout: 0
+      screenshot: screenshots/全局清扫_09_清扫完成.png
+    - desc: 展开清扫数据并抓取面积和时间
+      click: 展开清扫数据.png
+      grab: 面积,时间
+      screenshot: screenshots/全局清扫_10_主界面清扫数据.png
+    - desc: 进入设置界面
+      click: 进入设置.png
+      screenshot: screenshots/全局清扫_11_进入设置.png
+    - desc: 进入清扫记录界面
+      click: 清扫记录
+      screenshot: screenshots/全局清扫_12_清扫记录界面.png
+    - desc: 点击最新一条清扫记录
+      screenshot: screenshots/全局清扫_13_最新清扫记录.png
+      latest_record: true
+    - desc: 对比清扫面积和时间是否一致
+      match: 面积,时间
+- module: 划区清扫
+  cases:
+  - name: 划区清扫完整流程
+    priority: P1
+    wait: 5
+    steps:
+    - desc: 打开清扫模式选择
+      click: 切换清扫模式.png
+    - desc: 选择划区清扫
+      click: 划区清扫
+      screenshot: screenshots/划区清扫_01_选择划区清扫.png
+    - desc: 确认清扫模式
+      click: 确认
+    - desc: 添加清扫区域
+      click: 清扫区域
+      screenshot: screenshots/划区清扫_02_添加区域.png
+    - desc: 开始划区清扫
+      click: 开始清扫.png
+      screenshot: screenshots/划区清扫_03_开始清扫.png
+    - desc: 确认设备处于划区清扫状态
+      assert: 划区清扫
+      timeout: 30
+      screenshot: screenshots/划区清扫_04_清扫状态.png
+    - desc: 等待清扫完成并返回充电
+      assert: 充电中,充电完成
+      timeout: 0
+      screenshot: screenshots/划区清扫_05_清扫完成.png
+    - desc: 展开清扫数据并抓取面积和时间
+      click: 展开清扫数据.png
+      grab: 面积,时间
+      screenshot: screenshots/划区清扫_06_主界面清扫数据.png
+    - desc: 进入设置界面
+      click: 进入设置.png
+      screenshot: screenshots/划区清扫_07_进入设置.png
+    - desc: 进入清扫记录界面
+      click: 清扫记录
+      screenshot: screenshots/划区清扫_08_清扫记录界面.png
+    - desc: 点击最新一条清扫记录
+      screenshot: screenshots/划区清扫_09_最新清扫记录.png
+      latest_record: true
+    - desc: 对比清扫面积和时间是否一致
+      match: 面积,时间
+- module: 勿扰模式
+  cases:
+  - name: 勿扰模式完整流程
+    priority: P1
+    wait: 5
+    steps:
+    - desc: 进入设置界面
+      click: 进入设置.png
+    - desc: 进入勿扰模式界面
+      click: 勿扰模式
+      screenshot: screenshots/勿扰模式_01_勿扰界面.png
+    - desc: 点击设置勿扰开始时间
+      click: 开始时间
+    - desc: 设置开始时间为当前时间
+      set_time: 0
+      circular: false
+    - desc: 确认开始时间
+      click: 确认
+    - desc: 点击设置勿扰结束时间
+      click: 结束时间
+    - desc: 设置结束时间为当前+20分钟
+      set_time: 20
+      circular: false
+    - desc: 确认结束时间
+      click: 确认
+      screenshot: screenshots/勿扰模式_02_时间段设置.png
+    - desc: 打开勿扰开关
+      switch_to: 打开
+      switch_tpl: 勿扰打开.png
+      screenshot: screenshots/勿扰模式_03_开关打开.png
+    - desc: 返回设置界面
+      back: true
+    - desc: 进入定时清扫界面
+      click: 定时
+      wait: 5
+      screenshot: screenshots/勿扰模式_04_定时界面.png
+    - desc: 添加定时清扫任务
+      add_timer:
+        add_text: 添加
+        add_tpl: 添加预约.png
+        max_tasks: 2
+    - desc: 设置定时时间为当前+3分钟
+      set_time: 3
+      circular: false
+    - desc: 保存定时任务
+      click: 确认
+      screenshot: screenshots/勿扰模式_05_定时已添加.png
+    - desc: 返回设置界面
+      screenshot: screenshots/勿扰模式_05_定时任务界面.png
+      back: true
+    - desc: 返回主界面
+      back: true
+    - desc: 等待定时时间到达，确认勿扰生效
+      wait: 200
+    - desc: 确认勿扰生效（定时任务未执行，设备处于充电）
+      assert: 充电完成,充电中
+      timeout: 10
+      screenshot: screenshots/勿扰模式_06_勿扰生效.png
+    - desc: 进入设置界面恢复
+      click: 进入设置.png
+    - desc: 进入勿扰模式关闭
+      click: 勿扰模式
+    - desc: 关闭勿扰开关
+      switch_to: 关闭
+      switch_tpl: 勿扰打开.png
+    - desc: 返回设置界面
+      back: true
+    - desc: 返回主界面
+      back: true
+- module: 地图编辑
+  cases:
+  - name: 地图编辑完整流程
+    priority: P1
+    wait: 5
+    steps:
+    - desc: 检查是否有地图，无图则先建图
+      if not: 扫地机器人
+      else:
+      - desc: 启动建图（优先快速建图，否则开始清扫）
+        find_click:
+        - 快速建图
+        - 开始清扫
+        wait: 5
+      - desc: 确认设备处于建图或清扫状态
+        assert: 建图,清扫中
+        timeout: 60
+      - desc: 等待建图完成并返回充电
+        assert: 充电中,充电完成
+        timeout: 0
+    - desc: 进入设置界面
+      click: 进入设置.png
+      screenshot: screenshots/地图编辑_00_进入设置.png
+    - desc: 进入地图管理
+      click: 地图管理
+      screenshot: screenshots/地图编辑_01_地图管理.png
+    - desc: 保存当前地图
+      click: 保存首页地图
+      screenshot: screenshots/地图编辑_02_保存.png
+    - desc: 检测弹窗并点击确认
+      screenshot: screenshots/地图编辑_03_确认保存.png
+      if_click: 确认,确定
+    - desc: 重置首页地图
+      click: 重置首页地图
+      screenshot: screenshots/地图编辑_04_重置后.png
+    - desc: 快速左滑到云端地图
+      screenshot: screenshots/地图编辑_05_云端地图.png
+      swipe: fast-left
+    - desc: 载入云端地图
+      click: 地图载入主页
+      screenshot: screenshots/地图编辑_06_载入地图.png
+    - desc: 快速右滑回当前地图
+      screenshot: screenshots/地图编辑_07_恢复后.png
+      swipe: fast-right
+    - desc: 对比地图是否恢复
+      compare: screenshots/地图编辑_01_地图管理.png
+      threshold: 0.95
+      screenshot: screenshots/地图编辑_08_对比结果.png
+    - desc: 返回设置界面
+      back: true
+    - desc: 返回主界面
+      screenshot: screenshots/地图编辑_10_返回主界面.png
+      back: true
+- module: 定制清扫
+  cases:
+  - name: 定制清扫完整流程
+    priority: P1
+    wait: 5
+    steps:
+    - desc: 定制前截图（对比基准）
+      screenshot: screenshots/定制清扫_00_定制前.png
+    - desc: 进入地图编辑
+      click: 地图编辑
+      timeout: 30
+    - desc: 进入地图自定义编辑
+      click: 地图自定义编辑
+    - desc: 识别房间分区坐标
+      room_zones: true
+    - desc: 识别地图房间分区
+      screenshot: screenshots/定制清扫_01_房间分区.png
+    - desc: 进入定制模式
+      click: 定制模式
+    - desc: 选择第一个房间并设置参数
+      room_click: 1
+    - desc: 设置清扫次数2次
+      find_click: 2次,2,2x,x2
+      wait: 2
+    - desc: 设置吸力为安静档
+      click: 安静
+      wait: 2
+    - desc: 设置水量为低档
+      click: 低
+      wait: 2
+    - desc: 确认房间1设置
+      click: 确认
+      wait: 3
+    - desc: 选择第二个房间并设置参数
+      room_click: 1
+    - desc: 设置清扫次数2次
+      find_click: 2次,2,2x,x2
+      wait: 2
+    - desc: 设置吸力为强力档
+      click: 强力
+      wait: 2
+    - desc: 设置水量为高档
+      click: 高
+      wait: 2
+    - desc: 确认房间2设置
+      click: 确认
+      wait: 3
+    - desc: 保存定制模式设置
+      click: 保存
+      screenshot: screenshots/定制清扫_02_定制设置.png
+    - desc: 进入清扫顺序界面
+      click: 清扫顺序
+    - desc: 重新识别房间坐标
+      room_zones: true
+    - desc: 设置清扫顺序并保存
+      room_click: 1
+      wait: 2
+    - room_click: 1
+      wait: 2
+    - desc: 保存清扫顺序
+      click: 保存
+    - desc: 返回主界面
+      back: true
+    - desc: 进入清洁偏好
+      click: 清洁偏好
+    - desc: 下滑找到定制模式开关
+      swipe: up
+    - desc: 打开定制模式开关
+      switch_to: 打开
+      switch_label: 定制模式
+    - desc: 确认清洁偏好
+      if_click: 确认,确定
+      wait: 5
+    - desc: 重新识别房间分区
+      room_zones: true
+    - desc: 展开房间定制属性
+      room_click: 1
+      wait: 2
+    - room_click: 1
+      wait: 2
+    - desc: 检查定制开关是否生效
+      diff: screenshots/定制清扫_00_定制前.png
+      threshold: 0.99
+    - desc: 开始定制清扫
+      click: 开始清扫.png
+      wait: 10
+    - desc: 确认设备处于清扫状态
+      assert: 清扫中
+      timeout: 30
+      screenshot: screenshots/定制清扫_03_清扫中.png
+    - desc: 等待清扫完成并返回充电
+      assert: 充电中,充电完成
+      timeout: 0
+      screenshot: screenshots/定制清扫_04_清扫完成.png
+    - desc: 展开清扫数据
+      click: 展开清扫数据.png
+    - desc: 等待清扫数据出现
+      wait_for: 面积,清扫面积
+    - desc: 抓取主页清扫面积和时间
+      grab: 面积,时间
+      screenshot: screenshots/定制清扫_05_主界面清扫数据.png
+    - desc: 进入设置界面
+      click: 进入设置.png
+    - desc: 进入清扫记录界面
+      click: 清扫记录
+      screenshot: screenshots/定制清扫_06_清扫记录界面.png
+    - desc: 点击最新一条清扫记录
+      latest_record: true
+      screenshot: screenshots/定制清扫_07_最新记录.png
+    - desc: 对比清扫面积和时间是否一致
+      match: 面积,时间
+    - desc: 返回设置界面
+      back: true
+    - desc: 返回主界面
+      back: true
+    - back: true
+    - desc: 进入清洁偏好
+      click: 清洁偏好
+    - desc: 下滑找到定制模式开关
+      swipe: up
+    - desc: 关闭定制模式开关
+      switch_to: 关闭
+      switch_label: 定制模式
+    - desc: 确认清洁偏好
+      if_click: 确认,确定
+- module: 定点清扫
+  cases:
+  - name: 定点清扫完整流程
+    priority: P1
+    wait: 5
+    steps:
+    - desc: 在主页识别地图房间分区
+      room_zones: true
+    - desc: 打开清扫模式选择
+      click: 切换清扫模式.png
+    - desc: 选择定点清扫
+      click: 指哪扫哪
+      screenshot: screenshots/定点清扫_01_选择定点清扫.png
+    - desc: 确认清扫模式
+      click: 确认
+    - desc: 点击识别的房间分区
+      room_click: true
+    - desc: 点击开始清扫按钮
+      click: 开始清扫.png
+      screenshot: screenshots/定点清扫_02_开始清扫.png
+    - desc: 确认设备处于定点清扫状态
+      assert: 指哪扫哪中,局部清扫,清扫中
+      timeout: 60
+      screenshot: screenshots/定点清扫_03_清扫状态.png
+    - desc: 等待清扫完成并返回充电
+      assert: 充电中,充电完成
+      timeout: 0
+      screenshot: screenshots/定点清扫_04_清扫完成.png
+    - desc: 展开清扫数据并抓取面积和时间
+      click: 展开清扫数据.png
+      grab: 面积,时间
+      screenshot: screenshots/定点清扫_05_主界面清扫数据.png
+    - desc: 进入设置界面
+      click: 进入设置.png
+      screenshot: screenshots/定点清扫_06_进入设置.png
+    - desc: 进入清扫记录界面
+      click: 清扫记录
+      screenshot: screenshots/定点清扫_07_清扫记录界面.png
+    - desc: 点击最新一条清扫记录
+      screenshot: screenshots/定点清扫_08_最新清扫记录.png
+      latest_record: true
+    - desc: 对比清扫面积和时间是否一致
+      match: 面积,时间
+- module: 快速建图
+  cases:
+  - name: 快速建图完整流程
+    priority: P1
+    wait: 5
+    steps:
+    - desc: 检查是否无图状态
+      if: 扫地机器人
+      else:
+      - desc: 进入设置界面
+        click: 进入设置.png
+        screenshot: screenshots/快速建图_02_进入设置界面.png
+        wait: 3
+      - desc: 进入地图管理
+        click: 地图管理
+        screenshot: screenshots/快速建图_03_进入地图管理.png
+        wait: 3
+      - desc: 重置首页地图
+        click: 重置首页地图
+        screenshot: screenshots/快速建图_04_重置首页地图.png
+        wait: 3
+      - desc: 返回设置界面
+        wait: 3
+        back: true
+      - desc: 返回主界面
+        wait: 3
+        back: true
+      screenshot: screenshots/快速建图_01_无图状态.png
+    - desc: 启动建图（优先快速建图，否则开始清扫）
+      find_click:
+      - 快速建图
+      - 开始清扫
+      screenshot: screenshots/快速建图_05_启动建图.png
+    - desc: 确认设备处于建图或清扫状态
+      assert: 建图,清扫中
+      timeout: 60
+      screenshot: screenshots/快速建图_06_建图中.png
+    - desc: 等待建图完成并返回充电
+      assert: 充电中,充电完成
+      timeout: 0
+      screenshot: screenshots/快速建图_07_建图完成.png
+- module: 房间编辑
+  cases:
+  - name: 房间编辑完整流程
+    priority: P1
+    wait: 5
+    steps:
+    - desc: 进入地图编辑
+      click: 地图编辑
+    - desc: 进入地图自定义编辑
+      click: 地图自定义编辑
+    - desc: 识别地图房间分区
+      screenshot: screenshots/房间编辑_01_编辑界面.png
+      room_zones: true
+    - desc: 进入分割模式并截图
+      click: 区域分割
+      screenshot: screenshots/房间编辑_02_分割前.png
+    - desc: 执行房间分割
+      split_zone: true
+    - desc: 对比分割前后地图
+      diff: screenshots/房间编辑_02_分割前.png
+      threshold: 0.99
+      screenshot: screenshots/房间编辑_03_分割后.png
+    - desc: 重新识别分区
+      room_zones: true
+    - desc: 进入合并模式并截图
+      click: 区域合并
+      screenshot: screenshots/房间编辑_04_合并前.png
+    - desc: 执行房间合并
+      merge_zones: true
+    - desc: 对比合并前后地图
+      diff: screenshots/房间编辑_04_合并前.png
+      threshold: 0.99
+      screenshot: screenshots/房间编辑_05_合并后.png
+    - desc: 重置前截图
+      screenshot: screenshots/房间编辑_06_重置前.png
+    - desc: 重置房间分区
+      find_click: 重置分区,恢复分区
+    - desc: 对比重置前后地图
+      diff: screenshots/房间编辑_06_重置前.png
+      threshold: 0.99
+      screenshot: screenshots/房间编辑_07_重置后.png
+    - desc: 重新识别分区
+      room_zones: true
+    - desc: 进入房间命名
+      click: 区域命名
+    - desc: 选择房间
+      room_click: 1
+    - desc: 选择房间名称
+      find_click: 客厅,阳台
+    - desc: 确认命名
+      click: 确认
+    - desc: 保存命名
+      click: 保存
+      screenshot: screenshots/房间编辑_08_命名完成.png
+    - desc: 返回主界面
+      back: true
+- module: 禁区设置
+  cases:
+  - name: 禁区设置完整流程
+    priority: P1
+    wait: 5
+    steps:
+    - desc: 操作前截图（对比基准）
+      screenshot: screenshots/禁区设置_01_操作前.png
+    - desc: 点击地图编辑
+      click: 地图编辑
+    - desc: 进入禁区编辑
+      click: 禁区编辑
+    - desc: 添加扫拖禁区
+      find_click: 扫拖禁区,禁过禁区
+    - desc: 添加拖地禁区
+      click: 拖地禁区
+    - desc: 保存禁区
+      click: 保存
+      screenshot: screenshots/禁区设置_02_禁区保存.png
+    - desc: 点击地图编辑
+      click: 地图编辑
+    - desc: 进入禁区编辑
+      click: 禁区编辑
+    - desc: 切换至虚拟墙
+      click: 虚拟墙
+    - desc: 添加虚拟墙
+      click: =虚拟墙#2
+    - desc: 保存虚拟墙
+      click: 保存
+      screenshot: screenshots/禁区设置_03_虚拟墙保存.png
+    - desc: 对比设置前后地图
+      diff: screenshots/禁区设置_01_操作前.png
+      threshold: 0.99
+      screenshot: screenshots/禁区设置_04_主界面地图.png
+- module: 选区清扫
+  cases:
+  - name: 选区清扫完整流程
+    priority: P1
+    wait: 5
+    steps:
+    - desc: 检查设备处于充电状态
+      assert: 充电完成,充电中
+    - desc: 在主页识别地图房间分区
+      room_zones: true
+    - desc: 打开清扫模式选择
+      click: 切换清扫模式.png
+    - desc: 选择选区清扫
+      click: 选区清扫
+      screenshot: screenshots/选区清扫_01_选择选区清扫.png
+    - desc: 确认清扫模式
+      click: 确认
+    - desc: 点击识别的房间分区
+      room_click: 2
+    - desc: 点击开始清扫按钮
+      click: 开始清扫.png
+      screenshot: screenshots/选区清扫_02_开始清扫.png
+    - desc: 确认设备处于选区清扫状态
+      assert: 选区清扫中,清扫中
+      timeout: 60
+      screenshot: screenshots/选区清扫_03_清扫状态.png
+    - desc: 等待清扫完成并返回充电
+      assert: 充电中,充电完成
+      timeout: 0
+      screenshot: screenshots/选区清扫_04_清扫完成.png
+    - desc: 展开清扫数据并抓取面积和时间
+      click: 展开清扫数据.png
+      grab: 面积,时间
+      screenshot: screenshots/选区清扫_05_主界面清扫数据.png
+    - desc: 进入设置界面
+      click: 进入设置.png
+      screenshot: screenshots/选区清扫_06_进入设置.png
+    - desc: 进入清扫记录界面
+      click: 清扫记录
+      screenshot: screenshots/选区清扫_07_清扫记录界面.png
+    - desc: 点击最新一条清扫记录
+      screenshot: screenshots/选区清扫_08_最新清扫记录.png
+      latest_record: true
+    - desc: 对比清扫面积和时间是否一致
+      match: 面积,时间
+- module: 遥控模式
+  cases:
+  - name: 遥控模式完整流程
+    priority: P1
+    wait: 5
+    steps:
+    - desc: 遥控前截图（对比基准）
+      screenshot: screenshots/遥控模式_00_遥控前.png
+    - desc: 进入设置界面
+      click: 进入设置.png
+    - desc: 进入遥控界面
+      click: 遥控控制
+      screenshot: screenshots/遥控模式_01_遥控界面.png
+    - desc: 点击遥控下桩
+      click: 前进按钮.png
+      wait: 3
+    - desc: 长按前进4秒
+      long_click: 前进按钮.png
+      duration: 4
+    - desc: 长按左转2秒
+      long_click: 左转按钮.png
+      duration: 2
+    - desc: 长按右转2秒
+      long_click: 右转按钮.png
+      duration: 2
+    - desc: 长按前进4秒
+      long_click: 前进按钮.png
+      duration: 2
+    - desc: 退出遥控模式
+      click: 退出
+      wait: 2
+    - desc: 确认退出
+      if_click: 确认,确定
+    - desc: 返回主界面
+      back: true
+    - desc: 检查遥控操作是否生效（对比遥控前后截图）
+      compare: screenshots/遥控模式_00_遥控前.png
+      threshold: 0.6
+    - desc: 点击回充
+      click: 开始回充.png
+      wait: 3
+    - desc: 确认回充
+      if_click: 确认,确定
+- module: 预约清扫
+  cases:
+  - name: 预约清扫完整流程
+    priority: P1
+    wait: 5
+    steps:
+    - desc: 进入设置界面
+      click: 进入设置.png
+    - desc: 进入勿扰模式界面
+      click: 勿扰模式
+    - desc: 关闭勿扰开关（确保预约清扫可执行）
+      switch_to: 关闭
+      switch_tpl: 勿扰打开.png
+    - desc: 返回设置界面
+      back: true
+    - desc: 进入预约清扫界面
+      click: 定时
+      screenshot: screenshots/预约清扫_01_预约界面.png
+    - desc: 添加预约清扫任务
+      add_timer:
+        add_text: 添加
+        add_tpl: 添加预约.png
+        max_tasks: 2
+    - desc: 设置预约时间为当前+3分钟
+      set_time: 3
+      circular: false
+    - desc: 设置吸力为安静挡
+      click: 吸力
+    - desc: 选择安静挡位
+      click: 安静
+      wait_for: 安静,标准,强力
+    - desc: 确认吸力设置
+      if_click: 确认,确定
+    - desc: 设置水量为低挡
+      click: 水量设置
+    - desc: 选择低挡位
+      click: 低
+      wait_for: 低,中,高
+    - desc: 确认水量设置
+      if_click: 确认,确定
+    - desc: 保存预约清扫设置
+      if_click: 确认,确定
+      screenshot: screenshots/预约清扫_02_预约设置.png
+    - desc: 返回设置界面
+      back: true
+    - desc: 返回主界面
+      back: true
+    - desc: 等待预约时间到达，确认开始清扫
+      wait: 100
+    - desc: 确认预约清扫开始执行
+      assert: 智能清扫中,全屋清扫中
+      timeout: 50
+      screenshot: screenshots/预约清扫_03_执行中.png
+    - desc: 等待清扫完成并返回充电
+      assert: 充电中,充电完成
+      timeout: 0
+      screenshot: screenshots/预约清扫_04_清扫完成.png
+    - desc: 展开清扫数据
+      click: 展开清扫数据.png
+    - desc: 等待清扫数据出现
+      wait_for: 面积,清扫面积
+    - desc: 抓取主页清扫面积和时间
+      grab: 面积,时间
+      screenshot: screenshots/预约清扫_05_主界面清扫数据.png
+    - desc: 进入设置界面
+      click: 进入设置.png
+      screenshot: screenshots/预约清扫_06_进入设置.png
+    - desc: 进入清扫记录界面
+      click: 清扫记录
+      screenshot: screenshots/预约清扫_07_清扫记录界面.png
+    - desc: 点击最新一条清扫记录
+      screenshot: screenshots/预约清扫_08_最新清扫记录.png
+      latest_record: true
+    - desc: 对比清扫面积、时间和预约执行时间
+      match: 面积,时间,预约时间

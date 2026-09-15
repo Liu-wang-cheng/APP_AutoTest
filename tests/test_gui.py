@@ -20,7 +20,7 @@ from PySide6.QtGui import QMouseEvent
 
 from common import app_detect
 from common.action_runner import ActionRunner, UserStopped
-from common.driver import update_config
+from common.driver import load_config, update_config
 from gui import schema
 
 # 进程内共享一个 QApplication(必须在导入 gui 模块前创建)
@@ -161,6 +161,22 @@ class TestAppDetect:
         assert app_detect._parse_brief_activity(out, "com.demo.app") == "com.demo.MainActivity"
         assert app_detect._parse_brief_activity("nothing here", "com.demo.app") is None
 
+    def test_别名命中显示名与包名无关的APP(self):
+        """SmartThings 的包名是 com.samsung.android.oneconnect,切词永远切不出共同子串"""
+        pkgs = ["com.samsung.android.oneconnect", "com.tencent.mtt"]
+        matched = app_detect.match_packages("SmartThings", pkgs)
+        assert matched and matched[0][0] == "com.samsung.android.oneconnect"
+
+    def test_别名对大小写和空格不敏感(self):
+        pkgs = ["com.samsung.android.oneconnect"]
+        for name in ("SmartThings", "smartthings", "Smart Things", " SmartThings "):
+            assert app_detect.match_packages(name, pkgs), name
+
+    def test_别名不污染无关包(self):
+        """别名只加关键词,不该让别的包被误判为命中"""
+        matched = app_detect.match_packages("SmartThings", ["com.tencent.mtt", "com.tuya.smartiot"])
+        assert matched == []
+
 
 # ── Excel 报告 ──
 class TestExcelReport:
@@ -276,9 +292,15 @@ def _card_widgets(window):
 
 class TestGuiWindow:
 
-    def test_环境字段从配置加载(self, window, monkeypatch):
-        assert window.app_name_edit.text() == "涂鸦智能"
-        assert window.device_name_edit.text() == "SE3L"
+    def test_环境字段从配置加载(self, window):
+        """界面上显示的应是 config.yaml 的当前值
+
+        不硬编码具体值 —— GUI 本来就是给人改配置用的,写死会让正常使用
+        把测试搞挂。
+        """
+        cfg = load_config()
+        assert window.app_name_edit.text() == cfg["app"]["name"]
+        assert window.device_name_edit.text() == cfg.get("target_device", "")
 
     def test_包名启动页字段已移除(self, window):
         assert not hasattr(window, "pkg_edit")
@@ -304,6 +326,65 @@ class TestGuiWindow:
         window._save_cfg_field(window.device_name_edit)
         data = yaml.safe_load(fake.read_text(encoding="utf-8"))
         assert data["target_device"] == "SE9L-TEST"
+
+    def test_匹配不到时改为列出已装应用(self, window, monkeypatch):
+        """名称与包名对不上的 APP 不应直接判失败,而是列出已装应用让用户选"""
+        import PySide6.QtWidgets as QW
+        monkeypatch.setattr(window, "_current_device_id", lambda: "fake-device")
+        monkeypatch.setattr(
+            "common.app_detect.list_packages",
+            lambda did, third_party_only=True:
+                ["com.samsung.android.oneconnect", "com.tencent.mtt"])
+        monkeypatch.setattr(
+            "common.app_detect.detect_main_activity",
+            lambda did, pkg: "com.samsung.android.oneconnect.ui.SCMainActivity")
+        seen = {}
+
+        def fake_pick(parent, title, label, items, cur, editable):
+            seen["items"] = list(items)
+            return "com.samsung.android.oneconnect", True
+
+        monkeypatch.setattr(QW.QInputDialog, "getItem", fake_pick)
+        written = {}
+        monkeypatch.setattr("gui.main_window.update_config",
+                            lambda updates, path=None: written.update(updates))
+        monkeypatch.setattr("gui.main_window.QMessageBox.warning",
+                            lambda *a, **k: seen.setdefault("warned", True))
+
+        window.app_name_edit.setText("NonexistentApp")
+        window.on_detect_app()
+
+        assert "warned" not in seen, "匹配不到时应给选择列表,而不是直接弹失败"
+        assert seen["items"] == ["com.samsung.android.oneconnect", "com.tencent.mtt"]
+        assert written["app.package"] == "com.samsung.android.oneconnect"
+        assert written["app.main_activity"] == "com.samsung.android.oneconnect.ui.SCMainActivity"
+
+    def test_选择列表取消则不改配置(self, window, monkeypatch):
+        import PySide6.QtWidgets as QW
+        monkeypatch.setattr(window, "_current_device_id", lambda: "fake-device")
+        monkeypatch.setattr("common.app_detect.list_packages",
+                            lambda did, third_party_only=True: ["com.tencent.mtt"])
+        called = {}
+
+        def fake_pick(*a, **k):
+            called["offered"] = True
+            return "", False
+
+        monkeypatch.setattr(QW.QInputDialog, "getItem", fake_pick)
+        # 离屏下模态框会一直阻塞,所有弹窗都必须打桩
+        monkeypatch.setattr("gui.main_window.QMessageBox.warning",
+                            lambda *a, **k: None)
+        monkeypatch.setattr("gui.main_window.QMessageBox.critical",
+                            lambda *a, **k: None)
+        written = {}
+        monkeypatch.setattr("gui.main_window.update_config",
+                            lambda updates, path=None: written.update(updates))
+
+        window.app_name_edit.setText("NonexistentApp")
+        window.on_detect_app()
+
+        assert called.get("offered"), "匹配不到时应弹出选择列表"
+        assert written == {}, "取消选择不应写配置"
 
 
 class TestGuiSteps:

@@ -774,29 +774,25 @@ class MainWindow(QMainWindow):
 
     # ── 设备检测 ──
     def _refresh_devices(self):
-        """adb devices 自动检测真机/模拟器,配置里有备注名的一并显示"""
+        """自动补连配置里登记的 TCP 设备,检测在线真机/模拟器,同设备双寻址去重
+
+        备注名/状态后缀/去重都在 app_detect.resolve_devices 里完成,这里只负责显示。
+        """
         self.device_combo.blockSignals(True)
         self.device_combo.clear()
-        names = {}
         try:
             cfg = load_config()
-            names = {d["id"]: d.get("name", "")
-                     for d in cfg.get("device", {}).get("list", [])}
         except Exception:
-            pass
+            cfg = {}
         try:
-            devices = app_detect.list_devices()
+            devices = app_detect.resolve_devices(cfg)
         except Exception as e:
             devices = []
             self.env_status.setText(f"adb 检测失败: {e}")
         if not devices:
             self.device_combo.addItem("未检测到设备(检查 adb)", None)
         for dev in devices:
-            did = dev["id"]
-            label = f"{names[did]} ({did})" if names.get(did) else did
-            if dev["state"] != "device":
-                label += f" [{dev['state']}]"
-            self.device_combo.addItem(label, did)
+            self.device_combo.addItem(dev["label"], dev["id"])
         self.device_combo.blockSignals(False)
 
     def _current_device_id(self):
@@ -835,24 +831,22 @@ class MainWindow(QMainWindow):
         try:
             packages = app_detect.list_packages(device_id)
             matched = app_detect.match_packages(app_name, packages)
-            if not matched:
-                QMessageBox.warning(
-                    self, "未匹配到APP",
+            if matched and (len(matched) == 1 or matched[0][1] > matched[1][1]):
+                package = matched[0][0]
+            elif matched:
+                package = self._pick_app(
+                    "匹配到多个应用,请选择:", [p for p, _ in matched[:8]])
+            else:
+                # 名称与包名对不上(如 SmartThings → com.samsung.android.oneconnect):
+                # 列出已装应用让人直接选,别把路堵死
+                package = self._pick_app(
                     f"按名称「{app_name}」未匹配到已装应用。\n"
-                    "可换个别名(如英文名)重试,或直接手动填写包名。")
+                    "请从设备已装应用中选择(或在 common/app_detect.py 的 "
+                    "_APP_ALIASES 里登记别名):",
+                    packages)
+            if package is None:
                 self.env_status.setText("")
                 return
-            if len(matched) == 1 or matched[0][1] > matched[1][1]:
-                package = matched[0][0]
-            else:
-                from PySide6.QtWidgets import QInputDialog
-                options = [p for p, _ in matched[:8]]
-                sel, ok = QInputDialog.getItem(
-                    self, "选择APP", "匹配到多个应用,请选择:", options, 0, False)
-                if not ok:
-                    self.env_status.setText("")
-                    return
-                package = sel
             activity = app_detect.detect_main_activity(device_id, package) or ""
             update_config({"app.package": package, "app.main_activity": activity})
             self.env_status.setText(
@@ -862,6 +856,15 @@ class MainWindow(QMainWindow):
             self.env_status.setText("")
         finally:
             QApplication.restoreOverrideCursor()
+
+    def _pick_app(self, prompt, options):
+        """弹选择框,返回选中的包名;取消或无候选返回 None"""
+        if not options:
+            QMessageBox.warning(self, "未找到应用", "设备上没有可选的第三方应用。")
+            return None
+        from PySide6.QtWidgets import QInputDialog
+        sel, ok = QInputDialog.getItem(self, "选择APP", prompt, options, 0, False)
+        return sel if ok else None
 
     def _build_chip_strip(self):
         """用例信息行 + 常用组件快捷条(流式布局)"""

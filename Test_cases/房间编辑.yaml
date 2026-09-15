@@ -24,7 +24,7 @@ cases:
 
       - desc: 对比分割前后地图
         diff: screenshots/房间编辑_02_分割前.png
-        threshold: 1
+        threshold: 0.99   # diff 用: 相似度低于 99% 才算"地图变了"; 必须 <1, 见 _do_compare
         screenshot: screenshots/房间编辑_03_分割后.png
 
       - desc: 重新识别分区
@@ -39,7 +39,7 @@ cases:
 
       - desc: 对比合并前后地图
         diff: screenshots/房间编辑_04_合并前.png
-        threshold: 1
+        threshold: 0.99   # diff 用: 相似度低于 99% 才算"地图变了"; 必须 <1, 见 _do_compare
         screenshot: screenshots/房间编辑_05_合并后.png
 
       - desc: 重置前截图
@@ -50,7 +50,7 @@ cases:
 
       - desc: 对比重置前后地图
         diff: screenshots/房间编辑_06_重置前.png
-        threshold: 1
+        threshold: 0.99   # diff 用: 相似度低于 99% 才算"地图变了"; 必须 <1, 见 _do_compare
         screenshot: screenshots/房间编辑_07_重置后.png
 
       - desc: 重新识别分区

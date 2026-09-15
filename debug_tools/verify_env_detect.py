@@ -57,7 +57,9 @@ assert "进入哪个设备页面" in final_text, "行内注释丢失"
 print("2. update_config 回写/保注释/还原/顶层标量 OK")
 
 # ── 3. 真机端到端检测 ──
-devices = app_detect.list_devices()
+cfg = load_config()
+# 用 resolve_devices(自动补连 + 同设备去重 + 挂备注名),与 GUI 下拉框同源
+devices = app_detect.resolve_devices(cfg)
 print("3. 在线设备:", devices)
 assert devices, "无在线设备"
 device_id = devices[0]["id"]
@@ -67,7 +69,6 @@ matched = app_detect.match_packages("涂鸦智能", pkgs)
 print("   匹配结果前3:", matched[:3])
 package = matched[0][0]
 activity = app_detect.detect_main_activity(device_id, package)
-cfg = load_config()
 assert package == cfg["app"]["package"], (package, cfg["app"]["package"])
 assert activity == cfg["app"]["main_activity"], (activity, cfg["app"]["main_activity"])
 print(f"   端到端 OK: 涂鸦智能 → {package} → {activity}")
@@ -80,16 +81,18 @@ from gui.main_window import MainWindow
 
 w = MainWindow()
 assert w.app_name_edit.text() == cfg["app"]["name"]
-assert w.pkg_edit.text() == cfg["app"]["package"]
+# 包名/启动页字段已从界面移除(检测结果只写配置),不应再存在
+assert not hasattr(w, "pkg_edit") and not hasattr(w, "act_edit")
 combo_ids = [w.device_combo.itemData(i) for i in range(w.device_combo.count())]
 assert device_id in combo_ids, combo_ids
 assert w._current_device_id() == device_id
 # 设备名称 = APP 内设备名称(target_device) 同步
-assert w.device_name_edit.text() == "SE3L"
+orig_target = cfg.get("target_device", "")
+assert w.device_name_edit.text() == orig_target
 w.device_name_edit.setText("SE9L-TEST")
 w._save_cfg_field(w.device_name_edit)
 assert load_config()["target_device"] == "SE9L-TEST"
-update_config({"target_device": "SE3L"})  # 还原
+update_config({"target_device": orig_target})  # 还原成原值(不要写死)
 print("4. GUI 环境条/设备检测/设备名称(target_device)回写 OK")
 print()
 print("=== 环境检测链路全部通过 ===")

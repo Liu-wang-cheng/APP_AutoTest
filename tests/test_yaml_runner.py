@@ -1,24 +1,26 @@
 import os
 
 import pytest
-import yaml
 
 from common.action_runner import ActionRunner
-from common.driver import BASE_DIR, load_config
+from common.driver import BASE_DIR, load_config, load_yaml_file
 
 CASES_DIR = os.path.join(BASE_DIR, "Test_cases")
 
 
 def collect_cases(case_filter=""):
-    """扫描 Test_cases 目录,收集所有 YAML 用例(支持 --case 模糊过滤)"""
+    """扫描 Test_cases 目录,收集所有 YAML 用例(支持 --case 模糊过滤)
+
+    单个用例文件不可读(编码/透明加密/语法错误)时抛 YamlFileError,
+    错误信息里带文件名和原因,不会只剩一段 codec traceback。
+    """
     cases = []
     for fname in sorted(os.listdir(CASES_DIR)):
         if not fname.endswith(".yaml"):
             continue
         if case_filter and case_filter not in fname:
             continue
-        with open(os.path.join(CASES_DIR, fname), encoding="utf-8") as f:
-            data = yaml.safe_load(f)
+        data = load_yaml_file(os.path.join(CASES_DIR, fname))
         for case in data.get("cases", []):
             priority = case.get("priority", "P1")
             # P0 用例映射 smoke 标记,可 -m smoke 单独跑

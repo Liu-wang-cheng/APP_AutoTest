@@ -8,7 +8,7 @@ import pytest
 from common.driver import BASE_DIR, load_config
 from common.excel_report import ExcelReport
 from common.logger import setup_logger
-from common import session
+from common import app_detect, session
 
 
 # 初始化循环日志（5MB）
@@ -56,6 +56,10 @@ def device(request, report):
     """每个用例前后重启 APP，进入设备页，确保充电且电量 >50%(流程见 common/session.py)"""
     import uiautomator2 as u2
     cfg = load_config()
+
+    # 模拟器常需先 adb connect 才会出现在 adb 列表里(配置里的 host:port 地址),
+    # 否则 get_device_id 解析出的地址连不上
+    app_detect.ensure_connected(cfg)
 
     device_id = session.get_device_id(cfg, request.config.getoption("--device"))
     d = u2.connect(device_id)

@@ -42,6 +42,6 @@ cases:
 
       - desc: 对比设置前后地图
         diff: screenshots/禁区设置_01_操作前.png
-        threshold: 1
+        threshold: 0.99   # diff 用: 相似度低于 99% 才算"地图变了"; 必须 <1, 见 _do_compare
         screenshot: screenshots/禁区设置_04_主界面地图.png
 
