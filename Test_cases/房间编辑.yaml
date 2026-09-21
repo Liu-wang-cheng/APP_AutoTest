@@ -1,0 +1,78 @@
+case_order: 9
+module: 房间编辑
+
+cases:
+  - name: 房间编辑完整流程
+    priority: P1
+    wait: 5
+    steps:
+      - desc: 进入地图编辑
+        click: 地图编辑
+
+      - desc: 进入地图自定义编辑
+        click: 地图自定义编辑
+
+      - desc: 识别地图房间分区
+        screenshot: screenshots/房间编辑_01_编辑界面.png
+        room_zones: true
+
+      - desc: 进入分割模式并截图
+        click: 区域分割
+        screenshot: screenshots/房间编辑_02_分割前.png
+
+      - desc: 执行房间分割
+        split_zone: true
+
+      - desc: 对比分割前后地图
+        diff: screenshots/房间编辑_02_分割前.png
+        threshold: 0.99   # diff 用: 相似度低于 99% 才算"地图变了"; 必须 <1, 见 _do_compare
+        screenshot: screenshots/房间编辑_03_分割后.png
+
+      - desc: 重新识别分区
+        room_zones: true
+
+      - desc: 进入合并模式并截图
+        click: 区域合并
+        screenshot: screenshots/房间编辑_04_合并前.png
+
+      - desc: 执行房间合并
+        merge_zones: true
+
+      - desc: 对比合并前后地图
+        diff: screenshots/房间编辑_04_合并前.png
+        threshold: 0.99   # diff 用: 相似度低于 99% 才算"地图变了"; 必须 <1, 见 _do_compare
+        screenshot: screenshots/房间编辑_05_合并后.png
+
+      - desc: 重置前截图
+        screenshot: screenshots/房间编辑_06_重置前.png
+
+      - desc: 重置房间分区
+        find_click: 重置分区,恢复分区
+
+      - desc: 对比重置前后地图
+        diff: screenshots/房间编辑_06_重置前.png
+        threshold: 0.99   # diff 用: 相似度低于 99% 才算"地图变了"; 必须 <1, 见 _do_compare
+        screenshot: screenshots/房间编辑_07_重置后.png
+
+      - desc: 重新识别分区
+        room_zones: true
+
+      - desc: 进入房间命名
+        click: 区域命名
+
+      - desc: 选择房间
+        room_click: 1
+
+      - desc: 选择房间名称
+        find_click: 客厅,阳台
+
+      - desc: 确认命名
+        click: 确认
+
+      - desc: 保存命名
+        click: 保存
+        screenshot: screenshots/房间编辑_08_命名完成.png
+
+      - desc: 返回主界面
+        back: true
+

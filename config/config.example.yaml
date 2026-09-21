@@ -1,0 +1,28 @@
+# ================= 配置模板 =================
+# 实际运行请复制为 config/config.yaml(含设备序列号,不入库,GUI 会自动回写)
+
+app:
+  name: 涂鸦智能          # 被测APP名(包名自动检测依据,中英文均可)
+  package: com.tuya.smartiot
+  main_activity: com.smart.ThingSplashActivity
+
+# APP 内要进入的设备页面名称(前置阶段自动点击进入),留空则不进设备页
+target_device: SE3L
+
+device:
+  default: 127.0.0.1:5555   # --device auto 时使用;真机填 USB 序列号
+  list:
+    - id: 127.0.0.1:5555
+      name: 模拟器
+
+runner:
+  step_interval: 3        # 每步间隔秒
+  default_timeout: 30     # assert 超时(0 = 无限等待)
+  click_timeout: 10       # click 超时
+  screenshot_on_fail: true
+  # trace_limit: 8        # 失败回溯保留的步数
+
+# VLM 视觉后端(预留,引擎已可插拔,后端本体未实现)
+# vlm:
+#   enabled: false
+#   impl: vlm.glm4v:Glm4vBackend

@@ -1,0 +1,29 @@
+case_order: 6
+module: 定点清扫
+
+cases:
+  - name: 定点清扫完整流程
+    priority: P1
+    wait: 5
+    steps:
+      - desc: 在主页识别地图房间分区
+        room_zones: true
+
+      - desc: 定点清扫(选分区开始,点位不可达自动换分区,完成后抓取面积时间)
+        spot_clean: true
+        screenshot: screenshots/定点清扫_01_清扫完成抓取数据.png
+
+      - desc: 进入设置界面
+        click: 进入设置.png
+        screenshot: screenshots/定点清扫_02_进入设置.png
+
+      - desc: 进入清扫记录界面
+        click: 清扫记录
+        screenshot: screenshots/定点清扫_03_清扫记录界面.png
+
+      - desc: 点击最新一条清扫记录
+        screenshot: screenshots/定点清扫_04_最新清扫记录.png
+        latest_record: true
+
+      - desc: 对比清扫面积和时间是否一致
+        match: 面积,时间

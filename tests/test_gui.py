@@ -1,0 +1,1068 @@
+# -*- coding: utf-8 -*-
+"""GUI 离屏测试: 窗体装配 / 新建 / 添加步骤 / 卡片渲染 / YAML 往返,不碰真机。"""
+import os
+import sys
+from pathlib import Path
+
+import pytest
+
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+pytest.importorskip("PySide6")
+from PySide6.QtWidgets import QApplication  # noqa: E402
+
+
+@pytest.fixture(scope="module")
+def qapp():
+    app = QApplication.instance() or QApplication([])
+    yield app
+
+
+@pytest.fixture
+def win(qapp, monkeypatch, tmp_path):
+    from gui import main_window as mw
+    monkeypatch.setattr(mw, "CASES_DIR", str(tmp_path / "Test_cases"), raising=False)
+    monkeypatch.setattr(mw, "CONFIG_PATH", str(tmp_path / "config.yaml"), raising=False)
+    w = mw.MainWindow()
+    yield w
+    w.close()
+
+
+def test_window_built(win):
+    assert win.device_combo is not None
+    assert win.result_table is not None
+    assert win.step_count_label.text().startswith("共")
+    assert win.tabs.count() == 3
+
+
+def test_new_resets(win):
+    win.on_new()
+    assert len(win.steps) == 0
+    assert win.data["module"] == "新用例组"
+
+
+def test_add_step_and_render(win):
+    win.on_new()
+    win.add_step("click")
+    assert len(win.steps) == 1
+    assert win.cards_lay.count() >= 2          # 卡片 + 末尾 stretch
+    assert win.step_count_label.text() == "共 1 步"
+
+
+def test_add_step_schema_default(win):
+    """int4 字段默认给空列表(序列化时空列表按动作语义处理)"""
+    win.on_new()
+    win.add_step("room_zones")
+    assert win.steps[-1].get("room_zones") == []
+
+
+def test_dump_data_serializes(win):
+    win.on_new()
+    win.add_step("click")
+    win.steps[0]["click"] = " 开始清扫.png "
+    win.steps[0]["desc"] = "点开始"
+    out = win._dump_data()
+    step = out["cases"][0]["steps"][0]
+    assert step["click"] == "开始清扫.png"       # strip 生效
+    assert step["desc"] == "点开始"
+
+
+def test_yaml_roundtrip_via_text(win):
+    win.on_new()
+    win.add_step("assert")
+    win.steps[0]["assert"] = "清扫中,建图中"
+    win.steps[0]["timeout"] = 20
+    win._refresh_yaml_text()
+    text = win.yaml_edit.toPlainText()
+    assert "清扫中,建图中" in text
+
+    win.yaml_edit.setPlainText(text)
+    win._apply_yaml_text()
+    assert win.steps[0]["assert"] == "清扫中,建图中"
+    assert win.steps[0]["timeout"] == 20
+
+
+def test_multi_case_switch(win):
+    win.data = {"module": "组", "cases": [
+        {"name": "用例1", "priority": "P0", "steps": [{"desc": "a", "click": "x"}]},
+        {"name": "用例2", "priority": "P1", "steps": []},
+    ]}
+    win.case_idx = 0
+    win._refresh_case_selector()
+    assert len(win.steps) == 1
+    win.case_combo.setCurrentIndex(1)
+    assert len(win.steps) == 0
+
+
+def test_set_locked_disables_editing(win):
+    win._set_locked(True)
+    assert win.new_btn.isEnabled() is False
+    assert win.add_btn.isEnabled() is False
+    win._set_locked(False)
+    assert win.new_btn.isEnabled() is True
+
+
+def test_locked_disables_all_edit_buttons(win):
+    """锁定靠禁用按钮实现(方法本身不挡) —— 验证按钮确实被禁掉"""
+    win.on_new()
+    win._set_locked(True)
+    assert not win.add_btn.isEnabled()
+    assert not win.new_btn.isEnabled()
+    assert not win.save_btn.isEnabled()
+    win._set_locked(False)
+    assert win.add_btn.isEnabled()
+
+
+def test_step_summary_shown_in_card(win):
+    win.on_new()
+    win.add_step("back")
+    card = win.cards_lay.itemAt(0).widget()
+    assert "返回键" in card.summary_label.text()
+
+
+# ── 步骤 / 子步骤操作 ──
+
+def test_dup_step_is_deepcopy(win):
+    win.on_new()
+    win.add_step("click")
+    win.steps[0]["click"] = "开始清扫.png"
+    win.dup_step(0)
+    assert len(win.steps) == 2
+    assert win.steps[1]["click"] == "开始清扫.png"
+    assert win.steps[1] is not win.steps[0], "必须是深拷贝,否则改副本会连带改原步骤"
+    assert win.expanded_key == (1,)
+
+
+def test_move_step_swaps(win):
+    win.on_new()
+    win.add_step("click")
+    win.add_step("back")
+    win.steps[0]["desc"], win.steps[1]["desc"] = "A", "B"
+    win.move_step(0, 1)
+    assert [s["desc"] for s in win.steps] == ["B", "A"]
+
+
+def test_move_step_out_of_range_is_noop(win):
+    win.on_new()
+    win.add_step("click")
+    win.steps[0]["desc"] = "A"
+    win.move_step(0, -1)
+    assert [s["desc"] for s in win.steps] == ["A"]
+
+
+def test_del_step_rolls_expanded_key_back(win):
+    """删掉展开中的最后一步后,展开键不能还指向已不存在的下标"""
+    win.on_new()
+    win.add_step("click")
+    win.add_step("back")
+    win.expanded_key = (1,)
+    win.del_step(1)
+    assert len(win.steps) == 1
+    assert win.expanded_key == (0,)
+
+
+def test_add_sub_appends_and_expands(win):
+    win.on_new()
+    win.add_step("if")
+    win.add_sub(0, "click")
+    assert len(win.steps[0]["else"]) == 1
+    assert win.expanded_key == (0, 0)
+
+
+def test_add_sub_wait_shortcut(win):
+    """__wait 是「延时等待」的快捷写法(纯 wait 步骤)"""
+    win.on_new()
+    win.add_step("if")
+    win.add_sub(0, "__wait")
+    sub = win.steps[0]["else"][0]
+    assert sub.get("wait") and "wait_for" not in sub and "click" not in sub
+
+
+def test_move_sub(win):
+    win.on_new()
+    win.add_step("if")
+    win.add_sub(0, "click")
+    win.add_sub(0, "back")
+    win.steps[0]["else"][0]["desc"] = "A"
+    win.steps[0]["else"][1]["desc"] = "B"
+    win.move_sub(0, 0, 1)
+    assert [s["desc"] for s in win.steps[0]["else"]] == ["B", "A"]
+
+
+def test_dup_sub_and_del_sub(win):
+    win.on_new()
+    win.add_step("if")
+    win.add_sub(0, "click")
+    win.dup_sub(0, 0)
+    assert len(win.steps[0]["else"]) == 2
+    win.del_sub(0, 0)
+    assert len(win.steps[0]["else"]) == 1
+
+
+def test_del_sub_collapses_to_parent(win):
+    """子步骤删光后展开态要收回父卡片,不能停在已不存在的子下标上"""
+    win.on_new()
+    win.add_step("if")
+    win.add_sub(0, "click")
+    win.del_sub(0, 0)
+    assert win.expanded_key == (0,)
+
+
+def test_collapse_all(win):
+    win.on_new()
+    win.add_step("if")
+    win.add_sub(0, "click")
+    win._collapse_all()
+    assert win.expanded_key is None
+
+
+def test_step_ops_guarded_by_worker_not_lock(win):
+    """步骤增删改由 worker 守卫(执行期间禁止改动编排)
+
+    锁定是"禁用按钮"层面的保护;真正的守卫是 self.worker ——
+    执行中改步骤会让跑着的用例和界面数据对不上。
+    """
+    win.on_new()
+    win.add_step("click")
+
+    class _FakeWorker:
+        pass
+
+    win.worker = _FakeWorker()
+    win.dup_step(0)
+    win.move_step(0, 1)
+    win.add_step("back")
+    win.add_sub(0, "click")
+    assert len(win.steps) == 1          # worker 在跑,全部被挡
+    assert "else" not in win.steps[0]
+    win.worker = None
+    win.add_step("back")
+    assert len(win.steps) == 2          # 清掉 worker 后恢复
+
+
+def test_else_substeps_survive_yaml_roundtrip(win):
+    """else 子步骤要能落盘再读回 —— 缩进/结构最容易在这里出错"""
+    import yaml
+    win.on_new()
+    win.add_step("if not")
+    win.steps[0]["if not"] = "扫地机器人"
+    win.add_sub(0, "click")
+    win.steps[0]["else"][0]["click"] = "重置首页地图"
+
+    dumped = yaml.safe_dump(win._dump_data(), allow_unicode=True, sort_keys=False)
+    back = yaml.safe_load(dumped)
+    steps = back["cases"][0]["steps"]
+    assert steps[0]["if not"] == "扫地机器人"
+    assert steps[0]["else"][0]["click"] == "重置首页地图"
+
+
+def _card_widgets(win):
+    """当前卡片列表里的 StepCard 组件(跳过 stretch 等非卡片项)"""
+    from gui.main_window import StepCard
+    out = []
+    for i in range(win.cards_lay.count()):
+        w = win.cards_lay.itemAt(i).widget()
+        if isinstance(w, StepCard):
+            out.append(w)
+    return out
+
+
+def test_只改说明不破坏其它字段类型(win):
+    """编辑一个字段不能碰其它字段 —— swipe 的 list 被写成字符串就废了"""
+    win.on_new()
+    win.steps.append({"desc": "滑动", "swipe": [100, 200, 300, 400]})
+    win.expanded_key = (0,)
+    win.render_cards()
+
+    card = _card_widgets(win)[0]
+    card.widgets["desc"].setText("滑动一")
+    card.widgets["desc"].editingFinished.emit()   # 远端用 editingFinished 写回
+
+    assert win.steps[0]["desc"] == "滑动一"
+    assert win.steps[0]["swipe"] == [100, 200, 300, 400]
+
+
+def test_高级参数编辑生效(win):
+    """等待/重试这类修饰参数在卡片里编辑后要写回步骤"""
+    win.on_new()
+    win.add_step("click")
+    win.steps[0]["click"] = "确认"
+    win.expanded_key = (0,)
+    win.render_cards()
+
+    card = _card_widgets(win)[0]
+    for key, val in (("wait", "7"), ("retry", "2")):
+        w = card.widgets[key]
+        w.setText(val)
+        w.editingFinished.emit()
+
+    assert win.steps[0]["wait"] == 7
+    assert win.steps[0]["retry"] == 2
+    out = win._dump_data()["cases"][0]["steps"][0]
+    assert out["wait"] == 7 and out["retry"] == 2
+
+
+def test_真实用例文件回环不丢键(win):
+    """把 Test_cases/ 的每个用例读进来渲染卡片再导出,原有的键一个都不能丢
+
+    GUI 是「打开→编辑→保存」的编辑器,一次往返悄悄丢掉一个键,用户要等真机
+    跑起来才发现步骤行为不对。这里对真实用例文件做整体回环检查,顺带确认:
+    · 卡片数 == 步骤数(渲染不能漏步骤)
+    · 导出后不出现引擎不认识的键
+    """
+    import glob
+    import yaml as _yaml
+    from core.driver import BASE_DIR
+    from gui import schema
+
+    known = set(schema.ACTION_BY_KEY)
+    known |= {f["key"] for a in schema.ACTIONS for f in a["fields"]}
+    known |= {s["key"] for a in schema.ACTIONS for f in a["fields"]
+              if f.get("type") == "group" for s in f.get("fields", [])}
+    known |= {"desc", "screenshot", "wait", "timeout", "retry", "circular",
+              "threshold", "switch_tpl", "switch_label", "switch_area", "else"}
+
+    total = 0
+
+    def roundtrip(module, cases):
+        nonlocal total
+        win.data = {"module": module, "cases": cases}
+        win.case_idx = 0
+        win.expanded_key = None
+        win.render_cards()
+
+        # 卡片数必须等于首个用例的步骤数 —— 渲染漏步骤的话后面的键检查就没意义了
+        expect = len((cases[0].get("steps") or []) ) if cases else 0
+        shown = len(_card_widgets(win))
+        assert shown == expect, f"{module}: 步骤 {expect} 个, 卡片却渲染了 {shown} 个"
+
+        dumped = win._dump_data()
+        assert len(dumped["cases"]) == len(cases), f"{module}: 用例数变少"
+        for orig, back in zip(cases, dumped["cases"]):
+            for i, (s_orig, s_back) in enumerate(zip(orig.get("steps") or [],
+                                                     back.get("steps") or [])):
+                total += 1
+                for k, v in s_orig.items():
+                    # serialize_step 会省略 None/空串/False(引擎默认即这些值),
+                    # 省略它们语义不变,不算丢键。0 要保留,所以不能用 v in (None,"",False)
+                    if v is None or v == "" or v is False:
+                        continue
+                    assert k in s_back, \
+                        f"{module}/{orig.get('name')} 步骤{i + 1} 丢了键「{k}」"
+                    if isinstance(v, list) and k != "else":
+                        assert isinstance(s_back[k], list), \
+                            f"{module} 步骤{i + 1}「{k}」类型从 list 变成 {type(s_back[k])}"
+                for k in s_back:
+                    assert k in known, f"{module} 步骤{i + 1} 出现未知键「{k}」"
+
+    cases_dir = os.path.join(BASE_DIR, "Test_cases")
+    if not os.path.isdir(cases_dir):
+        pytest.skip("无用例目录")
+    files = sorted(glob.glob(os.path.join(cases_dir, "*.yaml")))
+    assert files, "Test_cases 下没有用例文件"
+
+    for path in files:
+        with open(path, encoding="utf-8") as f:
+            data = _yaml.safe_load(f)
+        if isinstance(data.get("modules"), list):
+            for m in data["modules"]:
+                roundtrip(m.get("module", ""), m.get("cases") or [])
+        else:
+            roundtrip(data.get("module", ""), data.get("cases") or [])
+
+    assert total >= 200, f"只检查了 {total} 个步骤,用例文件是不是没读到?"
+
+
+def test_imageview_dialog_zoom_controls(win):
+    """截图查看器: 适应窗口 / 1:1 / 放大缩小 都要能切。
+    注:小图的 fit 是放大(>1x),1:1(1.0)比 fit 还小 → 被 fit_scale 下限钳住,
+    这是预期行为(显示不能小于打开时的默认大小)"""
+    from PIL import Image
+    from gui.main_window import ImageViewDialog   # 远端把控件都放在 main_window 里
+    import tempfile
+
+    p = Path(tempfile.mkdtemp()) / "shot.png"
+    Image.new("RGB", (200, 100), "red").save(p)
+
+    dlg = ImageViewDialog(str(p))
+    assert dlg._zoom is None              # 初始适应窗口
+    dlg._zoom_in()
+    fit = dlg._fit_scale
+    assert dlg._zoom > fit                # 从 fit 起步放大(不是从 1.0 跳变)
+    dlg._zoom_out()
+    assert dlg._zoom == pytest.approx(fit, rel=0.05) or dlg._zoom is None
+    dlg._fit()
+    assert dlg._zoom is None
+    dlg.close()
+
+
+# ── 用例列表:同列布局 + 勾选/单击加载(2026-09-21 布局重排守护) ──
+
+@pytest.fixture
+def win_with_cases(qapp, monkeypatch, tmp_path):
+    """Test_cases/ 预置两个用例文件后实例化窗口"""
+    from gui import main_window as mw
+    cases_dir = tmp_path / "Test_cases"
+    cases_dir.mkdir()
+    (cases_dir / "全局清扫.yaml").write_text(
+        "module: 全局清扫\ncases:\n  - name: 完整流程\n    steps: []\n", encoding="utf-8")
+    (cases_dir / "划区清扫.yaml").write_text(
+        "module: 划区清扫\ncases:\n  - name: 完整流程\n    steps: []\n", encoding="utf-8")
+    monkeypatch.setattr(mw, "CASES_DIR", str(cases_dir), raising=False)
+    monkeypatch.setattr(mw, "CONFIG_PATH", str(tmp_path / "config.yaml"), raising=False)
+    w = mw.MainWindow()
+    yield w
+    w.close()
+
+
+def test_case_list_is_qlistwidget_and_in_same_column(win_with_cases):
+    """self.case_list 必须是真正的 QListWidget(曾被 panel 覆盖 → 勾选/运行必炸)"""
+    from PySide6.QtWidgets import QListWidget
+    assert isinstance(win_with_cases.case_list, QListWidget)
+    # 顶层不再是左右分栏(底部结果区的 QSplitter 是合法保留,不受影响)
+    from PySide6.QtWidgets import QSplitter
+    assert not isinstance(win_with_cases.centralWidget(), QSplitter)
+
+
+def test_case_check_and_collect_paths(win_with_cases):
+    """全选/清空 → _checked_case_paths 正确返回勾选路径"""
+    from PySide6.QtCore import Qt
+    win = win_with_cases
+    assert win.case_list.count() == 2
+    win._set_cases_checked(Qt.Checked)
+    names = sorted(os.path.basename(p) for p in win._checked_case_paths())
+    assert names == ["全局清扫.yaml", "划区清扫.yaml"]
+    win._set_cases_checked(Qt.Unchecked)
+    assert win._checked_case_paths() == []
+
+
+def test_click_case_row_loads_into_editor(win_with_cases):
+    """单击用例行 → 右侧加载该用例(case_path/data 更新),勾选状态不受影响"""
+    from PySide6.QtCore import Qt
+    win = win_with_cases
+    win._set_cases_checked(Qt.Checked)
+    win._on_case_item_clicked(win.case_list.item(0))
+    assert win.case_path.endswith("划区清扫.yaml") or win.case_path.endswith("全局清扫.yaml")
+    assert win.data.get("module") in ("划区清扫", "全局清扫")
+    # 勾选不因加载而丢失
+    assert win._checked_case_paths(), "勾选状态不应被单击加载重置"
+
+
+# ── 用例排序:case_order 写入 YAML + 行内箭头(2026-09-21) ──
+
+def test_case_order_sorts_list_on_load(qapp, monkeypatch, tmp_path):
+    """加载时按 case_order 升序,缺失的排末尾按文件名"""
+    from gui import main_window as mw
+    d = tmp_path / "Test_cases"
+    d.mkdir()
+    (d / "乙.yaml").write_text("case_order: 1\nmodule: 乙\ncases:\n  - name: a\n    steps: []\n", encoding="utf-8")
+    (d / "甲.yaml").write_text("case_order: 2\nmodule: 甲\ncases:\n  - name: a\n    steps: []\n", encoding="utf-8")
+    (d / "丙.yaml").write_text("module: 丙\ncases:\n  - name: a\n    steps: []\n", encoding="utf-8")
+    monkeypatch.setattr(mw, "CASES_DIR", str(d), raising=False)
+    monkeypatch.setattr(mw, "CONFIG_PATH", str(tmp_path / "config.yaml"), raising=False)
+    w = mw.MainWindow()
+    try:
+        paths = [w.case_list.item(i).data(0x0100) for i in range(w.case_list.count())]
+        import os as _os
+        assert [_os.path.basename(p) for p in paths] == ["乙.yaml", "甲.yaml", "丙.yaml"]
+    finally:
+        w.close()
+
+
+def test_write_case_order_keeps_comments_and_newlines(tmp_path):
+    """case_order 文本级写入:保注释、保 CRLF、已存在则原位更新"""
+    from gui.main_window import MainWindow
+    # CRLF + 头注释 + 无 case_order → 插入
+    p = tmp_path / "a.yaml"
+    p.write_bytes("# 说明注释\r\nmodule: 甲\r\ncases: []\r\n".encode("utf-8"))
+    MainWindow._write_case_order(str(p), 3)
+    s = p.read_bytes().decode("utf-8")
+    assert s.startswith("# 说明注释\r\ncase_order: 3\r\nmodule: 甲\r\n")
+    assert "\r\n" in s and "# 说明注释" in s
+    # 已存在 → 原位替换数值
+    MainWindow._write_case_order(str(p), 7)
+    s = p.read_bytes().decode("utf-8")
+    assert "case_order: 7" in s and s.count("case_order") == 1
+
+
+def test_move_case_writes_order_and_keeps_check(qapp, monkeypatch, tmp_path):
+    """行内箭头移动 → 列表换位 + 全部文件 case_order 1..N + 勾选保留"""
+    from gui import main_window as mw
+    from PySide6.QtCore import Qt
+    d = tmp_path / "Test_cases"
+    d.mkdir()
+    names = ["全局清扫", "划区清扫", "选区清扫"]
+    for n in names:
+        (d / f"{n}.yaml").write_text(
+            f"module: {n}\ncases:\n  - name: 完整流程\n    steps: []\n", encoding="utf-8")
+    monkeypatch.setattr(mw, "CASES_DIR", str(d), raising=False)
+    monkeypatch.setattr(mw, "CONFIG_PATH", str(tmp_path / "config.yaml"), raising=False)
+    w = mw.MainWindow()
+    try:
+        assert w.case_list.count() == 3
+        # 勾选第一个,然后把它下移一行
+        first = w.case_list.item(0).data(Qt.UserRole)
+        w.case_list.item(0).setCheckState(Qt.Checked)
+        w._move_case(first, +1)
+        # 列表顺序:划区清扫、全局清扫、选区清扫
+        got = [os.path.basename(w.case_list.item(i).data(Qt.UserRole))
+               for i in range(w.case_list.count())]
+        assert got == ["划区清扫.yaml", "全局清扫.yaml", "选区清扫.yaml"]
+        # 文件里 case_order = 1..N
+        orders = {n: mw.MainWindow._read_case_order(str(d / f"{n}.yaml"))
+                  for n in names}
+        assert orders == {"划区清扫": 1, "全局清扫": 2, "选区清扫": 3}
+        # 勾选跨重建保留
+        assert [os.path.basename(p) for p in w._checked_case_paths()] == ["全局清扫.yaml"]
+        # 边界:第一行上移、最后一行下移 = no-op 且不报错
+        w._move_case(first, -1)
+        w._move_case(w.case_list.item(w.case_list.count() - 1).data(Qt.UserRole), +1)
+        assert w.case_list.count() == 3
+    finally:
+        w.close()
+
+
+def test_case_drag_drop_rebuild_and_persist(qapp, monkeypatch, tmp_path):
+    """拖拽松手(moved 信号)→ 行控件重建 + case_order 写回 1..N
+
+    InternalMove 的默认 dropEvent 无法离屏模拟,这里直接操纵 item 顺序模拟
+    Qt 移动后的状态(itemWidget 已丢),再调 on_case_rows_dropped 验证兜底。
+    """
+    from gui import main_window as mw
+    from PySide6.QtCore import Qt
+    d = tmp_path / "Test_cases"
+    d.mkdir()
+    names = ["全局清扫", "划区清扫", "选区清扫"]
+    for n in names:
+        (d / f"{n}.yaml").write_text(
+            f"module: {n}\ncases:\n  - name: 完整流程\n    steps: []\n", encoding="utf-8")
+    monkeypatch.setattr(mw, "CASES_DIR", str(d), raising=False)
+    monkeypatch.setattr(mw, "CONFIG_PATH", str(tmp_path / "config.yaml"), raising=False)
+    w = mw.MainWindow()
+    try:
+        # 模拟拖拽后的 model 状态:第 3 行移到第 1 行(itemWidget 丢失)
+        it = w.case_list.takeItem(2)
+        w.case_list.insertItem(0, it)
+        w.on_case_rows_dropped()
+        got = [os.path.basename(w.case_list.item(i).data(Qt.UserRole))
+               for i in range(w.case_list.count())]
+        assert got == ["选区清扫.yaml", "全局清扫.yaml", "划区清扫.yaml"]
+        # item 原生化后无 itemWidget,勾选/顺序都在 item 上
+        assert w.case_list.itemWidget(w.case_list.item(0)) is None
+        assert w.case_list.item(0).checkState() in (Qt.Unchecked, Qt.Checked)
+        # 顺序写回文件
+        orders = {n: mw.MainWindow._read_case_order(str(d / f"{n}.yaml"))
+                  for n in names}
+        assert orders == {"选区清扫": 1, "全局清扫": 2, "划区清扫": 3}
+    finally:
+        w.close()
+
+
+# ── 用例列表视觉/交互守护(2026-09-21,每个界面行为都有测试防回归) ──
+
+def test_case_list_visual_and_interaction_rules(win_with_cases):
+    """item 完全原生(checkState/text/sizeHint)+ delegate 箭头 —— 防 setItemWidget 复辟"""
+    from PySide6.QtCore import Qt
+    import gui.main_window as mw
+    win = win_with_cases
+    assert win.case_list.objectName() == "caseList"
+    it0 = win.case_list.item(0)
+    assert it0.flags() & Qt.ItemIsUserCheckable, "item 必须用原生 checkState 勾选"
+    assert it0.text() == os.path.splitext(os.path.basename(it0.data(Qt.UserRole)))[0],         "item text = 用例名(拖拽快照的数据源)"
+    assert it0.sizeHint().height() >= 24, "行高要容得下箭头绘制"
+    assert win.case_list.itemWidget(it0) is None, "禁止 setItemWidget(会盖 indicator/拦事件/断拖拽)"
+    assert "QListWidget#caseList::item:selected" in mw.STYLESHEET
+    assert "QListWidget#caseList::indicator" not in mw.STYLESHEET, \
+        "勾选框用原生样式,不定义 indicator 规则"
+    assert isinstance(win.case_list.itemDelegate(), mw.CaseItemDelegate)
+
+def test_drop_emits_moved_deferred():
+    """防「只能拖一次」回归:dropEvent 必须用 singleShot 延迟发 moved,
+    同步 emit 会在 dropEvent 内重建列表,弄坏 Qt 拖拽内部状态"""
+    import inspect
+    from gui.main_window import CaseListWidget
+    src = inspect.getsource(CaseListWidget.dropEvent)
+    assert "QTimer.singleShot(0, self.moved.emit)" in src
+    assert src.count("moved.emit") == 1, "moved 只能在 singleShot 里发一次"
+
+
+def test_spinbox_embedded_chevron_rules():
+    """次数输入框:增减按钮内嵌框内右侧(subcontrol)+ 细线箭头图标规则"""
+    import gui.main_window as mw
+    assert "QSpinBox::up-button" in mw.STYLESHEET
+    assert "subcontrol-position: top right" in mw.STYLESHEET
+    assert "subcontrol-position: bottom right" in mw.STYLESHEET
+    assert "QSpinBox::up-arrow" in mw.STYLESHEET and "url(" in mw.STYLESHEET
+
+
+def test_case_list_no_focus_rect_and_drag_snapshot(win_with_cases):
+    """① 选中项无虚线焦点框(outline: none);② 拖拽快照名称靠 item 的
+    DisplayRole 文本;③ startDrag 绝不能重写 —— 自定义 QDrag 会断 Qt
+    InternalMove 管线(2026-09-21 实测拖拽全失效);
+    ④ 勾选框 indicator 必须完全自绘(原生绘制在透明背景下会闪)"""
+    import inspect
+    import gui.main_window as mw
+    win = win_with_cases
+    assert "QListWidget#caseList::item { background: transparent; border-radius: 4px; margin: 1px 2px; outline: none; }" in mw.STYLESHEET
+    assert "QListWidget#caseList::item:focus { outline: none; }" in mw.STYLESHEET
+    assert "def startDrag" not in inspect.getsource(mw.CaseListWidget), \
+        "不能重写 startDrag(会断 InternalMove 管线)"
+    it0 = win.case_list.item(0)
+    assert it0.text() == os.path.splitext(os.path.basename(it0.data(0x0100)))[0], \
+        "item 必须带用例名(拖拽快照的数据源)"
+    assert "QListWidget#caseList::indicator" not in mw.STYLESHEET, \
+        "勾选框用原生样式,不定义 indicator 规则"
+
+
+def test_case_arrows_real_click(qapp, monkeypatch, tmp_path):
+    """★ QTest 真实鼠标链点击行内箭头命中区 → 顺序变化(delegate 命中方案)"""
+    from PySide6.QtCore import Qt, QPoint
+    from PySide6.QtTest import QTest
+    from gui import main_window as mw
+    d = tmp_path / "Test_cases"
+    d.mkdir()
+    for n in ("全局清扫", "划区清扫"):
+        (d / f"{n}.yaml").write_text(
+            "module: %s\ncases: [{name: a, steps: []}]\n" % n, encoding="utf-8")
+    monkeypatch.setattr(mw, "CASES_DIR", str(d), raising=False)
+    monkeypatch.setattr(mw, "CONFIG_PATH", str(tmp_path / "config.yaml"), raising=False)
+    w = mw.MainWindow()
+    w.resize(900, 700)
+    w.show()
+    try:
+        qapp.processEvents()
+        lst = w.case_list
+        rect = lst.visualItemRect(lst.item(0))
+        QTest.mouseClick(lst.viewport(), Qt.LeftButton,
+                         pos=QPoint(rect.right() - 11, rect.center().y()))   # ↓ 命中区
+        qapp.processEvents()
+        got = [os.path.basename(lst.item(i).data(Qt.UserRole))
+               for i in range(lst.count())]
+        assert got == ["划区清扫.yaml", "全局清扫.yaml"], "行内箭头真实点击必须生效"
+    finally:
+        w.close()
+
+def test_case_row_name_click_selects(qapp, monkeypatch, tmp_path):
+    """点击用例名区(视口坐标,避开 indicator/箭头)→ 行被选中"""
+    from PySide6.QtCore import Qt, QPoint
+    from PySide6.QtTest import QTest
+    from gui import main_window as mw
+    d = tmp_path / "Test_cases"
+    d.mkdir()
+    for n in ("全局清扫", "划区清扫"):
+        (d / f"{n}.yaml").write_text(
+            "module: %s\ncases: [{name: a, steps: []}]\n" % n, encoding="utf-8")
+    monkeypatch.setattr(mw, "CASES_DIR", str(d), raising=False)
+    monkeypatch.setattr(mw, "CONFIG_PATH", str(tmp_path / "config.yaml"), raising=False)
+    w = mw.MainWindow()
+    w.resize(900, 700)
+    w.show()
+    try:
+        qapp.processEvents()
+        lst = w.case_list
+        rect = lst.visualItemRect(lst.item(0))
+        QTest.mouseClick(lst.viewport(), Qt.LeftButton,
+                         pos=QPoint(rect.left() + 60, rect.center().y()))
+        qapp.processEvents()
+        assert lst.currentRow() == 0, "名字区点击应选中该行(原生管线)"
+    finally:
+        w.close()
+
+
+
+def test_arrow_move_then_drag_coexist(qapp, monkeypatch, tmp_path):
+    """箭头移动与拖拽排序并存:箭头换位后紧接拖拽落位,顺序与写盘正确接力
+    (箭头路径 mousePressEvent 直接 return 不进基类,不会误启动拖拽;
+    拖拽走原生管线 dropEvent → moved;两条路收敛同一个 _persist_case_order)"""
+    from PySide6.QtCore import Qt
+    from gui import main_window as mw
+    d = tmp_path / "Test_cases"
+    d.mkdir()
+    names = ["全局清扫", "划区清扫", "选区清扫"]
+    for n in names:
+        (d / f"{n}.yaml").write_text(
+            "module: %s\ncases: [{name: a, steps: []}]\n" % n, encoding="utf-8")
+    monkeypatch.setattr(mw, "CASES_DIR", str(d), raising=False)
+    monkeypatch.setattr(mw, "CONFIG_PATH", str(tmp_path / "config.yaml"), raising=False)
+    w = mw.MainWindow()
+    try:
+        # 第一步:箭头把第一行下移(全局清扫 → 2号位)
+        w._move_case(w.case_list.item(0).data(Qt.UserRole), +1)
+        got = [os.path.basename(w.case_list.item(i).data(Qt.UserRole))
+               for i in range(w.case_list.count())]
+        assert got == ["划区清扫.yaml", "全局清扫.yaml", "选区清扫.yaml"]
+        # 第二步:模拟拖拽,把第 3 行(选区清扫)拖到最前
+        it = w.case_list.takeItem(2)
+        w.case_list.insertItem(0, it)
+        w.on_case_rows_dropped()
+        got = [os.path.basename(w.case_list.item(i).data(Qt.UserRole))
+               for i in range(w.case_list.count())]
+        assert got == ["选区清扫.yaml", "划区清扫.yaml", "全局清扫.yaml"]
+        # 两种方式交替后,文件顺序依然是干净的 1..N
+        orders = {n: mw.MainWindow._read_case_order(str(d / f"{n}.yaml"))
+                  for n in names}
+        assert orders == {"选区清扫": 1, "划区清扫": 2, "全局清扫": 3}
+    finally:
+        w.close()
+
+
+def test_spinbox_buttons_inset_rules():
+    """次数输入框增减按钮必须有 margin 收缩(否则箭头贴框边圆角,视觉像超出)"""
+    import gui.main_window as mw
+    for rule in ("width: 16px; height: 12px; margin: 3px;",):
+        assert rule in mw.STYLESHEET, f"缺少规则: {rule}"
+
+
+def test_case_checkbox_native_style():
+    """用例勾选框 = Qt 原生样式(QSS 不定义 indicator;勾选/样式由系统主题绘制)"""
+    import gui.main_window as mw
+    assert "QListWidget#caseList::indicator" not in mw.STYLESHEET, \
+        "原生勾选框就不要自定义 indicator 规则"
+    assert "@CHECK_TICK@" not in mw.STYLESHEET
+
+
+# ── 执行结果预览与截图查看器(2026-09-21 用户反馈两连修) ──
+
+def test_preview_label_does_not_grow(qapp, monkeypatch, tmp_path):
+    """点击结果行反复预览,预览区不能越点越大
+    (根因:QLabel sizeHint 跟随 pixmap 涨 → splitter 正反馈撑大)"""
+    from PySide6.QtWidgets import QSizePolicy
+    from PIL import Image
+    from gui import main_window as mw
+    monkeypatch.setattr(mw, "CASES_DIR", str(tmp_path / "Test_cases"), raising=False)
+    monkeypatch.setattr(mw, "CONFIG_PATH", str(tmp_path / "config.yaml"), raising=False)
+    shot = tmp_path / "shot.png"
+    Image.new("RGB", (800, 600), "blue").save(shot)
+    w = mw.MainWindow()
+    w.resize(900, 700)
+    w.show()
+    try:
+        qapp.processEvents()
+        assert w.preview.sizePolicy().horizontalPolicy() == QSizePolicy.Ignored
+        size1 = (w.preview.width(), w.preview.height())
+        for _ in range(3):
+            w._show_screenshot(str(shot))
+            qapp.processEvents()
+        size2 = (w.preview.width(), w.preview.height())
+        assert size2 == size1, f"预览区尺寸不应随点击增长: {size1} -> {size2}"
+    finally:
+        w.close()
+
+
+def test_imageview_wheel_zoom_exclusive(qapp):
+    """截图查看器滚轮 = 纯缩放,滚动条不得同时滚动(两事件曾一起执行)"""
+    import tempfile
+    from PySide6.QtCore import QPointF, QPoint
+    from PySide6.QtGui import QWheelEvent
+    from PySide6.QtCore import Qt
+    from PIL import Image
+    from gui.main_window import ImageViewDialog
+    p = Path(tempfile.mkdtemp()) / "img.png"
+    Image.new("RGB", (1200, 900), "green").save(p)
+    dlg = ImageViewDialog(str(p))
+    dlg.show()
+    try:
+        qapp.processEvents()
+        dlg._set_zoom(2.0)          # 先放大,让内容超出 viewport(有滚动空间)
+        qapp.processEvents()
+        bar = dlg._scroll.verticalScrollBar()
+        bar.setValue(80)
+        zoom_before = dlg._zoom
+        ev = QWheelEvent(QPointF(10, 10), QPointF(10, 10), QPoint(0, 0),
+                         QPoint(0, 120), Qt.NoButton, Qt.NoModifier,
+                         Qt.ScrollUpdate, False)
+        QApplication.sendEvent(dlg._scroll.viewport(), ev)
+        qapp.processEvents()
+        assert bar.value() == 80, f"滚轮缩放时滚动条不应滚动(值 {bar.value()})"
+        assert dlg._zoom > zoom_before, "滚轮应触发缩放"
+    finally:
+        dlg.close()
+
+
+def test_imageview_centered_and_mouse_drag(qapp):
+    """① 小图打开时居中显示(不贴左上角);② 放大后按住拖拽可平移(滚动条跟随)"""
+    import tempfile
+    from PySide6.QtCore import QPointF, QPoint, QEvent
+    from PySide6.QtGui import QMouseEvent
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+    from PIL import Image
+    from gui.main_window import ImageViewDialog
+    p = Path(tempfile.mkdtemp()) / "small.png"
+    Image.new("RGB", (200, 150), "red").save(p)     # 小图(比 880x660 视口小)
+    dlg = ImageViewDialog(str(p))
+    dlg.show()
+    try:
+        qapp.processEvents()
+        # ① 居中:label 中心 ≈ 视口中心
+        vp = dlg._scroll.viewport()
+        lc = dlg.image_label.geometry().center()
+        vc = vp.rect().center()
+        assert abs(lc.x() - vc.x()) <= 2 and abs(lc.y() - vc.y()) <= 2, \
+            f"小图应居中: label 中心 {lc} vs 视口中心 {vc}"
+        # ② 放大后拖拽平移
+        dlg._set_zoom(3.0)
+        qapp.processEvents()
+        bar = dlg._scroll.verticalScrollBar()
+        bar.setValue(60)
+        start = QPoint(50, 50)
+        QTest.mousePress(vp, Qt.LeftButton, pos=start)      # press(记录拖拽起点)
+        for dy in (40, 80, 120):                             # 按住向下拖
+            ev = QMouseEvent(QEvent.MouseMove, QPointF(start.x(), start.y() + dy),
+                             QPointF(start.x(), start.y() + dy),
+                             Qt.NoButton, Qt.LeftButton, Qt.NoModifier)
+            QApplication.sendEvent(vp, ev)
+            qapp.processEvents()
+        QTest.mouseRelease(vp, Qt.LeftButton, pos=start + QPoint(0, 120))
+        qapp.processEvents()
+        assert bar.value() < 60, f"向下拖拽应平移内容(滚动条上移),实际 value={bar.value()}"
+    finally:
+        dlg.close()
+
+
+def test_run_finished_summary_row_in_result_table(win):
+    """执行结束 → 执行结果表格末尾出现醒目总结行(不只右上角状态栏)"""
+    from PySide6.QtWidgets import QTableWidgetItem
+    win.on_run_finished(True, "全部通过(1 轮 × 2 个用例)")
+    row = win.result_table.rowCount() - 1
+    texts = [win.result_table.item(row, c).text() for c in range(5)]
+    assert texts == ["—", "全部通过(1 轮 × 2 个用例)", "✔ 全部通过", "", ""],         "列序应为 #、步骤、结果"
+    assert win.result_table.item(row, 2).font().bold()
+    assert win.result_table.item(row, 2).background().color().name() == "#e6f7e9"
+    assert win.tabs.currentIndex() == 0, "应自动切到「执行结果」页"
+    # 失败路径:红色总结行
+    win.on_run_finished(False, "存在失败步骤")
+    row = win.result_table.rowCount() - 1
+    assert win.result_table.item(row, 2).text() == "✘ 未通过"
+    assert win.result_table.item(row, 2).background().color().name() == "#fdeaea"
+
+
+def test_zoom_out_never_below_default_size(qapp):
+    """「缩小」不能小于打开时的默认(适应窗口)大小:
+    ① 初始 fit 态点缩小 → 显示必须不变(此前 None 被当 1.0,fit 反而被放大);
+    ② 放大后一路缩小 → 缩到底回到 fit,再点缩小无变化"""
+    import tempfile
+    from PIL import Image
+    from gui.main_window import ImageViewDialog
+    p = Path(tempfile.mkdtemp()) / "big.png"
+    Image.new("RGB", (1400, 1000), "cyan").save(p)   # 大图:fit 已是缩小显示
+    dlg = ImageViewDialog(str(p))
+    dlg.show()
+    try:
+        qapp.processEvents()
+        w0 = dlg.image_label.pixmap().width()
+        assert dlg._zoom is None
+        # ① 初始 fit 态点缩小 → 显示不变
+        dlg._zoom_out()
+        qapp.processEvents()
+        assert dlg._zoom is None, "fit 态点缩小不应产生更小 zoom"
+        assert dlg.image_label.pixmap().width() == w0, "fit 态点缩小显示必须不变"
+        # ② 放大后连续缩小,缩到底回到 fit(zoom=None),像素不小于默认
+        #    (±26 容差:fit 按视口算、zoom 按浮点算,含取整/滚动条抖动)
+        dlg._set_zoom(2.5)
+        for _ in range(10):
+            dlg._zoom_out()
+            qapp.processEvents()
+        assert dlg._zoom is None, "缩到底应回到适应窗口(fit)模式"
+        w_final = dlg.image_label.pixmap().width()
+        assert w_final >= w0 - 26, f"缩小不能低于默认大小: 默认 {w0}, 实际 {w_final}"
+        dlg._zoom_out()
+        qapp.processEvents()
+        assert dlg.image_label.pixmap().width() == w_final, "到底后再点缩小无变化"
+    finally:
+        dlg.close()
+
+
+def test_run_start_and_case_switch_rows(win):
+    """开始执行/用例切换都要在执行结果表里可见(以前跑起来表格一片空白)"""
+    win.result_table.setRowCount(0)
+    win.on_worker_status("连接设备...")
+    assert win.result_table.rowCount() == 0, "连接阶段不插行"
+    win.on_worker_status("执行用例: 全局清扫")
+    win.on_worker_status("重启 APP(划区清扫)")
+    win.on_worker_status("执行用例: 划区清扫")
+    rows = [(win.result_table.item(r, 2).text(), win.result_table.item(r, 2).background().color().name())
+            for r in range(win.result_table.rowCount())]
+    assert rows == [("▶ 执行用例: 全局清扫", "#f0f4fa"),
+                    ("▶ 执行用例: 划区清扫", "#f0f4fa")], "只有用例开始插行,重启 APP 不插"
+    assert win.tabs.currentIndex() == 0, "应自动切到「执行结果」页"
+    # 开始行与总结行共存:开始 → 结束
+    win._append_result_row("—", "▶ 开始执行", "2 个用例 × 1 轮 · 设备 X", "#e8f0fe")
+    win.on_run_finished(True, "全部通过(1 轮 × 2 个用例)")
+    last = win.result_table.rowCount() - 1
+    assert win.result_table.item(last, 2).text() == "✔ 全部通过"
+
+
+def test_case_state_lamp(win_with_cases, qapp):
+    """用例状态灯:未执行置灰(默认)、执行中黄、通过绿、失败红;
+    状态存在 CASE_STATE_ROLE 上,delegate 绘制(名字后面),勾选框保持原生"""
+    from PySide6.QtCore import Qt
+    import gui.main_window as mw
+    win = win_with_cases
+    it0 = win.case_list.item(0)
+    assert it0.data(mw.CASE_STATE_ROLE) == "idle", "未执行默认灰灯"
+    assert not it0.icon().isNull(), "灯用 icon 位(勾选框后、用例名前,原生布局不重叠)"
+    # 信号驱动的状态切换(set_case_state 由 case_started/finished 信号调用)
+    path = it0.data(Qt.UserRole)
+    win.set_case_state(path, "running")
+    assert it0.data(mw.CASE_STATE_ROLE) == "running"
+    win.set_case_state(path, "passed")
+    assert it0.data(mw.CASE_STATE_ROLE) == "passed"
+    win.set_case_state(path, "failed")
+    assert it0.data(mw.CASE_STATE_ROLE) == "failed"
+    # 四种灯的 pixmap 颜色可区分
+    for st in ("idle", "running", "passed", "failed"):
+        pm = mw.lamp_pixmap(st)
+        assert not pm.isNull() and pm.width() == 12
+    # RunWorker 有 case_started/case_finished 信号
+    from gui.runner_thread import RunWorker
+    assert hasattr(RunWorker, "case_started") and hasattr(RunWorker, "case_finished")
+    # 灯渲染冒烟:viewport grab 不崩且非空白
+    win.case_list.resize(200, 200)
+    win.case_list.parentWidget().show()
+    qapp.processEvents()
+    assert not win.case_list.grab().isNull()
+    win.case_list.parentWidget().close()
+
+
+def test_case_lamp_rerun_resets(qapp, monkeypatch, tmp_path):
+    """重新执行:点运行瞬间所有勾选用例灯重置为黄;结束信号再各自变绿/红"""
+    from PySide6.QtCore import Qt
+    import gui.main_window as mw
+    d = tmp_path / "Test_cases"
+    d.mkdir()
+    names = ["全局清扫", "划区清扫"]
+    for n in names:
+        (d / f"{n}.yaml").write_text(
+            "module: %s\ncases: [{name: a, steps: []}]\n" % n, encoding="utf-8")
+    monkeypatch.setattr(mw, "CASES_DIR", str(d), raising=False)
+    monkeypatch.setattr(mw, "CONFIG_PATH", str(tmp_path / "config.yaml"), raising=False)
+    w = mw.MainWindow()
+    try:
+        paths = [w.case_list.item(i).data(Qt.UserRole) for i in range(w.case_list.count())]
+        # 模拟上一次跑完:一绿一红
+        w.set_case_state(paths[0], "passed")
+        w.set_case_state(paths[1], "failed")
+        # 重新执行:点运行瞬间全部重置黄
+        w._reset_case_lamps_to_running(paths)
+        assert [w.case_list.item(i).data(mw.CASE_STATE_ROLE) for i in range(2)] == ["running", "running"]
+        # 逐个跑完 → 绿/红(case_started 也会先确认黄,幂等)
+        w.set_case_state(paths[0], "running")
+        w.set_case_state(paths[0], "passed")
+        assert w.case_list.item(0).data(mw.CASE_STATE_ROLE) == "passed"
+        assert w.case_list.item(1).data(mw.CASE_STATE_ROLE) == "running"
+        w.set_case_state(paths[1], "failed")
+        assert w.case_list.item(1).data(mw.CASE_STATE_ROLE) == "failed"
+    finally:
+        w.close()
+
+
+# ── RunWorker.run 全链路冒烟(2026-09-21 审查补充:线程主体+前置可见性从未被测) ──
+
+def test_runworker_run_smoke(qapp, monkeypatch, tmp_path):
+    """不碰真机跑通 RunWorker.run:前置行(带电量)→ 步骤行 → 完成信号 → 报告落盘"""
+    import types
+    from PIL import Image
+    from gui import runner_thread as rt
+    from gui.runner_thread import RunWorker
+    from PySide6.QtCore import Qt
+
+    # 1) 用例文件:一条用例一个纯等待步骤
+    d = tmp_path / "Test_cases"
+    d.mkdir()
+    case_file = d / "全局清扫.yaml"
+    case_file.write_text(
+        "module: 全局清扫\ncases:\n  - name: 冒烟\n    steps:\n"
+        "      - desc: 等一下\n        wait: 0.1\n", encoding="utf-8")
+
+    # 2) mock 设备连接(u2 在 run() 内延迟导入)
+    import uiautomator2 as u2
+    fake_d = types.SimpleNamespace(
+        implicitly_wait=lambda t: None,
+        dump_hierarchy=lambda: '<node text="100%"/><node text="地图编辑"/>',
+        screenshot=lambda path=None, format=None: None,
+    )
+    monkeypatch.setattr(u2, "connect", lambda dev: fake_d)
+
+    # 3) mock session 与配置
+    monkeypatch.setattr(rt.session, "prepare",
+                        lambda *a, **kw: {"restart": True, "charging": True,
+                                          "map_load": True, "battery": True})
+    monkeypatch.setattr(rt.session, "restart_app", lambda d_, cfg, enter_page=True: None)
+    monkeypatch.setattr(rt.session, "get_battery_level", lambda d_: 78)
+    monkeypatch.setattr(rt, "load_config",
+                        lambda: {"runner": {"step_interval": 0, "default_timeout": 1,
+                                            "click_timeout": 1},
+                                 "app": {"package": "p", "name": "x"},
+                                 "target_device": "SE3L"})
+
+    # 4) 报告隔离到 tmp
+    report_path = tmp_path / "rep.xlsx"
+    monkeypatch.setattr(rt, "ExcelReport",
+                        lambda: __import__("core.excel_report", fromlist=["ExcelReport"])
+                        .ExcelReport(path=str(report_path)))
+
+    worker = RunWorker("fake-dev", [str(case_file)],
+                       {"restart": True, "charging": True,
+                        "map_load": True, "battery": True}, 1)
+    steps, done = [], []
+    worker.step_done.connect(lambda r: steps.append(dict(r)))
+    worker.finished_run.connect(lambda ok, msg: done.append((ok, msg)))
+    worker.run()          # 同步调用线程主体(不起 QThread,离屏可测)
+
+    # 前置 4 行:全部 PASS,充电/电量行带实际电量
+    pre = [s for s in steps if s["desc"].startswith("前置-")]
+    assert len(pre) == 4 and all(s["passed"] for s in pre)
+    descs = {s["desc"] for s in pre}
+    assert "前置-等待充电(当前电量 78%)" in descs
+    assert "前置-电量≥50%(当前电量 78%)" in descs
+    assert "前置-重启APP" in descs and "前置-地图加载" in descs
+    # 步骤行 1 条 PASS
+    body = [s for s in steps if not s["desc"].startswith("前置-")]
+    assert len(body) == 1 and body[0]["passed"] and body[0]["desc"] == "等一下"
+    # 完成信号 + 报告落盘
+    assert done == [(True, "全部通过(1 轮 × 1 个用例)")]
+    assert report_path.exists()
+
+
+def test_result_table_layout_rules(win):
+    """执行结果表格布局:步骤/错误信息拉伸,结果列自适应中文(修复显示不全)"""
+    from PySide6.QtWidgets import QHeaderView
+    assert win.result_table.horizontalHeader().sectionResizeMode(1) == QHeaderView.Stretch
+    assert win.result_table.horizontalHeader().sectionResizeMode(4) == QHeaderView.Stretch
+    assert win.result_table.horizontalHeader().sectionResizeMode(2) == QHeaderView.ResizeToContents
+    assert [win.result_table.horizontalHeaderItem(i).text() for i in range(5)] == \
+        ["#", "步骤", "结果", "耗时", "错误信息"]
+    # 长文本行有 tooltip(悬停看全文)
+    win.on_step_done({"desc": "很长的步骤描述" * 20, "passed": True, "error": "很长的错误" * 20})
+    assert win.result_table.item(0, 1).toolTip() != ""
+    assert win.result_table.item(0, 4).toolTip() != ""
+
+
+def test_on_run_finished_always_unlocks(win, monkeypatch):
+    """★ 结束处理即使中途抛异常,也必须解锁卡片区并清掉 worker
+    (否则界面永久锁死,无法编辑/展开步骤 —— 用户实测 bug)"""
+    from PySide6.QtWidgets import QPushButton
+    win.on_new()
+    win._set_locked(True)
+    win.worker = object()                       # 模拟执行中的 worker 残留
+    assert not win.cards_scroll.widget().isEnabled()
+    # 注入显示逻辑异常
+    def boom(*a, **k):
+        raise RuntimeError("显示失败")
+    monkeypatch.setattr(win, "_append_result_row", boom)
+    win.on_run_finished(True, "消息")           # 不应向外抛,且必须恢复
+    assert win.worker is None, "worker 必须被清理"
+    assert win.cards_scroll.widget().isEnabled(), "卡片区必须恢复可用(可展开/编辑)"
+    assert win.run_btn.isEnabled()
+    # 正常路径也验证一次
+    win.on_run_finished(False, "存在失败步骤")
+    assert win.worker is None
+
+
+def test_window_title_has_version(win):
+    """GUI 标题 = 名称 + 版本号(用户要求;版本与 git tag 对应)"""
+    import gui.main_window as mw
+    assert "v" + mw.APP_VERSION in win.windowTitle()
+    assert win.windowTitle().startswith("扫地机用例编排器 v")

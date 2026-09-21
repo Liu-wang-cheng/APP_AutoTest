@@ -1,0 +1,48 @@
+case_order: 10
+module: 禁区设置
+
+cases:
+  - name: 禁区设置完整流程
+    priority: P1
+    wait: 5
+    steps:
+      - desc: 操作前截图（对比基准）
+        screenshot: screenshots/禁区设置_01_操作前.png
+
+      - desc: 点击地图编辑
+        click: 地图编辑
+
+      - desc: 进入禁区编辑
+        click: 禁区编辑
+
+      - desc: 添加扫拖禁区
+        find_click: 扫拖禁区,禁过禁区
+
+      - desc: 添加拖地禁区
+        click: 拖地禁区
+
+      - desc: 保存禁区
+        click: 保存
+        screenshot: screenshots/禁区设置_02_禁区保存.png
+
+      - desc: 点击地图编辑
+        click: 地图编辑
+
+      - desc: 进入禁区编辑
+        click: 禁区编辑
+
+      - desc: 切换至虚拟墙
+        click: 虚拟墙
+
+      - desc: 添加虚拟墙
+        click: =虚拟墙#2
+
+      - desc: 保存虚拟墙
+        click: 保存
+        screenshot: screenshots/禁区设置_03_虚拟墙保存.png
+
+      - desc: 对比设置前后地图
+        diff: screenshots/禁区设置_01_操作前.png
+        threshold: 0.99   # diff 用: 相似度低于 99% 才算"地图变了"; 必须 <1, 见 _do_compare
+        screenshot: screenshots/禁区设置_04_主界面地图.png
+

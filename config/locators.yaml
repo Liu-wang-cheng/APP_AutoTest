@@ -1,0 +1,152 @@
+# 定位器集中配置: 换 APP 时主要改这个文件。
+# 用例 YAML 通过 ${section.key} 引用,如 click: ${TuyaT4.start_clean}
+#
+# 说明: 定位串支持三种形式 ——
+#   文本             "确认"         textContains,回退 description
+#   =精确文本        "= 快速建图"   精确 text(注意源 APP 的文本带前导空格)
+#   XPath           "//*[@text='X']"
+#   模板图           "开始清扫.png"
+#
+# TuyaT4 section 由 D:\APP_Test_v1.4\project_config\Tuya_C22.yaml 迁移而来,
+# 复杂层级 XPath 已规范化为单行(XPath 中 / 前后的空白无意义)。
+
+通用:
+  确认按钮: 确认
+  返回按钮: 返回
+
+# spot_clean(定点清扫复合动作)的 APP 适配参数:
+# 合并优先级 = 代码内置默认 < 本段 < 用例步骤参数;换 APP 只改这一段
+spot_clean:
+  mode_btn: 切换清扫模式.png       # 打开清扫模式选择的模板图
+  mode_text: 指哪扫哪              # 模式菜单里的选项文本
+  confirm: 确认                    # 模式确认按钮
+  mode_dialog_title: 选择清扫模式  # 模式选单标题(用于确认选单已关闭)
+  start_btn: 开始清扫.png          # 开始清扫模板图
+  state_texts: 指哪扫哪中,局部清扫,清扫中   # 已进入清扫状态的标志文本(逗号分隔)
+  dock_texts: 充电中,充电完成      # 清扫结束回充的标志文本(逗号分隔)
+  expand_btn: 展开清扫数据.png     # 清扫数据面板的展开模板图(箭头朝下)
+  collapse_btn: 收起清扫数据.png   # 面板的收起模板图(箭头朝上),匹配不到时原位收回
+  panel_text: 清扫面积             # 面板已展开的标志文本
+  area_key: 面积                   # 抓取/对比用的面积关键词
+  time_key: 时间                   # 抓取/对比用的时长关键词
+  max_rooms: 3                     # 点位无效时最多换几个分区
+
+勿扰:
+  开关: 勿扰打开.png
+
+预约清扫:
+  添加按钮: 添加预约.png
+  确认按钮: 确认
+
+清扫记录:
+  最新记录: 清扫记录
+
+# ══════════ 涂鸦 C22/T4 (v1.4 迁移) ══════════
+TuyaT4:
+  # ── 界面导航 ──
+  back: "//*[@content-desc='TopBar_Btn_Back']/android.view.View[1]"
+  back_1: "//*[@resource-id='com.tuya.smartiot:id/thing_fragment_reactroot']/android.widget.FrameLayout[1]/android.view.ViewGroup[1]/android.view.ViewGroup[1]/android.view.ViewGroup[1]/android.view.ViewGroup[2]/android.view.ViewGroup[1]/android.view.ViewGroup[1]/android.view.ViewGroup[1]/android.view.ViewGroup[1]/android.view.ViewGroup[2]/android.view.ViewGroup[1]/android.view.ViewGroup[1]/android.view.View[1]"
+  settings: "//android.widget.FrameLayout[@resource-id='com.tuya.smartiot:id/thing_fragment_reactroot']/android.widget.FrameLayout/android.view.ViewGroup/android.view.ViewGroup/android.view.ViewGroup/android.view.ViewGroup/android.view.ViewGroup[2]/android.view.ViewGroup/android.view.ViewGroup[1]/android.view.ViewGroup/android.view.ViewGroup[1]/android.view.ViewGroup[12]/android.widget.ImageView[2]"
+  message: "//*[@text='设备信息']"
+
+  # ── 地图管理 ──
+  map_manage: "//*[@text='地图管理']"
+  reset_map: "//*[@text='重置首页地图']"
+  save_map: "//*[@text='保存首页地图']"
+  load_map: "//*[@text='地图载入主页']"
+  create_maps: "//*[@text=' 快速建图']"
+  map_back: "//*[@resource-id='com.tuya.smartiot:id/thing_fragment_reactroot']/android.widget.FrameLayout[1]/android.view.ViewGroup[1]/android.view.ViewGroup[1]/android.view.ViewGroup[1]/android.view.ViewGroup[3]/android.view.ViewGroup[2]/android.view.ViewGroup[1]/android.view.ViewGroup[1]/android.view.ViewGroup[1]/android.view.ViewGroup[1]/android.view.ViewGroup[2]/android.view.ViewGroup[1]/android.view.View[1]"
+
+  # ── 回充 / 清扫 ──
+  recharge: "//*[@resource-id='com.tuya.smartiot:id/thing_fragment_reactroot']/android.widget.FrameLayout[1]/android.view.ViewGroup[1]/android.view.ViewGroup[1]/android.view.ViewGroup[1]/android.view.ViewGroup[1]/android.view.ViewGroup[2]/android.view.ViewGroup[1]/android.view.ViewGroup[1]/android.view.ViewGroup[1]/android.view.ViewGroup[1]/android.view.ViewGroup[9]/android.widget.ImageView[1]"
+  recharge_verify: "=确认"
+  start_clean: "//*[@resource-id='com.tuya.smartiot:id/thing_fragment_reactroot']/android.widget.FrameLayout[1]/android.view.ViewGroup[1]/android.view.ViewGroup[1]/android.view.ViewGroup[1]/android.view.ViewGroup[1]/android.view.ViewGroup[2]/android.view.ViewGroup[1]/android.view.ViewGroup[1]/android.view.ViewGroup[1]/android.view.ViewGroup[1]/android.view.ViewGroup[10]/android.widget.ImageView[1]"
+  start_clean_1: "//*[@resource-id='com.tuya.smartiot:id/thing_fragment_reactroot']/android.widget.FrameLayout[1]/android.view.ViewGroup[1]/android.view.ViewGroup[1]/android.view.ViewGroup[1]/android.view.ViewGroup[1]/android.view.ViewGroup[2]/android.view.ViewGroup[1]/android.view.ViewGroup[1]/android.view.ViewGroup[1]/android.view.ViewGroup[3]/android.view.ViewGroup[9]/android.widget.ImageView[1]"
+
+  # ── 清洁偏好 / 挡位 ──
+  clean_set: "//*[@text='清洁偏好']"
+  suction_0: "//android.widget.ScrollView/android.view.ViewGroup[1]/android.view.ViewGroup[1]/android.view.ViewGroup[5]/android.widget.TextView[1]"
+  suction_1: "//*[@text=' 节能']"
+  suction_2: "//*[@text=' 标准']"
+  suction_3: "//*[@text=' 强力']"
+  suction_4: "//*[@text=' 超强']"
+  water_0: "//android.widget.ScrollView/android.view.ViewGroup[1]/android.view.ViewGroup[1]/android.view.ViewGroup[1]/android.widget.TextView[1]"
+  water_1: "//*[@text=' 低']"
+  water_2: "//*[@text=' 中']"
+  water_3: "//*[@text=' 高']"
+  shift_verify: "//*[@resource-id='android:id/content']/android.widget.FrameLayout[1]/android.view.ViewGroup[1]/android.view.ViewGroup[1]/android.view.ViewGroup[1]/android.view.ViewGroup[1]/android.view.ViewGroup[1]/android.view.ViewGroup[1]/android.view.ViewGroup[1]"
+
+  # ── 清扫模式 ──
+  global_clean: "//*[@text='规划清扫']"
+  selection_clean: "//*[@text='选区清扫']"
+  zoning_clean: "//*[@text='划区清扫']"
+  point_clean: "//*[@text='指哪扫哪']"
+  clean_mode_verify: "= 确认"
+  clean_area: "//*[@text='清扫区域']"
+
+  # ── 地图 / 房间编辑 ──
+  map_edit: "//*[@text='地图编辑']"
+  map_custom: "//*[@text='地图自定义编辑']"
+  room_merge: "//*[@text='区域合并']"
+  room_merge_verify: "//*[@text='合并']"
+  room_part: "//*[@text='区域分割']"
+  room_part_verify: "//*[@text='分割']"
+  room_rename: "//*[@text='区域命名']"
+  room_rename_verify: "//*[@text='保存']"
+  room_repartition: "//*[@text='恢复分区']"
+  room_back: "//*[@text='取消']"
+
+  # ── 定制模式 ──
+  room_custom: "//*[@text='定制模式']"
+  room_clean_frequency_x2: "//*[@text='2次']"
+  room_clean_frequency_x1: "//*[@text='1次']"
+  room_suction_1: "//*[@text='静音']"
+  room_suction_2: "//*[@text='正常']"
+  room_suction_3: "//*[@text='强力']"
+  room_suction_4: "//*[@text='超强']"
+  room_effluent_1: "//*[@text='低档']"
+  room_effluent_2: "//*[@text='中档']"
+  room_effluent_3: "//*[@text='高档']"
+  room_custom_verify: "//*[@text='保存']"
+  room_custom_verify_1: "//*[@text='确定']"
+  room_sequence: "//*[@text='清扫顺序']"
+
+  # ── 禁区 / 虚拟墙 ──
+  map_restricted_area: "//*[@text='禁区编辑']"
+  mop_restricted_area: "//*[@text='拖地禁区']"
+  sweeping_restricted_area: "//*[@text='扫拖禁区']"
+  save_restricted_area: "//*[@text='保存']"
+  virtual_wall: "//*[@text='虚拟墙']"
+  append_virtual_wall: "//*[@resource-id='com.tuya.smartiot:id/thing_fragment_reactroot']/android.widget.FrameLayout[1]/android.view.ViewGroup[1]/android.view.ViewGroup[1]/android.view.ViewGroup[1]/android.view.ViewGroup[1]/android.view.ViewGroup[2]/android.view.ViewGroup[1]/android.view.ViewGroup[1]/android.view.ViewGroup[1]/android.view.ViewGroup[1]/android.view.ViewGroup[3]/android.view.ViewGroup[5]/android.view.ViewGroup[1]/android.widget.ImageView[2]"
+
+  # ── 勿扰模式 ──
+  nodisturb_mode: "//*[@text='勿扰模式']"
+  nodisturb_switch: "//*[@content-desc='SwitchButton']/android.view.ViewGroup[1]"
+  nodisturb_start: "//*[@text='开始时间']"
+  nodisturb_stop: "//*[@text='结束时间']"
+  nodisturb_time_verify: "//*[@text='确认']"
+
+  # ── 预约清扫 ──
+  timing_clean: "//*[@text='预约']"
+  add_timing: "//*[@text='添加']"
+  add_timing_1: "//*[@resource-id='com.tuya.smartiot:id/thing_fragment_reactroot']/android.widget.FrameLayout[1]/android.view.ViewGroup[1]/android.view.ViewGroup[1]/android.view.ViewGroup[1]/android.view.ViewGroup[3]/android.view.ViewGroup[2]/android.view.ViewGroup[1]/android.view.ViewGroup[1]/android.view.ViewGroup[1]/android.view.ViewGroup[3]/android.view.ViewGroup[1]/android.view.ViewGroup[1]/android.view.ViewGroup[1]/android.view.View[1]"
+  timing_clean_verify: "= 确认"
+  timing_clean_suction: "//*[@text='吸力']"
+  timing_clean_suction_1: "//*[@text='安静']"
+  timing_clean_water: "//*[@text='水量设置']"
+  timing_clean_water_1: "//*[@text='低']"
+
+  # ── 清扫记录 ──
+  clean_record: "//*[@text='清扫记录']"
+  clean_record_details: "//android.widget.ScrollView/android.view.ViewGroup[1]/android.view.ViewGroup[2]"
+
+  # ── 遥控模式 ──
+  manual_control: "//*[@text='遥控控制']"
+  advance: "//*[@resource-id='com.tuya.smartiot:id/thing_fragment_reactroot']/android.widget.FrameLayout[1]/android.view.ViewGroup[1]/android.view.ViewGroup[1]/android.view.ViewGroup[1]/android.view.ViewGroup[3]/android.view.ViewGroup[2]/android.view.ViewGroup[1]/android.view.ViewGroup[1]/android.view.ViewGroup[1]/android.view.ViewGroup[1]/android.view.ViewGroup[2]/android.view.ViewGroup[1]"
+  turn_left: "//*[@resource-id='com.tuya.smartiot:id/thing_fragment_reactroot']/android.widget.FrameLayout[1]/android.view.ViewGroup[1]/android.view.ViewGroup[1]/android.view.ViewGroup[1]/android.view.ViewGroup[3]/android.view.ViewGroup[2]/android.view.ViewGroup[1]/android.view.ViewGroup[1]/android.view.ViewGroup[1]/android.view.ViewGroup[1]/android.view.ViewGroup[2]/android.view.ViewGroup[2]"
+  turn_right: "//*[@resource-id='com.tuya.smartiot:id/thing_fragment_reactroot']/android.widget.FrameLayout[1]/android.view.ViewGroup[1]/android.view.ViewGroup[1]/android.view.ViewGroup[1]/android.view.ViewGroup[3]/android.view.ViewGroup[2]/android.view.ViewGroup[1]/android.view.ViewGroup[1]/android.view.ViewGroup[1]/android.view.ViewGroup[1]/android.view.ViewGroup[2]/android.view.ViewGroup[4]"
+  exit_control: "//*[@text=' 退出遥控控制']"
+
+  # ── 其他 ──
+  positioning_robot: "//*[@text='寻找机器']"
+  positioning_robot_1: "//*[@text='点击寻找']"
