@@ -891,8 +891,10 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle(f"APP 自动化测试平台 v{APP_VERSION}")
-        # 应用图标(自绘: 蓝底白勾 + 状态灯,与 GUI 主题一致)
-        _icon_path = os.path.join(_ASSETS, "app_icon.png")
+        # 应用图标(自绘 乐动品牌融合): ico 含 16~256 多尺寸(高分屏不发虚)
+        _icon_path = os.path.join(_ASSETS, "app_icon.ico")
+        if not os.path.isfile(_icon_path):
+            _icon_path = os.path.join(_ASSETS, "app_icon.png")
         if os.path.isfile(_icon_path):
             self.setWindowIcon(QIcon(_icon_path))
         self.case_path = None

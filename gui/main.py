@@ -37,11 +37,13 @@ def main():
 
     setup_logger()
     app = QApplication(sys.argv)
-    # 应用图标(任务栏/窗口):自绘 蓝底白勾+状态灯
+    # 应用图标(任务栏/窗口):自绘 乐动品牌融合(O传感器+对勾);ico 含 16~256 多尺寸
     from PySide6.QtGui import QIcon
     import os
-    icon_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                             "assets", "app_icon.png")
+    assets = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets")
+    icon_path = os.path.join(assets, "app_icon.ico")
+    if not os.path.isfile(icon_path):
+        icon_path = os.path.join(assets, "app_icon.png")
     if os.path.isfile(icon_path):
         app.setWindowIcon(QIcon(icon_path))
     win = MainWindow()

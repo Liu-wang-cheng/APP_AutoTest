@@ -1136,8 +1136,9 @@ def test_on_precondition_failed_resets_lamps(win, monkeypatch):
 def test_app_icon_set(win):
     """应用图标已设置(自绘 app_icon.png,任务栏/窗口标题用)"""
     import gui.main_window as mw
-    icon_path = os.path.join(mw._ASSETS, "app_icon.png")
-    assert os.path.isfile(icon_path)
+    icon_path = os.path.join(mw._ASSETS, "app_icon.ico")
+    assert os.path.isfile(icon_path), "ico 含 16~256 多尺寸(高分屏清晰)"
+    assert os.path.isfile(os.path.join(mw._ASSETS, "app_icon.png"))
     assert not win.windowIcon().isNull()
     pm = win.windowIcon().pixmap(64, 64)
     assert pm.width() == 64 and not pm.isNull()
