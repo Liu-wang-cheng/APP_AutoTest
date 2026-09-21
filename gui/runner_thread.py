@@ -50,6 +50,7 @@ class RunWorker(QThread):
     finished_run = Signal(bool, str)  # 结束(是否全部通过, 摘要消息)
     case_started = Signal(str, str)   # 单条用例开始(文件路径, 用例名)→ 用例列表状态灯
     case_finished = Signal(str, str, bool)  # 单条用例结束(路径, 用例名, 是否通过)
+    precondition_failed = Signal(str)  # 前置检查未通过(阻断详情)→ GUI 弹窗提醒
 
     def __init__(self, device_id, case_files, preconditions, repeat=1, parent=None):
         super().__init__(parent)
@@ -128,6 +129,15 @@ class RunWorker(QThread):
                             self.step_done.emit({"desc": desc, "passed": bool(ok),
                                                  "error": "" if ok else "前置未通过",
                                                  "screenshot": ""})
+                        # ★ 任一勾选的前置项未通过 → 阻断:本轮不再执行任何用例(用户要求)
+                        failed = [pre_step_desc(key).replace("前置-", "")
+                                  for key, ok in pre_results.items() if ok is False]
+                        if failed:
+                            detail = "、".join(failed)
+                            self.log_line.emit(f"[前置] 未通过,阻断本轮执行: {detail}")
+                            self.precondition_failed.emit(detail)
+                            self.finished_run.emit(False, f"前置检查未通过: {detail}")
+                            return
                     else:
                         self.status.emit(f"重启 APP({case_name})...")
                         session.restart_app(d, cfg)

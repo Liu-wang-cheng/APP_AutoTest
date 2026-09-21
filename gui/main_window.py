@@ -1203,6 +1203,15 @@ class MainWindow(QMainWindow):
                 self.case_list.setCurrentRow(i)
                 break
 
+    def on_precondition_failed(self, detail):
+        """前置检查未通过(本轮已阻断):弹窗提醒 + 用例灯重置灰(未真正执行)"""
+        if self.worker:
+            for fp in self.worker.case_files:
+                self.set_case_state(fp, "idle")
+        QMessageBox.warning(self, "前置检查未通过",
+                            f"已阻断本轮执行,后续用例不再运行:\n{detail}\n\n"
+                            "请处理设备状态(充电/网络/APP)后重新运行。")
+
     def _reset_case_lamps_to_running(self, paths):
         """点运行的瞬间:全部勾选用例灯变黄(重新执行时先覆盖上次的绿/红)"""
         for p in paths:
@@ -1827,6 +1836,7 @@ class MainWindow(QMainWindow):
             lambda fp, name: self.set_case_state(fp, "running"))
         self.worker.case_finished.connect(
             lambda fp, name, ok: self.set_case_state(fp, "passed" if ok else "failed"))
+        self.worker.precondition_failed.connect(self.on_precondition_failed)
         # ★ 开始执行即在结果表里留痕(浅蓝开始行)—— 以前第一条步骤完成前
         #   表格一片空白,用户不知道跑没跑起来(用户反馈)
         self._append_result_row(

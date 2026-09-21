@@ -1066,3 +1066,67 @@ def test_window_title_has_version(win):
     import gui.main_window as mw
     assert "v" + mw.APP_VERSION in win.windowTitle()
     assert win.windowTitle().startswith("扫地机用例编排器 v")
+
+
+def test_runworker_precondition_failure_blocks(qapp, monkeypatch, tmp_path):
+    """★ 前置检查未通过 → 阻断本轮:前置 FAIL 行落表/报告、无任何步骤行、
+    precondition_failed 信号带详情、finished_run(False) 带原因(用户要求)"""
+    import types
+    from gui import runner_thread as rt
+    from gui.runner_thread import RunWorker
+
+    d = tmp_path / "Test_cases"
+    d.mkdir()
+    case_file = d / "全局清扫.yaml"
+    case_file.write_text(
+        "module: 全局清扫\ncases:\n  - name: 冒烟\n    steps:\n"
+        "      - desc: 等一下\n        wait: 0.1\n", encoding="utf-8")
+
+    import uiautomator2 as u2
+    fake_d = types.SimpleNamespace(implicitly_wait=lambda t: None)
+    monkeypatch.setattr(u2, "connect", lambda dev: fake_d)
+    monkeypatch.setattr(rt.session, "prepare",
+                        lambda *a, **kw: {"restart": True, "charging": False,
+                                          "map_load": True, "battery": False})
+    monkeypatch.setattr(rt.session, "get_battery_level", lambda d_: 20)
+    monkeypatch.setattr(rt, "load_config",
+                        lambda: {"runner": {"step_interval": 0}, "app": {"package": "p"},
+                                 "target_device": "SE3L"})
+    report_path = tmp_path / "rep.xlsx"
+    monkeypatch.setattr(rt, "ExcelReport",
+                        lambda: __import__("core.excel_report", fromlist=["ExcelReport"])
+                        .ExcelReport(path=str(report_path)))
+
+    worker = RunWorker("fake-dev", [str(case_file)],
+                       {"restart": True, "charging": True,
+                        "map_load": True, "battery": True}, 1)
+    steps, done, pre_fail = [], [], []
+    worker.step_done.connect(lambda r: steps.append(dict(r)))
+    worker.finished_run.connect(lambda ok, msg: done.append((ok, msg)))
+    worker.precondition_failed.connect(lambda detail: pre_fail.append(detail))
+    worker.run()
+
+    # 前置 4 行落表(2 FAIL),但用例步骤一行都没有(阻断)
+    assert len([s for s in steps if s["desc"].startswith("前置-")]) == 4
+    assert not [s for s in steps if not s["desc"].startswith("前置-")], "阻断后不得执行用例步骤"
+    assert pre_fail == ["等待充电、电量≥50%"], "阻断信号应带未通过项详情"
+    assert done and not done[0][0] and "前置检查未通过" in done[0][1]
+    assert report_path.exists(), "阻断时已执行部分(前置行)也要保住报告"
+
+
+def test_on_precondition_failed_resets_lamps(win, monkeypatch):
+    """弹窗槽:勾选用例灯重置为灰(未真正执行);弹窗调用被 mock 不阻塞"""
+    import gui.main_window as mw
+    calls = []
+    monkeypatch.setattr(mw.QMessageBox, "warning",
+                        lambda *a, **k: calls.append(a) or None)
+    class _W:
+        case_files = ["C:/a.yaml", "C:/b.yaml"]
+    win.worker = _W()
+    for fp in _W.case_files:
+        win.set_case_state(fp, "running")
+    win.on_precondition_failed("等待充电、电量≥50%")
+    assert [win._case_states[p] for p in _W.case_files] == ["idle", "idle"], \
+        "阻断后用例灯应重置为灰(未真正执行)"
+    assert calls, "应弹出提醒窗口"
+    win.worker = None
