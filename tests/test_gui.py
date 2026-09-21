@@ -1065,7 +1065,8 @@ def test_window_title_has_version(win):
     """GUI 标题 = 名称 + 版本号(用户要求;版本与 git tag 对应)"""
     import gui.main_window as mw
     assert "v" + mw.APP_VERSION in win.windowTitle()
-    assert win.windowTitle().startswith("扫地机用例编排器 v")
+    assert win.windowTitle() == f"扫地机用例编排器 v{mw.APP_VERSION}"
+    assert "vacuum_app_test" not in win.windowTitle(), "源项目名残留必须去掉"
 
 
 def test_runworker_precondition_failure_blocks(qapp, monkeypatch, tmp_path):

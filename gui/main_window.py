@@ -890,7 +890,7 @@ class MainWindow(QMainWindow):
 
     def __init__(self):
         super().__init__()
-        self.setWindowTitle(f"扫地机用例编排器 v{APP_VERSION} - vacuum_app_test")
+        self.setWindowTitle(f"扫地机用例编排器 v{APP_VERSION}")
         self.case_path = None
         self.data = self._empty_data()
         self.case_idx = 0
