@@ -37,6 +37,13 @@ def main():
 
     setup_logger()
     app = QApplication(sys.argv)
+    # 应用图标(任务栏/窗口):自绘 蓝底白勾+状态灯
+    from PySide6.QtGui import QIcon
+    import os
+    icon_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                             "assets", "app_icon.png")
+    if os.path.isfile(icon_path):
+        app.setWindowIcon(QIcon(icon_path))
     win = MainWindow()
     win.show()
     win.raise_()

@@ -1065,7 +1065,7 @@ def test_window_title_has_version(win):
     """GUI 标题 = 名称 + 版本号(用户要求;版本与 git tag 对应)"""
     import gui.main_window as mw
     assert "v" + mw.APP_VERSION in win.windowTitle()
-    assert win.windowTitle() == f"APP 自动化测试平台 v{mw.APP_VERSION} · 扫地机用例编排"
+    assert win.windowTitle() == f"APP 自动化测试平台 v{mw.APP_VERSION}"
     assert "vacuum_app_test" not in win.windowTitle(), "源项目名残留必须去掉"
 
 
@@ -1131,3 +1131,13 @@ def test_on_precondition_failed_resets_lamps(win, monkeypatch):
         "阻断后用例灯应重置为灰(未真正执行)"
     assert calls, "应弹出提醒窗口"
     win.worker = None
+
+
+def test_app_icon_set(win):
+    """应用图标已设置(自绘 app_icon.png,任务栏/窗口标题用)"""
+    import gui.main_window as mw
+    icon_path = os.path.join(mw._ASSETS, "app_icon.png")
+    assert os.path.isfile(icon_path)
+    assert not win.windowIcon().isNull()
+    pm = win.windowIcon().pixmap(64, 64)
+    assert pm.width() == 64 and not pm.isNull()
