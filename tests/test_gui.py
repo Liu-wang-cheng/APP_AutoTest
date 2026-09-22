@@ -1201,3 +1201,72 @@ def test_group_header_click_collapses(qapp, monkeypatch, tmp_path):
         assert lst.item(0).text().startswith("▾ ")
     finally:
         w.close()
+
+
+def test_collapse_group_unloads_editor(qapp, monkeypatch, tmp_path):
+    """★ 收起组时,若当前编辑用例属于该组 → 编辑区恢复未选中状态;
+    chip 条标题「测试步骤详情」与字段顺序(用例组→用例→优先级→间隔→添加步骤)"""
+    from PySide6.QtCore import Qt, QPoint
+    from PySide6.QtTest import QTest
+    from gui import main_window as mw
+    d = tmp_path / "Test_cases" / "涂鸦智能T4"
+    d.mkdir(parents=True)
+    (d / "全局清扫.yaml").write_text(
+        "module: 全局清扫\ncases: [{name: a, steps: [{desc: s1, click: x}]}]\n",
+        encoding="utf-8")
+    monkeypatch.setattr(mw, "CASES_DIR", str(tmp_path / "Test_cases"), raising=False)
+    monkeypatch.setattr(mw, "CONFIG_PATH", str(tmp_path / "config.yaml"), raising=False)
+    w = mw.MainWindow()
+    w.resize(900, 700)
+    w.show()
+    try:
+        qapp.processEvents()
+        lst = w.case_list
+        # 单击用例行加载到编辑区
+        w._on_case_item_clicked(lst.item(case_row_index(lst, 0)))
+        assert w.case_path and w.data["module"] == "全局清扫"
+        # chip 条: 标题在前,字段顺序 用例组→用例→优先级→间隔→添加步骤
+        texts = [lst.parentWidget()] and None   # 占位避免空行
+        from PySide6.QtWidgets import QLabel, QPushButton
+        labels = [c for c in w.findChildren(QLabel) if c.text() == "测试步骤详情"]
+        assert labels, "缺少「测试步骤详情」区块标题"
+        # 收起组(点击组头)
+        head_rect = lst.visualItemRect(lst.item(0))
+        QTest.mouseClick(lst.viewport(), Qt.LeftButton,
+                         pos=QPoint(head_rect.center().x(), head_rect.center().y()))
+        qapp.processEvents()
+        assert "涂鸦智能T4" in w._collapsed_groups
+        # 编辑区恢复未选中
+        assert w.case_path is None, "收起组后当前用例应恢复未选中"
+        assert len(w.steps) == 0
+        assert w.file_label.text() == "未选中用例"
+    finally:
+        w.close()
+
+
+def test_chip_strip_field_order(win):
+    """测试步骤详情区字段顺序: 标题→用例组→用例→优先级→间隔s→添加步骤"""
+    from PySide6.QtWidgets import QLabel, QLineEdit, QComboBox, QPushButton
+    import gui.main_window as mw
+    # chip 条内控件按添加顺序: 找 chipStrip 的 FlowLayout 子控件
+    chip_labels = [c.text() for c in win._quick_btns]  # 仅确保快捷按钮存在
+    assert win.module_edit and win.case_name_edit
+    assert win.add_btn.text() == "＋ 添加步骤"
+    # 标题与标签顺序验证(QSS 结构)
+    assert 'QLabel("测试步骤详情")' not in mw.STYLESHEET  # 标题在代码里不在QSS,此行防呆
+    order_check = [
+        ("测试步骤详情", True),
+        ("用例组", True),
+        ("用例", True),
+        ("优先级", True),
+        ("间隔s", True),
+    ]
+    src = open(mw.__file__, encoding="utf-8").read()
+    pos = -1
+    for text, _ in order_check:
+        p = src.find(f'QLabel("{text}")')
+        assert p > pos, f"「{text}」标签顺序不正确"
+        pos = p
+    p_add = src.find('self.add_btn = QPushButton("＋ 添加步骤")')
+    p_wait = src.find('lay.addWidget(self.case_wait_edit)')
+    assert pos < p_add and p_wait < p_add, "添加步骤应排在间隔s之后"

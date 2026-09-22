@@ -1320,6 +1320,11 @@ class MainWindow(QMainWindow):
                     self._collapsed_groups.discard(group)
                 else:
                     self._collapsed_groups.add(group)
+                    # ★ 收起组时,若当前编辑的用例属于该组 → 详情恢复未选中
+                    #   (用例行已隐藏,继续显示其步骤会误导)
+                    if (self.case_path and
+                            os.path.basename(os.path.dirname(os.path.abspath(self.case_path))) == group):
+                        self._unload_case()
                 self._fill_case_list()
             return
         if not os.path.isfile(path) or path == self.case_path:
@@ -1442,21 +1447,18 @@ class MainWindow(QMainWindow):
         return sel if ok else None
 
     def _build_chip_strip(self):
-        """用例信息行 + 常用组件快捷条(流式布局)"""
+        """测试步骤详情区标题 + 用例组/用例/优先级/步骤间隔/添加步骤(流式布局)"""
         strip = QFrame()
         strip.setObjectName("chipStrip")
         lay = FlowLayout(strip, margin=5, spacing=6)
 
-        lay.addWidget(QLabel("组"))
+        # ★ 区块标题: 测试步骤详情(用户要求;之后依次是 用例组/用例/优先级/间隔/添加步骤)
+        title = QLabel("测试步骤详情")
+        title.setStyleSheet("color:#2563eb; font-weight:bold; font-size:13px;")
+        lay.addWidget(title)
+        lay.addWidget(QLabel("用例组"))
         self.module_edit = QLineEdit()
         self.module_edit.setFixedWidth(96)
-        # ★ 「＋添加步骤」移到用例组信息条(用户要求: 添加步骤属于用例编排,
-        #   与组/用例字段同区;不再放工具栏)
-        self.add_btn = QPushButton("＋ 添加步骤")
-        self.add_btn.setObjectName("chipBtn")
-        self.add_btn.setToolTip("向当前用例添加步骤")
-        self.add_btn.setMenu(make_action_menu(self.add_btn, self.add_step))
-        lay.addWidget(self.add_btn)
         self.module_edit.setToolTip("用例组名,也是 Excel 报告的 sheet 名")
         self.module_edit.editingFinished.connect(self._sync_header)
         lay.addWidget(self.module_edit)
@@ -1485,6 +1487,12 @@ class MainWindow(QMainWindow):
         self.case_wait_edit.setValidator(QIntValidator(0, 9999))
         self.case_wait_edit.editingFinished.connect(self._sync_header)
         lay.addWidget(self.case_wait_edit)
+        # ★ 「＋添加步骤」排在间隔之后(用户要求的字段顺序)
+        self.add_btn = QPushButton("＋ 添加步骤")
+        self.add_btn.setObjectName("chipBtn")
+        self.add_btn.setToolTip("向当前用例添加步骤")
+        self.add_btn.setMenu(make_action_menu(self.add_btn, self.add_step))
+        lay.addWidget(self.add_btn)
 
         line = QLabel("|")
         line.setStyleSheet("color:#e2e8f0;")
@@ -1829,6 +1837,17 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "新建用例", "用例名称不能为空")
             return
         self.create_case(name, app="涂鸦智能")
+
+    def _unload_case(self):
+        """清空右侧编辑区,恢复未选中状态(收起包含当前用例的组时调用)"""
+        self.case_path = None
+        self.data = self._empty_data()
+        self.case_idx = 0
+        self.expanded_key = None
+        self.file_label.setText("未选中用例")
+        self._load_case_into_ui()
+        self.render_cards()
+        self._refresh_case_selector()
 
     def create_case(self, name, group="涂鸦智能"):
         """按名称在组目录 Test_cases/<group>/ 下创建空白用例文件
