@@ -90,7 +90,7 @@ def collect_cases(name_filter=""):
                 if name_filter and name_filter not in (name + module):
                     continue
                 out.append((module, name, case.get("steps") or [],
-                            case.get("priority", "P1"), case.get("wait")))
+                            case.get("priority", "P1"), case.get("wait"), full))
     return out
 
 
@@ -98,13 +98,15 @@ def pytest_generate_tests(metafunc):
     """收集 YAML 用例;--case 通过 pytest 官方配置读取(兼容 --case xxx 与 --case=xxx)"""
     if "case_name" in metafunc.fixturenames:
         metafunc.parametrize(
-            "module,case_name,steps,priority,case_wait",
+            "module,case_name,steps,priority,case_wait,case_path",
             collect_cases(metafunc.config.getoption("--case")),
             ids=lambda v: str(v)[:30])
 
 
-def test_yaml_case(device, report, module, case_name, steps, priority, case_wait):
+def test_yaml_case(device, report, module, case_name, steps, priority, case_wait, case_path):
     cfg = load_config()
+    from core import vision as _vision
+    _vision.set_template_app_group(os.path.basename(os.path.dirname(case_path)))
     runner = ActionRunner(device, cfg["runner"], case_wait=case_wait, case_name=case_name)
     passed = runner.run_steps(steps)
 

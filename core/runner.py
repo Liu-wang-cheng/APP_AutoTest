@@ -548,11 +548,13 @@ class ActionRunner:
             if isinstance(sv, str) and sv.strip():
                 path = sv                       # 旧用例的手动路径, 兼容保留
             else:
-                # ★ 开关模式(True): 按用例名/步骤序号/描述自动命名(用户要求)
+                # ★ 开关模式(True): 截图进 APP 组目录(用户要求: 和用例/模板放一起)
+                from core import vision as _vision
                 safe_desc = re.sub(r'[\\/:*?"<>|\s]+', "_",
                                    str(step.get("desc") or ""))[:30]
                 idx = len(self.results) + 1
-                path = (f"screenshots/{self.case_name or 'case'}/"
+                path = (f"Test_cases/{_vision.current_app_group() or '未分组'}/"
+                        f"screenshots/{self.case_name or 'case'}/"
                         f"step{idx:02d}_{safe_desc}.png")
             # screenshots/ 开头的路径补全 Test_img/ 前缀(reports/ 等其他路径原样)
             if path.startswith("screenshots/"):

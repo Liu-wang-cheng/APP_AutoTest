@@ -1344,11 +1344,14 @@ def test_save_button_dirty_flow(qapp, monkeypatch, tmp_path):
         assert not w.save_btn.isEnabled(), "加载后无修改应置灰"
         # 编辑产生修改 → 亮起
         w.add_step("click")
-        assert w.save_btn.isEnabled(), "有修改保存应亮起"
+        import yaml as _y
+        back = _y.safe_load(open(w.case_path, encoding="utf-8").read())
+        assert len(back["cases"][0]["steps"]) == 1, "自动保存: 编辑应立即写盘"
         # 保存 → 写盘(含新增步骤)且置灰; mock 掉参数问题确认弹窗(离屏无人点击)
+        # on_save 的参数校验可能弹确认框(离屏无人点击会卡死), mock 为 Yes
         monkeypatch.setattr(mw.QMessageBox, "question",
                             staticmethod(lambda *a, **k: mw.QMessageBox.Yes))
-        w.on_save()
+        w.on_save()   # 手动兜底: 强制重新保存
         import yaml as _yaml
         back = _yaml.safe_load((root / "a.yaml").read_text(encoding="utf-8"))
         assert len(back["cases"][0]["steps"]) == 1, "修改点应写盘"

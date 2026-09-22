@@ -151,6 +151,9 @@ class RunWorker(QThread):
 
                     self.status.emit(f"[第{rnd + 1}/{total_rounds}轮] 执行用例: {case_name}")
                     self.case_started.emit(fp, case_name)   # 用例列表状态灯 → 黄
+                    from core import vision as _vision
+                    _vision.set_template_app_group(
+                        os.path.basename(os.path.dirname(fp)))   # 模板按 APP 组子目录
                     runner = ActionRunner(d, cfg["runner"],
                                           case_wait=case.get("wait"), case_name=case_name)
                     # 包装结果回调: 计算每步耗时(相对上一步完成时刻)

@@ -39,19 +39,81 @@ def _template_prefix():
     return _PREFIX_CACHE["value"]
 
 
-def resolve_template(name):
-    """模板名 → 实际路径:优先 <APP前缀>_<名称>.png,回退原名
+_template_app_group = ""
+
+
+def current_app_group():
+    """当前 APP 组名(未设置返回空串)"""
+    return _template_app_group
+
+
+def group_case_dir(group):
+    """APP 组目录: Test_cases/<组>/(用例/模板/截图都收在这里, 用户要求)"""
+    return os.path.join(BASE_DIR, "Test_cases", group or "")
+
+
+def group_templates_dir(group):
+    """组模板目录: Test_cases/<组>/templates/"""
+    return os.path.join(group_case_dir(group), "templates")
+
+
+def group_screenshots_dir(group):
+    """组截图目录: Test_cases/<组>/screenshots/"""
+    return os.path.join(group_case_dir(group), "screenshots")
+
+
+def set_template_app_group(group):
+    """设置当前 APP 组(执行开始时调用): 模板/截图都取组目录"""
+    global _template_app_group
+    _template_app_group = group or ""
+
+
+def list_templates():
+    """当前 APP 组可用的模板名列表(去前缀/扩展名, 供编辑器下拉自动获取)"""
+    names = []
+    search_dirs = []
+    if _template_app_group:
+        search_dirs.append(group_templates_dir(_template_app_group))
+    search_dirs.append(TEMPLATE_DIR)
+    for sd in search_dirs:
+        if not os.path.isdir(sd):
+            continue
+        for fn in sorted(os.listdir(sd)):
+            if not fn.lower().endswith((".png", ".jpg", ".jpeg", ".bmp")):
+                continue
+            base = os.path.splitext(fn)[0]
+            prefix = _template_prefix()
+            if prefix and base.startswith(f"{prefix}_"):
+                base = base[len(prefix) + 1:]
+            if base not in names:
+                names.append(base)
+    return names
+
+
+def resolve_template(name, app_group=None):
+    """模板名 → 实际路径:组子目录优先 → 全局 <APP前缀>_<名称> → 全局原名
 
     - 用例 YAML 永远写无前缀名称(换 APP 不改用例,只换模板文件+前缀配置)
+    - ★ 模板按 APP 组子目录存放: templates/<APP组>/<前缀_名>.png(用户要求)
+    - app_group 缺省时用模块级 set_template_app_group 设置的当前组
     - 绝对路径原样返回;带目录分隔符的相对路径按 TEMPLATE_DIR 下相对路径处理
-    - 前缀未配置、或带前缀的文件不存在 → 回退原名(多套 APP 模板可共存)
     """
     p = str(name)
     if os.path.isabs(p):
         return p
     if os.sep in p or "/" in p:
         return os.path.join(TEMPLATE_DIR, p)
+    g = _template_app_group if app_group is None else app_group
     prefix = _template_prefix()
+    if g:
+        gdir = group_templates_dir(g)
+        if prefix:
+            cand = os.path.join(gdir, f"{prefix}_{p}")
+            if os.path.exists(cand):
+                return cand
+        cand = os.path.join(gdir, p)
+        if os.path.exists(cand):
+            return cand
     if prefix:
         cand = os.path.join(TEMPLATE_DIR, f"{prefix}_{p}")
         if os.path.exists(cand):

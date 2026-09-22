@@ -36,7 +36,14 @@ def collect_template_refs(only_file=None):
     else:
         if not os.path.isdir(cases_dir):
             return refs
-        files = [f for f in sorted(os.listdir(cases_dir)) if f.endswith((".yaml", ".yml"))]
+        files = []
+        for sub in sorted(os.listdir(cases_dir)):
+            sub_full = os.path.join(cases_dir, sub)
+            if os.path.isdir(sub_full):
+                files += [os.path.join(sub, f) for f in sorted(os.listdir(sub_full))
+                          if f.endswith((".yaml", ".yml"))]
+            elif sub.endswith((".yaml", ".yml")):
+                files.append(sub)
 
     for fn in files:
         try:
@@ -76,17 +83,24 @@ def main():
 
     from core import vision
     prefix = vision._template_prefix()
+    # ★ 模板已按 APP 组子目录存放(Test_cases/<组>/templates/), 递归收集;
+    #   比对统一用「去前缀名」(与用例引用名一致)
     have = set()
-    if os.path.isdir(TEMPLATE_DIR):
-        have = {f for f in os.listdir(TEMPLATE_DIR) if f.lower().endswith(".png")}
+    # ★ 模板在 Test_cases/<组>/templates/ 下, 兼容全局 Test_img/templates/
+    cases_root = os.path.join(BASE_DIR, "Test_cases")
+    for walk_root in (cases_root, TEMPLATE_DIR):
+        if not os.path.isdir(walk_root):
+            continue
+        for root_d, _dirs, fnames in os.walk(walk_root):
+            for f in fnames:
+                if f.lower().endswith(".png"):
+                    base = os.path.splitext(f)[0]
+                    if prefix and base.startswith(prefix + "_"):
+                        base = base[len(prefix) + 1:]
+                    have.add(base + ".png")
 
-    def _exists(name):
-        # 模板文件带 APP 前缀(涂鸦_开始清扫.png),用例里写的是无前缀名
-        return (f"{prefix}_{name}" in have) if prefix else (name in have)
-
-    used = {f"{prefix}_{n}" for n in refs} if prefix else set(refs)
-    missing = sorted(n for n in refs if not _exists(n))
-    unused = sorted(have - used)
+    missing = sorted(n for n in refs if n not in have)
+    unused = sorted(have - {n for n in refs})
 
     scope = only or "Test_cases/ 全部文件"
     print(f"扫描范围: {scope}")
@@ -97,7 +111,7 @@ def main():
     print("模板图清单" + (f" —— 缺 {len(missing)} 张" if missing else " —— 已齐全"))
     print("=" * 68)
     for name in sorted(refs):
-        mark = " " if _exists(name) else "✗"
+        mark = " " if name in have else "✗"
         rec = refs[name]
         print(f"\n[{mark}] {name}   (被 {len(rec['cases'])} 个用例引用)")
         for desc in rec["descs"][:3]:

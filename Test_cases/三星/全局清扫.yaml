@@ -1,0 +1,20 @@
+module: 全局清扫
+cases:
+- name: 全局清扫
+  priority: P1
+  steps:
+  - desc: 点击菜单
+    click: 菜单
+    screenshot: true
+  - desc: 点击清扫类型
+    click: 清扫类型
+    screenshot: true
+  - desc: 点击切换扫拖模式
+    click: 扫地机器人+拖布
+    screenshot: true
+  - desc: 返回主界面
+    back: true
+  - desc: 点击
+    click: 三星_开始清扫.png
+    screenshot: true
+  wait: null
