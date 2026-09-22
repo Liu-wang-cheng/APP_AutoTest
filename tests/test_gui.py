@@ -37,13 +37,13 @@ def test_window_built(win):
 
 
 def test_new_resets(win):
-    win.on_new()
+    win.create_case("测试组")
     assert len(win.steps) == 0
-    assert win.data["module"] == "新用例组"
+    assert win.data["module"] == "测试组"
 
 
 def test_add_step_and_render(win):
-    win.on_new()
+    win.create_case("测试组")
     win.add_step("click")
     assert len(win.steps) == 1
     assert win.cards_lay.count() >= 2          # 卡片 + 末尾 stretch
@@ -52,13 +52,13 @@ def test_add_step_and_render(win):
 
 def test_add_step_schema_default(win):
     """int4 字段默认给空列表(序列化时空列表按动作语义处理)"""
-    win.on_new()
+    win.create_case("测试组")
     win.add_step("room_zones")
     assert win.steps[-1].get("room_zones") == []
 
 
 def test_dump_data_serializes(win):
-    win.on_new()
+    win.create_case("测试组")
     win.add_step("click")
     win.steps[0]["click"] = " 开始清扫.png "
     win.steps[0]["desc"] = "点开始"
@@ -69,7 +69,7 @@ def test_dump_data_serializes(win):
 
 
 def test_yaml_roundtrip_via_text(win):
-    win.on_new()
+    win.create_case("测试组")
     win.add_step("assert")
     win.steps[0]["assert"] = "清扫中,建图中"
     win.steps[0]["timeout"] = 20
@@ -105,7 +105,7 @@ def test_set_locked_disables_editing(win):
 
 def test_locked_disables_all_edit_buttons(win):
     """锁定靠禁用按钮实现(方法本身不挡) —— 验证按钮确实被禁掉"""
-    win.on_new()
+    win.create_case("测试组")
     win._set_locked(True)
     assert not win.add_btn.isEnabled()
     assert not win.new_btn.isEnabled()
@@ -115,7 +115,7 @@ def test_locked_disables_all_edit_buttons(win):
 
 
 def test_step_summary_shown_in_card(win):
-    win.on_new()
+    win.create_case("测试组")
     win.add_step("back")
     card = win.cards_lay.itemAt(0).widget()
     assert "返回键" in card.summary_label.text()
@@ -124,7 +124,7 @@ def test_step_summary_shown_in_card(win):
 # ── 步骤 / 子步骤操作 ──
 
 def test_dup_step_is_deepcopy(win):
-    win.on_new()
+    win.create_case("测试组")
     win.add_step("click")
     win.steps[0]["click"] = "开始清扫.png"
     win.dup_step(0)
@@ -135,7 +135,7 @@ def test_dup_step_is_deepcopy(win):
 
 
 def test_move_step_swaps(win):
-    win.on_new()
+    win.create_case("测试组")
     win.add_step("click")
     win.add_step("back")
     win.steps[0]["desc"], win.steps[1]["desc"] = "A", "B"
@@ -144,7 +144,7 @@ def test_move_step_swaps(win):
 
 
 def test_move_step_out_of_range_is_noop(win):
-    win.on_new()
+    win.create_case("测试组")
     win.add_step("click")
     win.steps[0]["desc"] = "A"
     win.move_step(0, -1)
@@ -153,7 +153,7 @@ def test_move_step_out_of_range_is_noop(win):
 
 def test_del_step_rolls_expanded_key_back(win):
     """删掉展开中的最后一步后,展开键不能还指向已不存在的下标"""
-    win.on_new()
+    win.create_case("测试组")
     win.add_step("click")
     win.add_step("back")
     win.expanded_key = (1,)
@@ -163,7 +163,7 @@ def test_del_step_rolls_expanded_key_back(win):
 
 
 def test_add_sub_appends_and_expands(win):
-    win.on_new()
+    win.create_case("测试组")
     win.add_step("if")
     win.add_sub(0, "click")
     assert len(win.steps[0]["else"]) == 1
@@ -172,7 +172,7 @@ def test_add_sub_appends_and_expands(win):
 
 def test_add_sub_wait_shortcut(win):
     """__wait 是「延时等待」的快捷写法(纯 wait 步骤)"""
-    win.on_new()
+    win.create_case("测试组")
     win.add_step("if")
     win.add_sub(0, "__wait")
     sub = win.steps[0]["else"][0]
@@ -180,7 +180,7 @@ def test_add_sub_wait_shortcut(win):
 
 
 def test_move_sub(win):
-    win.on_new()
+    win.create_case("测试组")
     win.add_step("if")
     win.add_sub(0, "click")
     win.add_sub(0, "back")
@@ -191,7 +191,7 @@ def test_move_sub(win):
 
 
 def test_dup_sub_and_del_sub(win):
-    win.on_new()
+    win.create_case("测试组")
     win.add_step("if")
     win.add_sub(0, "click")
     win.dup_sub(0, 0)
@@ -202,7 +202,7 @@ def test_dup_sub_and_del_sub(win):
 
 def test_del_sub_collapses_to_parent(win):
     """子步骤删光后展开态要收回父卡片,不能停在已不存在的子下标上"""
-    win.on_new()
+    win.create_case("测试组")
     win.add_step("if")
     win.add_sub(0, "click")
     win.del_sub(0, 0)
@@ -210,7 +210,7 @@ def test_del_sub_collapses_to_parent(win):
 
 
 def test_collapse_all(win):
-    win.on_new()
+    win.create_case("测试组")
     win.add_step("if")
     win.add_sub(0, "click")
     win._collapse_all()
@@ -223,7 +223,7 @@ def test_step_ops_guarded_by_worker_not_lock(win):
     锁定是"禁用按钮"层面的保护;真正的守卫是 self.worker ——
     执行中改步骤会让跑着的用例和界面数据对不上。
     """
-    win.on_new()
+    win.create_case("测试组")
     win.add_step("click")
 
     class _FakeWorker:
@@ -244,7 +244,7 @@ def test_step_ops_guarded_by_worker_not_lock(win):
 def test_else_substeps_survive_yaml_roundtrip(win):
     """else 子步骤要能落盘再读回 —— 缩进/结构最容易在这里出错"""
     import yaml
-    win.on_new()
+    win.create_case("测试组")
     win.add_step("if not")
     win.steps[0]["if not"] = "扫地机器人"
     win.add_sub(0, "click")
@@ -270,7 +270,7 @@ def _card_widgets(win):
 
 def test_只改说明不破坏其它字段类型(win):
     """编辑一个字段不能碰其它字段 —— swipe 的 list 被写成字符串就废了"""
-    win.on_new()
+    win.create_case("测试组")
     win.steps.append({"desc": "滑动", "swipe": [100, 200, 300, 400]})
     win.expanded_key = (0,)
     win.render_cards()
@@ -285,7 +285,7 @@ def test_只改说明不破坏其它字段类型(win):
 
 def test_高级参数编辑生效(win):
     """等待/重试这类修饰参数在卡片里编辑后要写回步骤"""
-    win.on_new()
+    win.create_case("测试组")
     win.add_step("click")
     win.steps[0]["click"] = "确认"
     win.expanded_key = (0,)
@@ -425,11 +425,24 @@ def test_case_list_is_qlistwidget_and_in_same_column(win_with_cases):
     assert not isinstance(win_with_cases.centralWidget(), QSplitter)
 
 
+def case_row_index(view, n):
+    """第 n 个用例行的列表索引(跳过 APP 组头行, UserRole=None)。
+    view 可传主窗口或列表控件本身"""
+    lst = view.case_list if hasattr(view, "case_list") else view
+    seen = -1
+    for i in range(lst.count()):
+        if lst.item(i).data(0x0100):      # Qt.UserRole
+            seen += 1
+            if seen == n:
+                return i
+    return -1
+
+
 def test_case_check_and_collect_paths(win_with_cases):
     """全选/清空 → _checked_case_paths 正确返回勾选路径"""
     from PySide6.QtCore import Qt
     win = win_with_cases
-    assert win.case_list.count() == 2
+    assert win.case_list.count() == 3      # 2 用例 + 1 组头(未分组)
     win._set_cases_checked(Qt.Checked)
     names = sorted(os.path.basename(p) for p in win._checked_case_paths())
     assert names == ["全局清扫.yaml", "划区清扫.yaml"]
@@ -442,7 +455,7 @@ def test_click_case_row_loads_into_editor(win_with_cases):
     from PySide6.QtCore import Qt
     win = win_with_cases
     win._set_cases_checked(Qt.Checked)
-    win._on_case_item_clicked(win.case_list.item(0))
+    win._on_case_item_clicked(win.case_list.item(case_row_index(win, 0)))
     assert win.case_path.endswith("划区清扫.yaml") or win.case_path.endswith("全局清扫.yaml")
     assert win.data.get("module") in ("划区清扫", "全局清扫")
     # 勾选不因加载而丢失
@@ -463,7 +476,8 @@ def test_case_order_sorts_list_on_load(qapp, monkeypatch, tmp_path):
     monkeypatch.setattr(mw, "CONFIG_PATH", str(tmp_path / "config.yaml"), raising=False)
     w = mw.MainWindow()
     try:
-        paths = [w.case_list.item(i).data(0x0100) for i in range(w.case_list.count())]
+        paths = [w.case_list.item(i).data(0x0100) for i in range(w.case_list.count())
+                 if w.case_list.item(i).data(0x0100)]
         import os as _os
         assert [_os.path.basename(p) for p in paths] == ["乙.yaml", "甲.yaml", "丙.yaml"]
     finally:
@@ -500,14 +514,14 @@ def test_move_case_writes_order_and_keeps_check(qapp, monkeypatch, tmp_path):
     monkeypatch.setattr(mw, "CONFIG_PATH", str(tmp_path / "config.yaml"), raising=False)
     w = mw.MainWindow()
     try:
-        assert w.case_list.count() == 3
-        # 勾选第一个,然后把它下移一行
-        first = w.case_list.item(0).data(Qt.UserRole)
-        w.case_list.item(0).setCheckState(Qt.Checked)
+        assert w.case_list.count() == 4      # 3 用例 + 1 组头(未分组)
+        # 勾选第一个用例,然后把它下移一行
+        first = w.case_list.item(case_row_index(w, 0)).data(Qt.UserRole)
+        w.case_list.item(case_row_index(w, 0)).setCheckState(Qt.Checked)
         w._move_case(first, +1)
         # 列表顺序:划区清扫、全局清扫、选区清扫
         got = [os.path.basename(w.case_list.item(i).data(Qt.UserRole))
-               for i in range(w.case_list.count())]
+               for i in range(w.case_list.count()) if w.case_list.item(i).data(Qt.UserRole)]
         assert got == ["划区清扫.yaml", "全局清扫.yaml", "选区清扫.yaml"]
         # 文件里 case_order = 1..N
         orders = {n: mw.MainWindow._read_case_order(str(d / f"{n}.yaml"))
@@ -517,8 +531,8 @@ def test_move_case_writes_order_and_keeps_check(qapp, monkeypatch, tmp_path):
         assert [os.path.basename(p) for p in w._checked_case_paths()] == ["全局清扫.yaml"]
         # 边界:第一行上移、最后一行下移 = no-op 且不报错
         w._move_case(first, -1)
-        w._move_case(w.case_list.item(w.case_list.count() - 1).data(Qt.UserRole), +1)
-        assert w.case_list.count() == 3
+        w._move_case(w.case_list.item(case_row_index(w, 2)).data(Qt.UserRole), +1)
+        assert w.case_list.count() == 4
     finally:
         w.close()
 
@@ -541,16 +555,16 @@ def test_case_drag_drop_rebuild_and_persist(qapp, monkeypatch, tmp_path):
     monkeypatch.setattr(mw, "CONFIG_PATH", str(tmp_path / "config.yaml"), raising=False)
     w = mw.MainWindow()
     try:
-        # 模拟拖拽后的 model 状态:第 3 行移到第 1 行(itemWidget 丢失)
-        it = w.case_list.takeItem(2)
-        w.case_list.insertItem(0, it)
+        # 模拟拖拽后的 model 状态:第 3 行(选区清扫, 组头占第 0 行)移到组头之后第 1 位
+        it = w.case_list.takeItem(case_row_index(w, 2))
+        w.case_list.insertItem(1, it)
         w.on_case_rows_dropped()
         got = [os.path.basename(w.case_list.item(i).data(Qt.UserRole))
-               for i in range(w.case_list.count())]
+               for i in range(w.case_list.count()) if w.case_list.item(i).data(Qt.UserRole)]
         assert got == ["选区清扫.yaml", "全局清扫.yaml", "划区清扫.yaml"]
         # item 原生化后无 itemWidget,勾选/顺序都在 item 上
         assert w.case_list.itemWidget(w.case_list.item(0)) is None
-        assert w.case_list.item(0).checkState() in (Qt.Unchecked, Qt.Checked)
+        assert w.case_list.item(1).checkState() in (Qt.Unchecked, Qt.Checked)
         # 顺序写回文件
         orders = {n: mw.MainWindow._read_case_order(str(d / f"{n}.yaml"))
                   for n in names}
@@ -567,7 +581,7 @@ def test_case_list_visual_and_interaction_rules(win_with_cases):
     import gui.main_window as mw
     win = win_with_cases
     assert win.case_list.objectName() == "caseList"
-    it0 = win.case_list.item(0)
+    it0 = win.case_list.item(case_row_index(win, 0))
     assert it0.flags() & Qt.ItemIsUserCheckable, "item 必须用原生 checkState 勾选"
     assert it0.text() == os.path.splitext(os.path.basename(it0.data(Qt.UserRole)))[0],         "item text = 用例名(拖拽快照的数据源)"
     assert it0.sizeHint().height() >= 24, "行高要容得下箭头绘制"
@@ -608,7 +622,7 @@ def test_case_list_no_focus_rect_and_drag_snapshot(win_with_cases):
     assert "QListWidget#caseList::item:focus { outline: none; }" in mw.STYLESHEET
     assert "def startDrag" not in inspect.getsource(mw.CaseListWidget), \
         "不能重写 startDrag(会断 InternalMove 管线)"
-    it0 = win.case_list.item(0)
+    it0 = win.case_list.item(case_row_index(win, 0))
     assert it0.text() == os.path.splitext(os.path.basename(it0.data(0x0100)))[0], \
         "item 必须带用例名(拖拽快照的数据源)"
     assert "QListWidget#caseList::indicator" not in mw.STYLESHEET, \
@@ -633,12 +647,12 @@ def test_case_arrows_real_click(qapp, monkeypatch, tmp_path):
     try:
         qapp.processEvents()
         lst = w.case_list
-        rect = lst.visualItemRect(lst.item(0))
+        rect = lst.visualItemRect(lst.item(case_row_index(lst, 0)))
         QTest.mouseClick(lst.viewport(), Qt.LeftButton,
                          pos=QPoint(rect.right() - 11, rect.center().y()))   # ↓ 命中区
         qapp.processEvents()
         got = [os.path.basename(lst.item(i).data(Qt.UserRole))
-               for i in range(lst.count())]
+               for i in range(lst.count()) if lst.item(i).data(Qt.UserRole)]
         assert got == ["划区清扫.yaml", "全局清扫.yaml"], "行内箭头真实点击必须生效"
     finally:
         w.close()
@@ -661,11 +675,11 @@ def test_case_row_name_click_selects(qapp, monkeypatch, tmp_path):
     try:
         qapp.processEvents()
         lst = w.case_list
-        rect = lst.visualItemRect(lst.item(0))
+        rect = lst.visualItemRect(lst.item(case_row_index(lst, 0)))
         QTest.mouseClick(lst.viewport(), Qt.LeftButton,
                          pos=QPoint(rect.left() + 60, rect.center().y()))
         qapp.processEvents()
-        assert lst.currentRow() == 0, "名字区点击应选中该行(原生管线)"
+        assert lst.currentRow() == case_row_index(lst, 0), "名字区点击应选中该用例行"
     finally:
         w.close()
 
@@ -688,16 +702,16 @@ def test_arrow_move_then_drag_coexist(qapp, monkeypatch, tmp_path):
     w = mw.MainWindow()
     try:
         # 第一步:箭头把第一行下移(全局清扫 → 2号位)
-        w._move_case(w.case_list.item(0).data(Qt.UserRole), +1)
+        w._move_case(w.case_list.item(case_row_index(w, 0)).data(Qt.UserRole), +1)
         got = [os.path.basename(w.case_list.item(i).data(Qt.UserRole))
-               for i in range(w.case_list.count())]
+               for i in range(w.case_list.count()) if w.case_list.item(i).data(Qt.UserRole)]
         assert got == ["划区清扫.yaml", "全局清扫.yaml", "选区清扫.yaml"]
         # 第二步:模拟拖拽,把第 3 行(选区清扫)拖到最前
-        it = w.case_list.takeItem(2)
-        w.case_list.insertItem(0, it)
+        it = w.case_list.takeItem(case_row_index(w, 2))
+        w.case_list.insertItem(1, it)
         w.on_case_rows_dropped()
         got = [os.path.basename(w.case_list.item(i).data(Qt.UserRole))
-               for i in range(w.case_list.count())]
+               for i in range(w.case_list.count()) if w.case_list.item(i).data(Qt.UserRole)]
         assert got == ["选区清扫.yaml", "划区清扫.yaml", "全局清扫.yaml"]
         # 两种方式交替后,文件顺序依然是干净的 1..N
         orders = {n: mw.MainWindow._read_case_order(str(d / f"{n}.yaml"))
@@ -900,7 +914,7 @@ def test_case_state_lamp(win_with_cases, qapp):
     from PySide6.QtCore import Qt
     import gui.main_window as mw
     win = win_with_cases
-    it0 = win.case_list.item(0)
+    it0 = win.case_list.item(case_row_index(win, 0))
     assert it0.data(mw.CASE_STATE_ROLE) == "idle", "未执行默认灰灯"
     assert not it0.icon().isNull(), "灯用 icon 位(勾选框后、用例名前,原生布局不重叠)"
     # 信号驱动的状态切换(set_case_state 由 case_started/finished 信号调用)
@@ -940,20 +954,21 @@ def test_case_lamp_rerun_resets(qapp, monkeypatch, tmp_path):
     monkeypatch.setattr(mw, "CONFIG_PATH", str(tmp_path / "config.yaml"), raising=False)
     w = mw.MainWindow()
     try:
-        paths = [w.case_list.item(i).data(Qt.UserRole) for i in range(w.case_list.count())]
+        paths = [w.case_list.item(i).data(Qt.UserRole) for i in range(w.case_list.count())
+                 if w.case_list.item(i).data(Qt.UserRole)]
         # 模拟上一次跑完:一绿一红
         w.set_case_state(paths[0], "passed")
         w.set_case_state(paths[1], "failed")
         # 重新执行:点运行瞬间全部重置黄
         w._reset_case_lamps_to_running(paths)
-        assert [w.case_list.item(i).data(mw.CASE_STATE_ROLE) for i in range(2)] == ["running", "running"]
+        assert [w.case_list.item(case_row_index(w, i)).data(mw.CASE_STATE_ROLE) for i in range(2)] == ["running", "running"]
         # 逐个跑完 → 绿/红(case_started 也会先确认黄,幂等)
         w.set_case_state(paths[0], "running")
         w.set_case_state(paths[0], "passed")
-        assert w.case_list.item(0).data(mw.CASE_STATE_ROLE) == "passed"
-        assert w.case_list.item(1).data(mw.CASE_STATE_ROLE) == "running"
+        assert w.case_list.item(case_row_index(w, 0)).data(mw.CASE_STATE_ROLE) == "passed"
+        assert w.case_list.item(case_row_index(w, 1)).data(mw.CASE_STATE_ROLE) == "running"
         w.set_case_state(paths[1], "failed")
-        assert w.case_list.item(1).data(mw.CASE_STATE_ROLE) == "failed"
+        assert w.case_list.item(case_row_index(w, 1)).data(mw.CASE_STATE_ROLE) == "failed"
     finally:
         w.close()
 
@@ -1044,7 +1059,7 @@ def test_on_run_finished_always_unlocks(win, monkeypatch):
     """★ 结束处理即使中途抛异常,也必须解锁卡片区并清掉 worker
     (否则界面永久锁死,无法编辑/展开步骤 —— 用户实测 bug)"""
     from PySide6.QtWidgets import QPushButton
-    win.on_new()
+    win.create_case("测试组")
     win._set_locked(True)
     win.worker = object()                       # 模拟执行中的 worker 残留
     assert not win.cards_scroll.widget().isEnabled()

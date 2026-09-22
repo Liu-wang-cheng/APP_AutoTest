@@ -142,9 +142,6 @@ GUI 工具栏「前置条件」四项(默认全选),对应 `core/session.py` 的
 ## 已知约束
 
 - **模板图需自行截取**:`Test_img/templates/` 初始为空,从真机截图裁剪目标元素放进去。
-  `TuyaT4_*.yaml` 里的 XPath 定位串已从 v1.4 配置迁入 `config/locators.yaml`。
-- **坐标是机型相关的**:用例里 `[x, y]` 形式的坐标来自 1080x2340 机型,换机型需重新标定,
-  建议逐步替换为模板图或 XPath。
 - **企业透明加密**:若 `config.yaml` 变成密文(`%TSD-Header` 开头),用白名单进程
   (如 git)取回明文;框架会给出明确提示而不是裸报编码错误。
 - **VLM 未实现**:`vlm/backend.py` 只提供协议与路由,`config.yaml` 里 `vlm.enabled` 默认关闭。

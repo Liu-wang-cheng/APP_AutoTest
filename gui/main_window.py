@@ -965,13 +965,6 @@ class MainWindow(QMainWindow):
         self.file_label = QLabel("未打开文件")
         self.file_label.setStyleSheet("color:#94a3b8;")
         lay.addWidget(self.file_label)
-        lay.addSpacing(8)
-
-        self.add_btn = QPushButton("＋ 添加步骤")
-        self.add_btn.setStyleSheet("color:#2563eb; border-color:#b9cff5;")
-        self.add_btn.setMenu(make_action_menu(self.add_btn, self.add_step))
-        lay.addWidget(self.add_btn)
-
         lay.addStretch()
         pre_btn = QPushButton("前置条件")
         pre_menu = QMenu(pre_btn)
@@ -1175,22 +1168,62 @@ class MainWindow(QMainWindow):
         with open(path, "w", encoding="utf-8", newline="") as f:
             f.write(new_text)
 
+    @staticmethod
+    def _read_case_meta(path):
+        """读用例 YAML 的 (app组, module, case_order);异常返回默认值"""
+        try:
+            with open(path, encoding="utf-8") as f:
+                data = yaml.safe_load(f) or {}
+            order = data.get("case_order")
+            app = str(data.get("app") or "未分组")
+            module = str(data.get("module") or "")
+            return app, module, (int(order) if isinstance(order, (int, float)) else None)
+        except Exception:
+            return "未分组", "", None
+
     def _fill_case_list(self, order_paths=None):
-        """(重)填充用例列表。order_paths 给定时按它排;否则按 case_order
-        升序(缺失排末尾,再按文件名)。勾选与选中状态保留。"""
+        """(重)填充用例列表:**按 APP 组(app 字段)分节显示**,不同 APP 的
+        用例分开;组内按 case_order 升序(缺失排末尾)。组头行不可选/不可勾。
+        order_paths 给定时按它排;Test_cases/ 外的当前打开文件也追加显示。"""
         import glob
         if order_paths is None:
-            paths = sorted(glob.glob(os.path.join(CASES_DIR, "*.yaml")))
-            paths.sort(key=lambda p: (self._read_case_order(p) is None,
-                                      self._read_case_order(p) or 0,
-                                      os.path.basename(p)))
+            infos = []
+            for p in sorted(glob.glob(os.path.join(CASES_DIR, "*.yaml"))):
+                app, module, order = self._read_case_meta(p)
+                infos.append((p, app, module, order))
+            extra = self.case_path
+            if (extra and os.path.isfile(extra)
+                    and all(os.path.abspath(extra) != os.path.abspath(p) for p, *_ in infos)
+                    and extra.lower().endswith((".yaml", ".yml"))
+                    and CASES_DIR.lower() not in os.path.abspath(extra).lower()):
+                app, module, order = self._read_case_meta(extra)
+                infos.append((extra, app, module, order))
+            infos.sort(key=lambda it: (it[1].lower(), it[3] is None, it[3] or 0,
+                                       os.path.basename(it[0])))
+            paths = [p for p, *_ in infos]
+            apps = {p: a for p, a, *_ in infos}
         else:
             paths = list(order_paths)
+            apps = {p: self._read_case_meta(p)[0] for p in paths}
         checked = set(self._checked_case_paths())
         cur_item = self.case_list.currentItem()
         cur = cur_item.data(Qt.UserRole) if cur_item else None
         self.case_list.clear()
+        last_app = object()
         for path in paths:
+            app = apps.get(path) or "未分组"
+            # ── APP 组头行(组变化时插入;不可选/不可勾/不可拖,仅分组视觉) ──
+            if app != last_app:
+                head = QListWidgetItem(app)
+                head.setFlags(Qt.ItemIsEnabled)
+                hf = head.font()
+                hf.setBold(True)
+                head.setFont(hf)
+                head.setForeground(QColor("#0284c7"))
+                head.setData(Qt.UserRole, None)          # 标记: 非用例行
+                head.setToolTip(f"{app} 的用例组")
+                self.case_list.addItem(head)
+                last_app = app
             name = os.path.splitext(os.path.basename(path))[0]
             # ★ item 完全原生:checkState 勾选 + text(拖拽快照的名称来源)。
             #   不要用 setItemWidget 做行内控件 —— 会盖 indicator/拦事件/断拖拽
@@ -1238,7 +1271,8 @@ class MainWindow(QMainWindow):
     def _move_case(self, path, delta):
         """用例行上移/下移一行,并把新顺序 1..N 写回各用例 YAML 的 case_order"""
         paths = [self.case_list.item(i).data(Qt.UserRole)
-                 for i in range(self.case_list.count())]
+                 for i in range(self.case_list.count())
+                 if self.case_list.item(i).data(Qt.UserRole)]
         if path not in paths:
             return
         i = paths.index(path)
@@ -1253,7 +1287,8 @@ class MainWindow(QMainWindow):
     def on_case_rows_dropped(self):
         """拖拽排序松手后:行控件已被 InternalMove 甩掉,重建并写回顺序"""
         paths = [self.case_list.item(i).data(Qt.UserRole)
-                 for i in range(self.case_list.count())]
+                 for i in range(self.case_list.count())
+                 if self.case_list.item(i).data(Qt.UserRole)]
         if len(paths) < 2:
             return
         self._fill_case_list(order_paths=paths)
@@ -1295,16 +1330,23 @@ class MainWindow(QMainWindow):
         self._load_case_into_ui()
         self.render_cards()
         self._refresh_case_selector()
+        self._fill_case_list()   # ★ 打开的用例必须在左侧列表可见(Test_cases/ 外的也追加)
 
     def _set_cases_checked(self, state):
         for i in range(self.case_list.count()):
-            self.case_list.item(i).setCheckState(state)
+            item = self.case_list.item(i)
+            if item.data(Qt.UserRole):        # 组头行(UserRole=None)不参与勾选
+                item.setCheckState(state)
 
     def _checked_case_paths(self):
         """勾选的用例文件路径列表(勾选才参与批量执行;按列表顺序=执行顺序)"""
-        return [self.case_list.item(i).data(Qt.UserRole)
-                for i in range(self.case_list.count())
-                if self.case_list.item(i).checkState() == Qt.Checked]
+        out = []
+        for i in range(self.case_list.count()):
+            item = self.case_list.item(i)
+            path = item.data(Qt.UserRole)
+            if path and item.checkState() == Qt.Checked:
+                out.append(path)
+        return out
 
     def _current_device_id(self):
         return self.device_combo.currentData()
@@ -1386,6 +1428,13 @@ class MainWindow(QMainWindow):
         lay.addWidget(QLabel("组"))
         self.module_edit = QLineEdit()
         self.module_edit.setFixedWidth(96)
+        # ★ 「＋添加步骤」移到用例组信息条(用户要求: 添加步骤属于用例编排,
+        #   与组/用例字段同区;不再放工具栏)
+        self.add_btn = QPushButton("＋ 添加步骤")
+        self.add_btn.setObjectName("chipBtn")
+        self.add_btn.setToolTip("向当前用例添加步骤")
+        self.add_btn.setMenu(make_action_menu(self.add_btn, self.add_step))
+        lay.addWidget(self.add_btn)
         self.module_edit.setToolTip("用例组名,也是 Excel 报告的 sheet 名")
         self.module_edit.editingFinished.connect(self._sync_header)
         lay.addWidget(self.module_edit)
@@ -1487,8 +1536,26 @@ class MainWindow(QMainWindow):
         self.expanded_key = key
         self.render_cards()
 
+    def _auto_save(self):
+        """编辑自动保存:已关联文件的用例,每次修改立即写盘(用户要求)。
+        未命名(新建未保存)不触发 —— 首次保存仍走「保存」命名。"""
+        if self.worker or not self.case_path:
+            return
+        try:
+            prev_order = self._read_case_order(self.case_path)
+            with open(self.case_path, "w", encoding="utf-8") as f:
+                yaml.safe_dump(self._dump_data(), f, allow_unicode=True, sort_keys=False)
+            if prev_order is not None:
+                self._write_case_order(self.case_path, prev_order)
+            self.status_label.setText(
+                f"已自动保存 {os.path.basename(self.case_path)} "
+                f"{time.strftime('%H:%M:%S')}")
+        except Exception as e:
+            self.log_view.appendPlainText(f"[自动保存失败] {e}")
+
     def on_card_edited(self):
         self._refresh_yaml_text()
+        self._auto_save()
 
     # ── 步骤操作 ──
     def add_step(self, key):
@@ -1501,6 +1568,7 @@ class MainWindow(QMainWindow):
         self.steps.append(step)
         self.expanded_key = (len(self.steps) - 1,)
         self.render_cards()
+        self._auto_save()
         self._scroll_to_end()
 
     def _scroll_to_end(self):
@@ -1517,6 +1585,7 @@ class MainWindow(QMainWindow):
         if self.expanded_key == (index,):
             self.expanded_key = (new,)
         self.render_cards()
+        self._auto_save()
 
     def dup_step(self, index):
         if self.worker:
@@ -1524,6 +1593,7 @@ class MainWindow(QMainWindow):
         self.steps.insert(index + 1, copy.deepcopy(self.steps[index]))
         self.expanded_key = (index + 1,)
         self.render_cards()
+        self._auto_save()
 
     def del_step(self, index):
         if self.worker:
@@ -1532,6 +1602,7 @@ class MainWindow(QMainWindow):
         if self.expanded_key and self.expanded_key[0] >= len(self.steps):
             self.expanded_key = (len(self.steps) - 1,) if self.steps else None
         self.render_cards()
+        self._auto_save()
 
     # ── else 子步骤操作 ──
     def _else_list(self, parent_index):
@@ -1548,6 +1619,7 @@ class MainWindow(QMainWindow):
         else_list.append(step)
         self.expanded_key = (parent_index, len(else_list) - 1)
         self.render_cards()
+        self._auto_save()
         self._scroll_to_end()
 
     def move_sub(self, parent_index, sub_index, delta):
@@ -1561,6 +1633,7 @@ class MainWindow(QMainWindow):
         if self.expanded_key == (parent_index, sub_index):
             self.expanded_key = (parent_index, new)
         self.render_cards()
+        self._auto_save()
 
     def dup_sub(self, parent_index, sub_index):
         if self.worker:
@@ -1569,6 +1642,7 @@ class MainWindow(QMainWindow):
         else_list.insert(sub_index + 1, copy.deepcopy(else_list[sub_index]))
         self.expanded_key = (parent_index, sub_index + 1)
         self.render_cards()
+        self._auto_save()
 
     def del_sub(self, parent_index, sub_index):
         if self.worker:
@@ -1579,6 +1653,7 @@ class MainWindow(QMainWindow):
         if self.expanded_key and len(self.expanded_key) == 2 and self.expanded_key[0] == parent_index:
             self.expanded_key = (parent_index,)  # 收回到父卡片
         self.render_cards()
+        self._auto_save()
 
     # ── 数据模型 ──
     def _empty_data(self):
@@ -1719,16 +1794,47 @@ class MainWindow(QMainWindow):
 
     # ── 文件操作 ──
     def on_new(self):
+        """新建用例:弹名称输入框 → 在 Test_cases/ 创建空白用例文件 →
+        列表刷新并选中新用例,右侧进入编辑(后续编辑自动保存)"""
         if self.worker:
             return
-        self.case_path = None
+        from PySide6.QtWidgets import QInputDialog
+        name, ok = QInputDialog.getText(self, "新建用例", "用例名称(APP 组默认 涂鸦智能):")
+        if not ok:
+            return
+        name = name.strip()
+        if not name:
+            QMessageBox.warning(self, "新建用例", "用例名称不能为空")
+            return
+        self.create_case(name, app="涂鸦智能")
+
+    def create_case(self, name, app="涂鸦智能"):
+        """按名称创建空白用例文件(已存在则提示)并加载到编辑区/列表。
+        app = APP 组名(写入用例 YAML 的 app 字段,列表按它分组)"""
+        os.makedirs(CASES_DIR, exist_ok=True)
+        path = os.path.join(CASES_DIR, f"{name}.yaml")
+        if os.path.exists(path):
+            QMessageBox.warning(self, "新建用例", f"用例已存在: {name}.yaml")
+            return
+        self.case_path = path
         self.data = self._empty_data()
+        self.data["module"] = name
+        self.data["app"] = app
+        with open(path, "w", encoding="utf-8") as f:
+            yaml.safe_dump(self._dump_data(), f, allow_unicode=True, sort_keys=False)
         self.case_idx = 0
         self.expanded_key = None
-        self.file_label.setText("未打开文件")
+        self.file_label.setText(_safe_relpath(path))
         self._load_case_into_ui()
         self.render_cards()
         self._refresh_case_selector()
+        self._fill_case_list()      # 新用例出现在列表
+        for i in range(self.case_list.count()):
+            if self.case_list.item(i).data(Qt.UserRole) == path:
+                self.case_list.setCurrentRow(i)   # 选中新用例
+                break
+        self.status_label.setText(f"已新建用例: {name}.yaml(编辑自动保存)")
+        self.log_view.appendPlainText(f"[新建] {path}")
 
     def on_open(self):
         if self.worker:
@@ -1754,6 +1860,7 @@ class MainWindow(QMainWindow):
         self._load_case_into_ui()
         self.render_cards()
         self._refresh_case_selector()
+        self._fill_case_list()   # ★ 打开的用例必须在左侧列表可见(Test_cases/ 外的也追加)
 
     def _dump_data(self):
         return {"module": self.data.get("module", "未命名"),
@@ -1815,6 +1922,7 @@ class MainWindow(QMainWindow):
         self.expanded_key = None
         self._load_case_into_ui()
         self.render_cards()
+        self._auto_save()
         self._refresh_case_selector()
 
     # ── 执行 ──
