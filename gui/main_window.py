@@ -808,12 +808,15 @@ class NewCaseDialog(QDialog):
         v = QVBoxLayout(self)
         v.addWidget(QLabel("用例名称"))
         self.name_edit = QLineEdit()
+        self.name_edit.setPlaceholderText("输入新用例的名称")
         v.addWidget(self.name_edit)
         v.addWidget(QLabel("APP 用例组"))
         self.group_combo = QComboBox()
         self.group_combo.setEditable(True)
-        self.group_combo.addItems(groups or ["涂鸦智能"])
-        self.group_combo.setCurrentIndex(0)
+        self.group_combo.addItems(groups or [])
+        self.group_combo.lineEdit().setPlaceholderText("选择现有组或输入新组名")
+        if groups:
+            self.group_combo.setCurrentIndex(0)   # 默认第一个现有组
         v.addWidget(self.group_combo)
         btns = QHBoxLayout()
         cancel = QPushButton("取消")
@@ -829,7 +832,7 @@ class NewCaseDialog(QDialog):
 
     def values(self):
         return (self.name_edit.text().strip(),
-                self.group_combo.currentText().strip() or "涂鸦智能")
+                self.group_combo.currentText().strip())
 
 
 class CaseListWidget(QListWidget):
@@ -1276,9 +1279,10 @@ class MainWindow(QMainWindow):
         # ★ 空组目录(还没建任何用例)也显示组头,提示"暂无用例"(用户要求可见所有 APP 组)
         rendered = {g for g in groups.values()}
         for g in self._list_group_dirs():
-            if g in rendered or g in self._collapsed_groups:
+            if g in rendered:
                 continue
-            head = QListWidgetItem(("▸ " if g in self._collapsed_groups else "▾ ") + g)
+            collapsed_g = g in self._collapsed_groups
+            head = QListWidgetItem(("▸ " if collapsed_g else "▾ ") + g)
             head.setFlags(Qt.ItemIsEnabled)
             hf = head.font()
             hf.setBold(True)
@@ -1875,10 +1879,8 @@ class MainWindow(QMainWindow):
         列表刷新并选中新用例,右侧进入编辑(后续编辑自动保存)"""
         if self.worker:
             return
-        groups = self._list_group_dirs() or ["涂鸦智能"]
-        if "涂鸦智能" not in groups:
-            groups = ["涂鸦智能"] + groups
-        dlg = NewCaseDialog(sorted(set(groups)), self)
+        groups = sorted(set(self._list_group_dirs()))
+        dlg = NewCaseDialog(groups, self)
         if dlg.exec() != QDialog.Accepted:
             return
         name, group = dlg.values()
@@ -1900,7 +1902,7 @@ class MainWindow(QMainWindow):
         self._dirty = False
         self.save_btn.setEnabled(False)
 
-    def create_case(self, name, group="涂鸦智能"):
+    def create_case(self, name, group):
         """按名称在组目录 Test_cases/<group>/ 下创建空白用例文件
         (已存在则提示)并加载到编辑区/列表"""
         gdir = os.path.join(CASES_DIR, group)

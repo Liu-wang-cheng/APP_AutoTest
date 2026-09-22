@@ -37,13 +37,13 @@ def test_window_built(win):
 
 
 def test_new_resets(win):
-    win.create_case("测试组")
+    win.create_case("测试组", group="测试组")
     assert len(win.steps) == 0
     assert win.data["module"] == "测试组"
 
 
 def test_add_step_and_render(win):
-    win.create_case("测试组")
+    win.create_case("测试组", group="测试组")
     win.add_step("click")
     assert len(win.steps) == 1
     assert win.cards_lay.count() >= 2          # 卡片 + 末尾 stretch
@@ -52,13 +52,13 @@ def test_add_step_and_render(win):
 
 def test_add_step_schema_default(win):
     """int4 字段默认给空列表(序列化时空列表按动作语义处理)"""
-    win.create_case("测试组")
+    win.create_case("测试组", group="测试组")
     win.add_step("room_zones")
     assert win.steps[-1].get("room_zones") == []
 
 
 def test_dump_data_serializes(win):
-    win.create_case("测试组")
+    win.create_case("测试组", group="测试组")
     win.add_step("click")
     win.steps[0]["click"] = " 开始清扫.png "
     win.steps[0]["desc"] = "点开始"
@@ -69,7 +69,7 @@ def test_dump_data_serializes(win):
 
 
 def test_yaml_roundtrip_via_text(win):
-    win.create_case("测试组")
+    win.create_case("测试组", group="测试组")
     win.add_step("assert")
     win.steps[0]["assert"] = "清扫中,建图中"
     win.steps[0]["timeout"] = 20
@@ -105,7 +105,7 @@ def test_set_locked_disables_editing(win):
 
 def test_locked_disables_all_edit_buttons(win):
     """锁定靠禁用按钮实现(方法本身不挡) —— 验证按钮确实被禁掉"""
-    win.create_case("测试组")
+    win.create_case("测试组", group="测试组")
     win._set_locked(True)
     assert not win.add_btn.isEnabled()
     assert not win.new_btn.isEnabled()
@@ -115,7 +115,7 @@ def test_locked_disables_all_edit_buttons(win):
 
 
 def test_step_summary_shown_in_card(win):
-    win.create_case("测试组")
+    win.create_case("测试组", group="测试组")
     win.add_step("back")
     card = win.cards_lay.itemAt(0).widget()
     assert "返回键" in card.summary_label.text()
@@ -124,7 +124,7 @@ def test_step_summary_shown_in_card(win):
 # ── 步骤 / 子步骤操作 ──
 
 def test_dup_step_is_deepcopy(win):
-    win.create_case("测试组")
+    win.create_case("测试组", group="测试组")
     win.add_step("click")
     win.steps[0]["click"] = "开始清扫.png"
     win.dup_step(0)
@@ -135,7 +135,7 @@ def test_dup_step_is_deepcopy(win):
 
 
 def test_move_step_swaps(win):
-    win.create_case("测试组")
+    win.create_case("测试组", group="测试组")
     win.add_step("click")
     win.add_step("back")
     win.steps[0]["desc"], win.steps[1]["desc"] = "A", "B"
@@ -144,7 +144,7 @@ def test_move_step_swaps(win):
 
 
 def test_move_step_out_of_range_is_noop(win):
-    win.create_case("测试组")
+    win.create_case("测试组", group="测试组")
     win.add_step("click")
     win.steps[0]["desc"] = "A"
     win.move_step(0, -1)
@@ -153,7 +153,7 @@ def test_move_step_out_of_range_is_noop(win):
 
 def test_del_step_rolls_expanded_key_back(win):
     """删掉展开中的最后一步后,展开键不能还指向已不存在的下标"""
-    win.create_case("测试组")
+    win.create_case("测试组", group="测试组")
     win.add_step("click")
     win.add_step("back")
     win.expanded_key = (1,)
@@ -163,7 +163,7 @@ def test_del_step_rolls_expanded_key_back(win):
 
 
 def test_add_sub_appends_and_expands(win):
-    win.create_case("测试组")
+    win.create_case("测试组", group="测试组")
     win.add_step("if")
     win.add_sub(0, "click")
     assert len(win.steps[0]["else"]) == 1
@@ -172,7 +172,7 @@ def test_add_sub_appends_and_expands(win):
 
 def test_add_sub_wait_shortcut(win):
     """__wait 是「延时等待」的快捷写法(纯 wait 步骤)"""
-    win.create_case("测试组")
+    win.create_case("测试组", group="测试组")
     win.add_step("if")
     win.add_sub(0, "__wait")
     sub = win.steps[0]["else"][0]
@@ -180,7 +180,7 @@ def test_add_sub_wait_shortcut(win):
 
 
 def test_move_sub(win):
-    win.create_case("测试组")
+    win.create_case("测试组", group="测试组")
     win.add_step("if")
     win.add_sub(0, "click")
     win.add_sub(0, "back")
@@ -191,7 +191,7 @@ def test_move_sub(win):
 
 
 def test_dup_sub_and_del_sub(win):
-    win.create_case("测试组")
+    win.create_case("测试组", group="测试组")
     win.add_step("if")
     win.add_sub(0, "click")
     win.dup_sub(0, 0)
@@ -202,7 +202,7 @@ def test_dup_sub_and_del_sub(win):
 
 def test_del_sub_collapses_to_parent(win):
     """子步骤删光后展开态要收回父卡片,不能停在已不存在的子下标上"""
-    win.create_case("测试组")
+    win.create_case("测试组", group="测试组")
     win.add_step("if")
     win.add_sub(0, "click")
     win.del_sub(0, 0)
@@ -210,7 +210,7 @@ def test_del_sub_collapses_to_parent(win):
 
 
 def test_collapse_all(win):
-    win.create_case("测试组")
+    win.create_case("测试组", group="测试组")
     win.add_step("if")
     win.add_sub(0, "click")
     win._collapse_all()
@@ -223,7 +223,7 @@ def test_step_ops_guarded_by_worker_not_lock(win):
     锁定是"禁用按钮"层面的保护;真正的守卫是 self.worker ——
     执行中改步骤会让跑着的用例和界面数据对不上。
     """
-    win.create_case("测试组")
+    win.create_case("测试组", group="测试组")
     win.add_step("click")
 
     class _FakeWorker:
@@ -244,7 +244,7 @@ def test_step_ops_guarded_by_worker_not_lock(win):
 def test_else_substeps_survive_yaml_roundtrip(win):
     """else 子步骤要能落盘再读回 —— 缩进/结构最容易在这里出错"""
     import yaml
-    win.create_case("测试组")
+    win.create_case("测试组", group="测试组")
     win.add_step("if not")
     win.steps[0]["if not"] = "扫地机器人"
     win.add_sub(0, "click")
@@ -270,7 +270,7 @@ def _card_widgets(win):
 
 def test_只改说明不破坏其它字段类型(win):
     """编辑一个字段不能碰其它字段 —— swipe 的 list 被写成字符串就废了"""
-    win.create_case("测试组")
+    win.create_case("测试组", group="测试组")
     win.steps.append({"desc": "滑动", "swipe": [100, 200, 300, 400]})
     win.expanded_key = (0,)
     win.render_cards()
@@ -285,7 +285,7 @@ def test_只改说明不破坏其它字段类型(win):
 
 def test_高级参数编辑生效(win):
     """等待/重试这类修饰参数在卡片里编辑后要写回步骤"""
-    win.create_case("测试组")
+    win.create_case("测试组", group="测试组")
     win.add_step("click")
     win.steps[0]["click"] = "确认"
     win.expanded_key = (0,)
@@ -1065,7 +1065,7 @@ def test_on_run_finished_always_unlocks(win, monkeypatch):
     """★ 结束处理即使中途抛异常,也必须解锁卡片区并清掉 worker
     (否则界面永久锁死,无法编辑/展开步骤 —— 用户实测 bug)"""
     from PySide6.QtWidgets import QPushButton
-    win.create_case("测试组")
+    win.create_case("测试组", group="测试组")
     win._set_locked(True)
     win.worker = object()                       # 模拟执行中的 worker 残留
     assert not win.cards_scroll.widget().isEnabled()
