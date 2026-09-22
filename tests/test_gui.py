@@ -1358,3 +1358,45 @@ def test_save_button_dirty_flow(qapp, monkeypatch, tmp_path):
 
 def test_collapse_group_unloads_editor(qapp, monkeypatch, tmp_path):
     pass
+
+
+def test_collapsed_group_not_marked_empty(qapp, monkeypatch, tmp_path):
+    """★ 排序重建(order_paths 分支)后, 折叠组的数据必须补全 ——
+    否则折叠组被误判为空组, 错插「暂无用例」占位(用户实测);
+    有用例的组折叠后: 组头 ▸ + 无用例行 + 无占位行"""
+    from PySide6.QtCore import Qt
+    from gui import main_window as mw
+    d = tmp_path / "Test_cases" / "涂鸦智能T4"
+    d.mkdir(parents=True)
+    for n in ("全局清扫", "划区清扫"):
+        (d / f"{n}.yaml").write_text(
+            "module: %s\ncases: [{name: a, steps: []}]\n" % n, encoding="utf-8")
+    monkeypatch.setattr(mw, "CASES_DIR", str(tmp_path / "Test_cases"), raising=False)
+    monkeypatch.setattr(mw, "CONFIG_PATH", str(tmp_path / "config.yaml"), raising=False)
+    w = mw.MainWindow()
+    try:
+        # 触发一次箭头移动(order_paths 分支)
+        w._move_case(w.case_list.item(case_row_index(w, 0)).data(Qt.UserRole), +1)
+        # 折叠该组
+        w._collapsed_groups.add("涂鸦智能T4")
+        w._fill_case_list()
+        texts = [w.case_list.item(i).text() for i in range(w.case_list.count())]
+        assert texts == ["▸ 涂鸦智能T4"], f"折叠组应只有组头无占位, 实际: {texts}"
+        assert not any("暂无用例" in t for t in texts), "有用例的组不得显示占位"
+    finally:
+        w.close()
+
+
+def test_truly_empty_group_shows_placeholder(qapp, monkeypatch, tmp_path):
+    """真空组(目录无任何用例)→ 组头 + 暂无用例占位"""
+    from gui import main_window as mw
+    root = tmp_path / "Test_cases"
+    (root / "三星").mkdir(parents=True)          # 空组目录
+    monkeypatch.setattr(mw, "CASES_DIR", str(root), raising=False)
+    monkeypatch.setattr(mw, "CONFIG_PATH", str(tmp_path / "config.yaml"), raising=False)
+    w = mw.MainWindow()
+    try:
+        texts = [w.case_list.item(i).text() for i in range(w.case_list.count())]
+        assert texts == ["▾ 三星", "　　(暂无用例)"], f"实际: {texts}"
+    finally:
+        w.close()

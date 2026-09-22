@@ -1243,6 +1243,14 @@ class MainWindow(QMainWindow):
             groups = {p: g for p, g, _ in infos}
         else:
             paths = list(order_paths)
+            # ★ 折叠组的用例行不在可见列表中, 数据必须补全 ——
+            #   否则折叠组会被误判为空组, 错插「暂无用例」占位(用户实测)
+            import glob as _glob
+            for g in self._list_group_dirs():
+                if g in self._collapsed_groups:
+                    for p in _glob.glob(os.path.join(CASES_DIR, g, '*.yaml')):
+                        if p not in paths:
+                            paths.append(p)
             groups = {p: os.path.basename(os.path.dirname(p)) for p in paths}
         checked = set(self._checked_case_paths())
         cur_item = self.case_list.currentItem()
