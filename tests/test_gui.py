@@ -1270,3 +1270,22 @@ def test_chip_strip_field_order(win):
     p_add = src.find('self.add_btn = QPushButton("＋ 添加步骤")')
     p_wait = src.find('lay.addWidget(self.case_wait_edit)')
     assert pos < p_add and p_wait < p_add, "添加步骤应排在间隔s之后"
+
+
+def test_empty_group_dir_still_shown(qapp, monkeypatch, tmp_path):
+    """空组目录(还没建用例)也要显示组头 + (暂无用例)占位 —— 用户要求所有 APP 组可见"""
+    from PySide6.QtCore import Qt
+    from gui import main_window as mw
+    root = tmp_path / "Test_cases"
+    (root / "涂鸦智能T4").mkdir(parents=True)
+    (root / "涂鸦智能T4" / "a.yaml").write_text(
+        "module: a\ncases: [{name: x, steps: []}]\n", encoding="utf-8")
+    (root / "三星").mkdir()          # 空组目录
+    monkeypatch.setattr(mw, "CASES_DIR", str(root), raising=False)
+    monkeypatch.setattr(mw, "CONFIG_PATH", str(tmp_path / "config.yaml"), raising=False)
+    w = mw.MainWindow()
+    try:
+        texts = [w.case_list.item(i).text() for i in range(w.case_list.count())]
+        assert texts == ["▾ 涂鸦智能T4", "a", "▾ 三星", "(暂无用例)"], f"实际: {texts}"
+    finally:
+        w.close()

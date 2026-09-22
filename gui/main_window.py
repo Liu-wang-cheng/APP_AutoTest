@@ -1238,6 +1238,26 @@ class MainWindow(QMainWindow):
             item.setData(CASE_STATE_ROLE, state)
             item.setIcon(lamp_icon(state))   # 灯在勾选框后、用例名前(icon 位,原生布局永不重叠)
             self.case_list.addItem(item)
+        # ★ 空组目录(还没建任何用例)也显示组头,提示"暂无用例"(用户要求可见所有 APP 组)
+        rendered = {g for g in groups.values()}
+        for g in self._list_group_dirs():
+            if g in rendered or g in self._collapsed_groups:
+                continue
+            head = QListWidgetItem(("▸ " if g in self._collapsed_groups else "▾ ") + g)
+            head.setFlags(Qt.ItemIsEnabled)
+            hf = head.font()
+            hf.setBold(True)
+            head.setFont(hf)
+            head.setForeground(QColor("#0284c7"))
+            head.setData(Qt.UserRole, None)
+            head.setData(CASE_STATE_ROLE, g)
+            head.setToolTip(f"{g} 的用例组,点击折叠/展开")
+            self.case_list.addItem(head)
+            hint = QListWidgetItem("(暂无用例)")
+            hint.setFlags(Qt.ItemIsEnabled)
+            hint.setForeground(QColor("#94a3b8"))
+            hint.setData(Qt.UserRole, None)
+            self.case_list.addItem(hint)
         for i in range(self.case_list.count()):
             if self.case_list.item(i).data(Qt.UserRole) == cur:
                 self.case_list.setCurrentRow(i)
