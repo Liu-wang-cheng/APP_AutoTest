@@ -839,7 +839,7 @@ class DeviceScanThread(QThread):
 class NewCaseDialog(QDialog):
     """新建用例对话框: 用例名称 + APP 用例组(可选现有组或输入新组)"""
 
-    def __init__(self, groups, parent=None):
+    def __init__(self, groups, parent=None, default_group=None):
         super().__init__(parent)
         self.setWindowTitle("新建用例")
         v = QVBoxLayout(self)
@@ -853,7 +853,12 @@ class NewCaseDialog(QDialog):
         self.group_combo.addItems(groups or [])
         self.group_combo.lineEdit().setPlaceholderText("选择现有组或输入新组名")
         if groups:
-            self.group_combo.setCurrentIndex(0)   # 默认第一个现有组
+            self.group_combo.addItems(groups)
+            # 默认组: 有指定则选中它(用户反馈: 别默认进错组), 否则第一项
+            if default_group and default_group in groups:
+                self.group_combo.setCurrentIndex(groups.index(default_group))
+            else:
+                self.group_combo.setCurrentIndex(0)
         v.addWidget(self.group_combo)
         btns = QHBoxLayout()
         cancel = QPushButton("取消")
@@ -1348,7 +1353,9 @@ class MainWindow(QMainWindow):
                 hint.setData(Qt.UserRole, None)
                 self.case_list.addItem(hint)
         for i in range(self.case_list.count()):
-            if self.case_list.item(i).data(Qt.UserRole) == cur:
+            # cur=None(点击组头折叠)时不得匹配组头行(UserRole 同为 None),
+            # 否则高亮跳到第一个组 —— 由调用方单独保持被点击组头的选中
+            if cur is not None and self.case_list.item(i).data(Qt.UserRole) == cur:
                 self.case_list.setCurrentRow(i)
                 break
 
@@ -1482,6 +1489,14 @@ class MainWindow(QMainWindow):
                             os.path.basename(os.path.dirname(os.path.abspath(self.case_path))) == group):
                         self._unload_case()
                 self._fill_case_list()
+                # ★ 选中框保持在被点击的组头上(否则重建后 cur=None 会错误
+                #   匹配到第一个组头, 高亮跳到别的 APP 组 —— 用户实测)
+                for i in range(self.case_list.count()):
+                    it = self.case_list.item(i)
+                    if (it.data(Qt.UserRole) is None
+                            and it.data(CASE_STATE_ROLE) == group):
+                        self.case_list.setCurrentRow(i)
+                        break
             return
         if not os.path.isfile(path) or path == self.case_path:
             return
@@ -1977,7 +1992,18 @@ class MainWindow(QMainWindow):
         if self.worker:
             return
         groups = sorted(set(self._list_group_dirs()))
-        dlg = NewCaseDialog(groups, self)
+        # ★ 默认组 = 当前编辑用例所在的 APP 组(顺着当前 APP 新建);
+        #   否则按名称取第一个组 —— 曾因此把新用例默认建进「测试」组(用户实测)
+        default_group = None
+        if self.case_path:
+            g = os.path.basename(os.path.dirname(os.path.abspath(self.case_path)))
+            default_group = g if g in groups else None
+        if default_group is None:
+            default_group = next((g for g in groups
+                                  if g == (load_config().get("app") or {}).get("name")), None)
+        if default_group is None and groups:
+            default_group = groups[0]
+        dlg = NewCaseDialog(groups, self, default_group=default_group)
         if dlg.exec() != QDialog.Accepted:
             return
         name, group = dlg.values()

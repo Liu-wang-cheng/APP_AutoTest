@@ -1,5 +1,0 @@
-module: 测试
-cases:
-- name: 新用例
-  priority: P1
-  steps: []

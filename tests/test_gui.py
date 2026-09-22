@@ -1312,7 +1312,8 @@ def test_new_case_dialog_creates_in_group(qapp, monkeypatch, tmp_path):
                 return QDialog.Accepted
             def values(self):
                 return ("新用例A", "三星")
-        monkeypatch.setattr(mw, "NewCaseDialog", lambda groups, parent: _Dlg())
+        monkeypatch.setattr(mw, "NewCaseDialog",
+                            lambda groups, parent, default_group=None: _Dlg())
         w.on_new()
         f = root / "三星" / "新用例A.yaml"
         assert f.exists(), "应在三星组目录创建用例文件"
