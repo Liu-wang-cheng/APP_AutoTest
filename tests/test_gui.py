@@ -1484,3 +1484,52 @@ def test_collapse_empty_group_hides_placeholder(qapp, monkeypatch, tmp_path):
         assert texts2 == ["▾ 三星", "　　(暂无用例)"], "展开后占位恢复"
     finally:
         w.close()
+
+
+# ── 动作键完整性 + 截图开关(2026-09-22) ──
+
+def test_all_actions_have_key_after_new_step():
+    """★ 全部动作 new_step 后动作键必须存在(此前 back/set_time/room_click
+    等新建后无动作键 → 卡片显示未知、引擎无动作);serialize 也不得丢键"""
+    from gui import schema
+    missing = []
+    for a in schema.ACTIONS:
+        step = schema.new_step(a["key"])
+        if a["key"] not in step:
+            missing.append((a["key"], list(step.keys())))
+        ser = schema.serialize_step(dict(step))
+        if a["key"] not in ser:
+            missing.append((a["key"] + "(serialize丢键)", list(ser.keys())))
+    assert not missing, f"动作键缺失: {missing}"
+    # 语义默认抽查
+    assert schema.new_step("back")["back"] is True
+    assert schema.new_step("set_time")["set_time"] == 0      # 0=当前时间
+    assert schema.new_step("room_click")["room_click"] == 1  # 第1个分区
+    # 条件动作: 空条件保留键(serialize 不清动作键)
+    assert "if" in schema.serialize_step(schema.new_step("if"))
+
+
+def test_screenshot_switch_and_auto_name(qapp, monkeypatch, tmp_path):
+    """截图字段 = 开关(True 自动命名), 旧字符串路径兼容保留"""
+    from types import SimpleNamespace
+    from core import runner as cr
+    root = tmp_path / "Test_img"
+    monkeypatch.setattr(cr, "BASE_DIR", str(tmp_path), raising=False)
+    saved = {"path": None}
+
+    class _Dev:
+        def screenshot(self, path=None):
+            saved["path"] = path
+            return path
+
+    dev = _Dev()
+    cfg = {"step_interval": 0, "default_timeout": 1, "click_timeout": 1}
+    r = cr.ActionRunner(dev, cfg, case_name="冒烟用例")
+    r._execute({"desc": "点击 主界面 按钮", "screenshot": True})
+    p1 = saved["path"].replace("\\", "/")
+    assert "冒烟用例" in p1 and "step01" in p1, f"自动命名: {p1}"
+    assert "点击_主界面_按钮" in p1, "自动命名应含描述"
+    # 旧字符串路径兼容(screenshots/ 前缀补 Test_img/)
+    r._execute({"desc": "d", "screenshot": "screenshots/manual.png"})
+    p2 = saved["path"].replace("\\", "/")
+    assert p2.endswith("Test_img/screenshots/manual.png"), f"旧路径兼容: {p2}"

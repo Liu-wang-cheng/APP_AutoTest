@@ -9,7 +9,7 @@
 # 所有步骤通用的附加字段(修改器)
 GENERIC_FIELDS = [
     {"key": "desc", "label": "步骤说明", "type": "text", "hint": "显示在报告和结果面板"},
-    {"key": "screenshot", "label": "截图保存路径", "type": "text", "hint": "如 screenshots/步骤01_主界面.png"},
+    {"key": "screenshot", "label": "自动截图", "type": "bool", "hint": "勾选则本步执行后自动截图, 文件名按用例/步骤自动生成"},
     {"key": "wait", "label": "本步后等待(秒)", "type": "int", "hint": "覆盖全局步骤间隔"},
     {"key": "timeout", "label": "超时(秒)", "type": "int", "hint": "0=无限等待;留空用全局默认"},
     {"key": "retry", "label": "失败重试次数", "type": "int", "hint": "默认 0 不重试"},
@@ -104,7 +104,7 @@ ACTIONS = [
     ]},
     {"key": "room_click", "label": "点击分区", "category": "地图编辑", "fields": [
         {"key": "room_click", "label": "分区序号", "type": "int", "required": True,
-         "hint": "1=第1个;大于分区数=连点剩余全部"},
+         "default": 1, "hint": "1=第1个;大于分区数=连点剩余全部"},
     ]},
     {"key": "merge_zones", "label": "合并分区", "category": "地图编辑", "fields": [], "fixed_bool": True},
     {"key": "split_zone", "label": "分割分区", "category": "地图编辑", "fields": [], "fixed_bool": True},
@@ -160,6 +160,8 @@ def new_step(action_key):
     """按 schema 生成步骤 dict(必填项给默认值)"""
     action = ACTION_BY_KEY[action_key]
     step = {"desc": action["label"]}
+    if action.get("fixed_bool"):
+        step[action_key] = True   # ★ 固定布尔动作(back等): 新建即写入动作键
     for f in action["fields"]:
         if f["type"] == "group":
             step[f["key"]] = True  # 默认标量 True = 自动模式;填子参数后表单写成 dict
@@ -170,7 +172,28 @@ def new_step(action_key):
             step[f["key"]] = f.get("default", 0.6)
         elif f["type"] == "int4":
             step[f["key"]] = []  # 序列化时空列表按动作语义处理(room_zones→True,其他省略)
-        # int/bool 可选项默认缺省(序列化时省略)
+        elif f["type"] == "int" and (f.get("required") or "default" in f):
+            step[f["key"]] = f.get("default", 0)   # 必填/有默认值的 int 写入
+        # 可选 int/bool 默认缺省(序列化时省略)
+    # ★ 动作键必须存在于步骤(否则卡片显示「未知」、引擎执行无动作):
+    #   动作键与字段同名但未被上面分支写入时, 按字段类型给兜底默认
+    if action["key"] not in step:
+        for f in action["fields"]:
+            if f["key"] == action["key"]:
+                t = f["type"]
+                if t == "text":
+                    step[action["key"]] = ""
+                elif t == "int":
+                    step[action["key"]] = f.get("default", 0)
+                elif t == "float":
+                    step[action["key"]] = f.get("default", 0.6)
+                elif t == "bool" or t == "group":
+                    step[action["key"]] = True
+                else:
+                    step[action["key"]] = True
+                break
+        else:
+            step[action["key"]] = True   # 无同名字段(理论不发生): 标量 True
     return step
 
 
@@ -183,6 +206,10 @@ def serialize_step(step):
         if isinstance(v, str):
             v = v.strip()
             if not v:
+                # ★ 动作键即使为空也保留(否则卡片显示「未知」、引擎丢动作);
+                #   非动作键的空串照旧省略
+                if k in ACTION_BY_KEY:
+                    out[k] = ""
                 continue
             out[k] = v
             continue

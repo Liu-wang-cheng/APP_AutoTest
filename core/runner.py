@@ -544,7 +544,16 @@ class ActionRunner:
         # 4. 截图(点击导航后页面有过场动画,先等页面落定再截 —— 否则会截到
         #    转场中的旧页面:地图编辑用例的对比基线因此截成了设置页,77.9% 假失败)
         if "screenshot" in step:
-            path = step["screenshot"]
+            sv = step["screenshot"]
+            if isinstance(sv, str) and sv.strip():
+                path = sv                       # 旧用例的手动路径, 兼容保留
+            else:
+                # ★ 开关模式(True): 按用例名/步骤序号/描述自动命名(用户要求)
+                safe_desc = re.sub(r'[\\/:*?"<>|\s]+', "_",
+                                   str(step.get("desc") or ""))[:30]
+                idx = len(self.results) + 1
+                path = (f"screenshots/{self.case_name or 'case'}/"
+                        f"step{idx:02d}_{safe_desc}.png")
             # screenshots/ 开头的路径补全 Test_img/ 前缀(reports/ 等其他路径原样)
             if path.startswith("screenshots/"):
                 path = os.path.join(BASE_DIR, "Test_img", path)
