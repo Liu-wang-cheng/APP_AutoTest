@@ -84,9 +84,23 @@ def do_assert(runner, step):
         runner._assert_locator(val, timeout)
 
 
+def _resolve_baseline(runner, value):
+    """基准图值解析: step:N 引用 → 第 N 步执行结果的截图路径;
+    其他值原样返回(旧用例的手动路径)"""
+    if isinstance(value, str) and value.startswith("step:"):
+        n = int(value[5:])
+        res = runner.results[n - 1] if 0 < n <= len(runner.results) else None
+        if not res or not res.get("screenshot"):
+            raise RuntimeError(
+                f"对比基准指向步骤{n}, 但该步没有截图(未开启截图或尚未执行)")
+        return res["screenshot"]
+    return value
+
+
 @reg.action("compare", priority=95)
 def do_compare(runner, step):
-    compare_screen(runner, step["compare"], float(step.get("threshold", 0.6)), inverse=False)
+    baseline = _resolve_baseline(runner, step["compare"])
+    compare_screen(runner, baseline, float(step.get("threshold", 0.6)), inverse=False)
 
 
 @reg.action("diff", priority=115)

@@ -7,6 +7,7 @@
 """
 import copy
 import os
+import shutil
 import re
 import time
 
@@ -471,10 +472,32 @@ def make_action_menu(parent, on_pick):
     return menu
 
 
-def _make_field_widget(field, value):
-    """按 schema 字段类型建控件,返回 (widget, 取值getter)"""
+def _make_field_widget(field, value, steps=None, exclude_index=None):
+    """按 schema 字段类型建控件,返回 (widget, 取值getter)。
+    steps/exclude_index: stepshot 类型(基准图选步骤下拉)用的上下文"""
     t = field["type"]
     hint = field.get("hint", "")
+    if t == "stepshot":
+        # 基准图下拉: 选项 = 当前用例中开启了自动截图的其他步骤(用户要求)
+        combo = QComboBox()
+        options = []
+        for i, st in enumerate(steps or []):
+            if i == exclude_index or not st.get("screenshot"):
+                continue
+            desc = st.get("desc") or "(无描述)"
+            options.append((f"step:{i + 1}", f"步骤{i + 1}: {desc}"))
+        for v, label in options:
+            combo.addItem(label, v)
+        if value and value not in [v for v, _ in options]:
+            combo.addItem(f"(手动路径) {value}", value)   # 旧路径/自定义值保留显示
+        if combo.count() == 0:
+            combo.addItem("(前面没有开启截图的步骤)", "")
+            combo.setEnabled(False)
+        if value:
+            k = combo.findData(value)
+            if k >= 0:
+                combo.setCurrentIndex(k)
+        return combo, combo.currentData
     if t == "bool":
         w = QCheckBox()
         w.setChecked(bool(value))
@@ -721,14 +744,19 @@ class StepCard(QFrame):
         lbl = QLabel(field["label"])
         lbl.setObjectName("fieldLabel")
         grid.addWidget(lbl, row, 0)
-        w, getter = _make_field_widget(field, self.step.get(field["key"]))
+        w, getter = _make_field_widget(field, self.step.get(field["key"]),
+                                       steps=self.main.steps,
+                                       exclude_index=self.index)
         w.setMinimumWidth(240)
         w.setMaximumWidth(430)
         grid.addWidget(w, row, 1)
         self.widgets[field["key"]] = w
         self.getters[field["key"]] = getter
-        signal = w.toggled if isinstance(w, QCheckBox) else w.editingFinished
-        signal.connect(self._write_back)
+        if isinstance(w, QComboBox):          # stepshot 下拉: 选中即写回
+            w.currentIndexChanged.connect(self._write_back)
+        else:
+            signal = w.toggled if isinstance(w, QCheckBox) else w.editingFinished
+            signal.connect(self._write_back)
         return row + 1
 
     def _add_group_field(self, grid, row, field):
@@ -748,13 +776,18 @@ class StepCard(QFrame):
             sl.setObjectName("fieldLabel")
             sl.setFixedWidth(90)
             row_h.addWidget(sl)
-            w, getter = _make_field_widget(sub, cur.get(sub["key"]))
+            w, getter = _make_field_widget(sub, cur.get(sub["key"]),
+                                           steps=self.main.steps,
+                                           exclude_index=self.index)
             w.setMinimumWidth(200)
             row_h.addWidget(w)
             hv.addLayout(row_h)
             sub_getters[sub["key"]] = getter
-            signal = w.toggled if isinstance(w, QCheckBox) else w.editingFinished
-            signal.connect(self._write_back)
+            if isinstance(w, QComboBox):
+                w.currentIndexChanged.connect(self._write_back)
+            else:
+                signal = w.toggled if isinstance(w, QCheckBox) else w.editingFinished
+                signal.connect(self._write_back)
         grid.addWidget(host, row, 1)
         self.getters[field["key"]] = ("__group__", sub_getters)
         return row + 1
@@ -1159,6 +1192,10 @@ class MainWindow(QMainWindow):
         none_btn = QPushButton("清空")
         none_btn.clicked.connect(lambda: self._set_cases_checked(Qt.Unchecked))
         head.addWidget(none_btn)
+        del_btn = QPushButton("删除")
+        del_btn.setToolTip("删除当前选中的用例文件, 或整组目录(含组内全部用例)")
+        del_btn.clicked.connect(self.on_delete_selected)
+        head.addWidget(del_btn)
         v.addLayout(head)
 
         # ★ self.case_list 必须指向真正的 QListWidget(曾被 panel 覆盖,
@@ -1263,7 +1300,7 @@ class MainWindow(QMainWindow):
             # ── 组头行(组变化时插入;不可选/不可勾/不可拖;点击折叠/展开) ──
             if group != last_group:
                 head = QListWidgetItem(("▸ " if collapsed else "▾ ") + group)
-                head.setFlags(Qt.ItemIsEnabled)
+                head.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
                 hf = head.font()
                 hf.setBold(True)
                 head.setFont(hf)
@@ -1295,7 +1332,7 @@ class MainWindow(QMainWindow):
                 continue
             collapsed_g = g in self._collapsed_groups
             head = QListWidgetItem(("▸ " if collapsed_g else "▾ ") + g)
-            head.setFlags(Qt.ItemIsEnabled)
+            head.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
             hf = head.font()
             hf.setBold(True)
             head.setFont(hf)
@@ -1328,6 +1365,53 @@ class MainWindow(QMainWindow):
         """点运行的瞬间:全部勾选用例灯变黄(重新执行时先覆盖上次的绿/红)"""
         for p in paths:
             self.set_case_state(p, "running")
+
+    def on_delete_selected(self):
+        """删除当前选中的行: 用例行 = 删除该用例文件;组头行 = 删除整组目录。
+        均需确认;当前正在编辑的用例被删时同步清空编辑区"""
+        item = self.case_list.currentItem()
+        if item is None or self.worker:
+            return
+        path = item.data(Qt.UserRole)
+        if not path:
+            # ── 删除整组 ──
+            group = item.data(CASE_STATE_ROLE)
+            if not group:
+                return
+            gdir = os.path.join(CASES_DIR, group)
+            if not os.path.isdir(gdir):
+                return
+            n = len([f for f in os.listdir(gdir) if f.endswith((".yaml", ".yml"))])
+            if QMessageBox.question(
+                    self, "删除 APP 组",
+                    f"确定删除组「{group}」及其全部 {n} 条用例文件?\n此操作不可恢复!"
+            ) != QMessageBox.Yes:
+                return
+            shutil.rmtree(gdir)
+            self._collapsed_groups.discard(group)
+            for p in list(self._case_states):
+                if os.path.basename(os.path.dirname(p)) == group:
+                    self._case_states.pop(p, None)
+            if (self.case_path and os.path.basename(os.path.dirname(
+                    os.path.abspath(self.case_path))) == group):
+                self._unload_case()
+            self._fill_case_list()
+            self.status_label.setText(f"已删除组: {group}")
+            return
+        # ── 删除单个用例 ──
+        if not os.path.isfile(path):
+            return
+        name = os.path.splitext(os.path.basename(path))[0]
+        if QMessageBox.question(
+                self, "删除用例", f"确定删除用例「{name}」?\n此操作不可恢复!"
+        ) != QMessageBox.Yes:
+            return
+        os.remove(path)
+        self._case_states.pop(path, None)
+        if self.case_path == path:
+            self._unload_case()
+        self._fill_case_list()
+        self.status_label.setText(f"已删除用例: {name}")
 
     def set_case_state(self, path, state):
         """设置用例执行状态灯:未执行置灰,执行中黄,通过绿,失败红。

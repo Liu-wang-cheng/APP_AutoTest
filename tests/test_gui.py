@@ -1533,3 +1533,150 @@ def test_screenshot_switch_and_auto_name(qapp, monkeypatch, tmp_path):
     r._execute({"desc": "d", "screenshot": "screenshots/manual.png"})
     p2 = saved["path"].replace("\\", "/")
     assert p2.endswith("Test_img/screenshots/manual.png"), f"旧路径兼容: {p2}"
+
+
+def test_compare_baseline_step_dropdown(qapp, monkeypatch, tmp_path):
+    """compare 基准图 = 下拉选择前面开启截图的步骤(值 step:N);
+    执行端 runner 解析 step:N 为该步截图路径;无截图时明确报错"""
+    from PySide6.QtWidgets import QComboBox
+    from gui import main_window as mw
+    from core import runner as cr
+    root = tmp_path / "Test_cases" / "涂鸦智能T4"
+    root.mkdir(parents=True)
+    (root / "a.yaml").write_text(
+        "module: a\ncases: [{name: x, steps: []}]\n", encoding="utf-8")
+    monkeypatch.setattr(mw, "CASES_DIR", str(root), raising=False)
+    monkeypatch.setattr(mw, "CONFIG_PATH", str(tmp_path / "config.yaml"), raising=False)
+    w = mw.MainWindow()
+    try:
+        # 步骤: 1 开截图, 2 不开, 3 开截图, 4 compare
+        w.add_step("click")
+        w.steps[0]["screenshot"] = True     # 步骤1 开截图
+        w.add_step("click")                  # 步骤2 不开
+        w.add_step("click")                  # 步骤3 开截图
+        w.steps[2]["screenshot"] = True
+        w.add_step("compare")                # 步骤4 对比
+        card = [wd for wd in _card_widgets(w)][3]
+        combo = card.widgets.get("compare")
+        assert isinstance(combo, QComboBox), "基准图应为下拉选择"
+        data = [combo.itemData(i) for i in range(combo.count())]
+        assert data == ["step:1", "step:3"], f"选项应为开启截图的步骤: {data}"
+        combo.setCurrentIndex(1)         # 选 步骤3
+        w._sync_header() if hasattr(w, "_sync_header") else None
+        assert w.steps[3]["compare"] == "step:3"
+    finally:
+        w.close()
+
+
+def test_runner_compare_resolves_step_ref(qapp, tmp_path):
+    """runner: compare=step:N → 取第 N 步结果截图;无截图时明确报错"""
+    import core.actions.asserts as asserts_mod
+    from types import SimpleNamespace
+    from core import runner as cr
+    saved = {"path": None}
+
+    import numpy as np
+    from PIL import Image
+    Image.new("RGB", (64, 64), "white").save(tmp_path / "shot1.png")
+
+    class _Dev:
+        def screenshot(self, path=None, format=None):
+            if format == "opencv":
+                import numpy as np
+                return np.zeros((32, 32, 3), dtype=np.uint8)
+            saved["path"] = path
+            return path
+
+    dev = _Dev()
+    r = cr.ActionRunner(dev, {"step_interval": 0, "default_timeout": 1,
+                              "click_timeout": 1}, case_name="c")
+    # 模拟第 1 步已截图
+    r.results.append({"desc": "步骤1", "passed": True,
+                      "screenshot": str(tmp_path / "shot1.png")})
+    assert asserts_mod._resolve_baseline(r, "step:1") == str(tmp_path / "shot1.png"), \
+        "step:1 应解析为第1步截图路径"
+    # 无截图引用 → 明确报错
+    import pytest
+    with pytest.raises(RuntimeError, match="没有截图"):
+        asserts_mod._resolve_baseline(r, "step:2")
+
+
+def test_delete_selected_case_and_group(qapp, monkeypatch, tmp_path):
+    """删除按钮: 删除选中用例(文件移除+编辑区清空)与删除选中组(整目录移除),
+    均需确认弹窗(测试中 mock);只删除选中的那一个"""
+    from PySide6.QtCore import Qt
+    from PySide6.QtWidgets import QMessageBox
+    import gui.main_window as mw
+    root = tmp_path / "Test_cases"
+    (root / "涂鸦智能T4").mkdir(parents=True)
+    (root / "三星").mkdir(parents=True)
+    for n in ("全局清扫", "划区清扫"):
+        (root / "涂鸦智能T4" / f"{n}.yaml").write_text(
+            "module: %s\ncases: [{name: a, steps: []}]\n" % n, encoding="utf-8")
+    monkeypatch.setattr(mw, "CASES_DIR", str(root), raising=False)
+    monkeypatch.setattr(mw, "CONFIG_PATH", str(tmp_path / "config.yaml"), raising=False)
+    boxes = []
+    monkeypatch.setattr(mw.QMessageBox, "question",
+                        staticmethod(lambda *a, **k: boxes.append(a) or
+                                     QMessageBox.Yes))
+    w = mw.MainWindow()
+    w.resize(900, 700)
+    w.show()
+    try:
+        qapp.processEvents()
+        lst = w.case_list
+        # ── 删除单个用例(划区清扫) ──
+        idx = case_row_index(lst, 1)
+        lst.setCurrentRow(idx)
+        w.on_delete_selected()
+        qapp.processEvents()
+        assert boxes, "删除必须弹确认框"
+        assert not (root / "涂鸦智能T4" / "划区清扫.yaml").exists()
+        roles = [lst.item(i).data(Qt.UserRole) for i in range(lst.count())
+                 if lst.item(i).data(Qt.UserRole)]
+        assert roles == [str(root / "涂鸦智能T4" / "全局清扫.yaml")]
+        # ── 删除整组(三星, 空组): 选中三星组头行 ──
+        head_idx = next(i for i in range(lst.count())
+                        if lst.item(i).data(Qt.UserRole) is None
+                        and "三星" in lst.item(i).text())
+        lst.setCurrentRow(head_idx)
+        assert lst.currentItem().data(Qt.UserRole) is None
+        w.on_delete_selected()
+        qapp.processEvents()
+        assert not (root / "三星").exists(), "删除组应移除整个目录"
+        assert len(boxes) == 2, "两次删除各弹一次确认"
+    finally:
+        w.close()
+
+
+def test_delete_current_case_unloads_editor(qapp, monkeypatch, tmp_path):
+    """删除的正是当前编辑用例时, 编辑区同步清空"""
+    from PySide6.QtCore import Qt, QPoint
+    from PySide6.QtWidgets import QMessageBox
+    from PySide6.QtTest import QTest
+    from gui import main_window as mw
+    root = tmp_path / "Test_cases"
+    (root / "涂鸦智能T4").mkdir(parents=True)
+    (root / "涂鸦智能T4" / "a.yaml").write_text(
+        "module: a\ncases: [{name: x, steps: [{desc: s, click: y}]}]\n",
+        encoding="utf-8")
+    monkeypatch.setattr(mw, "CASES_DIR", str(root), raising=False)
+    monkeypatch.setattr(mw, "CONFIG_PATH", str(tmp_path / "config.yaml"), raising=False)
+    w = mw.MainWindow()
+    w.resize(900, 700)
+    w.show()
+    try:
+        qapp.processEvents()
+        lst = w.case_list
+        w._on_case_item_clicked(lst.item(case_row_index(lst, 0)))
+        assert w.case_path and w.data["module"] == "a"
+        monkeypatch.setattr(mw.QMessageBox, "question",
+                            staticmethod(lambda *a, **k: QMessageBox.Yes))
+        lst.setCurrentRow(case_row_index(lst, 0))
+        w.on_delete_selected()
+        qapp.processEvents()
+        assert w.case_path is None and len(w.steps) == 0, \
+            "删除当前编辑用例后编辑区应清空"
+        assert w.file_label.text() == "未选中用例"
+    finally:
+        w.close()

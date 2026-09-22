@@ -55,8 +55,8 @@ ACTIONS = [
         {"key": "switch_area", "label": "开关区域", "type": "int4", "hint": "[x1,y1,x2,y2] 留空自动定位"},
     ]},
     {"key": "compare", "label": "图像相似度对比", "category": "断言", "fields": [
-        {"key": "compare", "label": "基准图", "type": "text", "required": True,
-         "hint": "如 screenshots/操作前.png"},
+        {"key": "compare", "label": "基准图", "type": "stepshot",
+         "hint": "选择前面开启了自动截图的步骤, 以其截图为基准"},
         {"key": "threshold", "label": "相似度阈值", "type": "float", "hint": "默认 0.6,低于即失败"},
     ]},
     {"key": "diff", "label": "图像变化检测", "category": "断言", "fields": [
@@ -174,6 +174,8 @@ def new_step(action_key):
             step[f["key"]] = []  # 序列化时空列表按动作语义处理(room_zones→True,其他省略)
         elif f["type"] == "int" and (f.get("required") or "default" in f):
             step[f["key"]] = f.get("default", 0)   # 必填/有默认值的 int 写入
+        elif f["type"] == "stepshot":
+            step[f["key"]] = ""   # 基准图引用: 空=用户尚未在下拉中选择
         # 可选 int/bool 默认缺省(序列化时省略)
     # ★ 动作键必须存在于步骤(否则卡片显示「未知」、引擎执行无动作):
     #   动作键与字段同名但未被上面分支写入时, 按字段类型给兜底默认
@@ -187,8 +189,8 @@ def new_step(action_key):
                     step[action["key"]] = f.get("default", 0)
                 elif t == "float":
                     step[action["key"]] = f.get("default", 0.6)
-                elif t == "bool" or t == "group":
-                    step[action["key"]] = True
+                elif t == "bool" or t == "group" or t == "stepshot":
+                    step[action["key"]] = ""
                 else:
                     step[action["key"]] = True
                 break
