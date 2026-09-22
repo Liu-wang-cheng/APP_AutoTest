@@ -1400,3 +1400,87 @@ def test_truly_empty_group_shows_placeholder(qapp, monkeypatch, tmp_path):
         assert texts == ["▾ 三星", "　　(暂无用例)"], f"实际: {texts}"
     finally:
         w.close()
+
+
+def test_collapse_via_real_click_after_reorder(qapp, monkeypatch, tmp_path):
+    """★ 完整用户路径验证: 排序(order_paths 分支)→ QTest 真实点击组头折叠 →
+    折叠组只有 ▸ 组头无占位; 空组占位仍在; 再点击展开数据完整"""
+    from PySide6.QtCore import Qt, QPoint
+    from PySide6.QtTest import QTest
+    from gui import main_window as mw
+    root = tmp_path / "Test_cases"
+    (root / "涂鸦智能T4").mkdir(parents=True)
+    (root / "三星").mkdir()
+    for n in ("全局清扫", "划区清扫"):
+        (root / "涂鸦智能T4" / f"{n}.yaml").write_text(
+            "module: %s\ncases: [{name: a, steps: []}]\n" % n, encoding="utf-8")
+    monkeypatch.setattr(mw, "CASES_DIR", str(root), raising=False)
+    monkeypatch.setattr(mw, "CONFIG_PATH", str(tmp_path / "config.yaml"), raising=False)
+    w = mw.MainWindow()
+    w.resize(900, 700)
+    w.show()
+    try:
+        qapp.processEvents()
+        lst = w.case_list
+        # 第一步: 箭头移动(触发 order_paths 重建分支 —— bug 触发条件)
+        first = lst.item(case_row_index(lst, 0)).data(Qt.UserRole)
+        w._move_case(first, +1)
+        texts_after_move = [lst.item(i).text() for i in range(lst.count())]
+        # 三星是空组: 排序后显示占位是正确行为; 但不得给有用例的组插占位
+        assert texts_after_move.count("　　(暂无用例)") == 1, "占位只属于真空组"
+        # 第二步: QTest 真实点击「涂鸦智能T4」组头(排序后它排在三星之后)
+        head_idx = next(i for i in range(lst.count())
+                        if lst.item(i).data(0x0100) is None
+                        and "涂鸦智能T4" in lst.item(i).text())
+        rect = lst.visualItemRect(lst.item(head_idx))
+        QTest.mouseClick(lst.viewport(), Qt.LeftButton,
+                         pos=QPoint(rect.center().x(), rect.center().y()))
+        qapp.processEvents()
+        texts = [lst.item(i).text() for i in range(lst.count())]
+        assert "涂鸦智能T4" in w._collapsed_groups
+        assert not any("暂无用例" in t and "涂鸦智能T4" in t for t in texts), \
+            f"折叠的有用例组不得显示占位: {texts}"
+        assert sum("涂鸦智能T4" in t for t in texts) == 1, "折叠组只显示一个组头"
+        # 第三步: 再点击展开 → 用例数据完整恢复
+        QTest.mouseClick(lst.viewport(), Qt.LeftButton,
+                         pos=QPoint(rect.center().x(), rect.center().y()))
+        qapp.processEvents()
+        roles = [lst.item(i).data(Qt.UserRole) for i in range(lst.count())
+                 if lst.item(i).data(Qt.UserRole)]
+        assert len(roles) == 2 and all(roles), "展开后两条用例数据完整"
+    finally:
+        w.close()
+
+
+def test_collapse_empty_group_hides_placeholder(qapp, monkeypatch, tmp_path):
+    """★ 收起空组(三星)后占位行必须消失(用户实测 bug); 再展开恢复"""
+    from PySide6.QtCore import Qt, QPoint
+    from PySide6.QtTest import QTest
+    from gui import main_window as mw
+    root = tmp_path / "Test_cases"
+    (root / "三星").mkdir(parents=True)          # 空组
+    monkeypatch.setattr(mw, "CASES_DIR", str(root), raising=False)
+    monkeypatch.setattr(mw, "CONFIG_PATH", str(tmp_path / "config.yaml"), raising=False)
+    w = mw.MainWindow()
+    w.resize(900, 700)
+    w.show()
+    try:
+        qapp.processEvents()
+        lst = w.case_list
+        texts0 = [lst.item(i).text() for i in range(lst.count())]
+        assert texts0 == ["▾ 三星", "　　(暂无用例)"]
+        # QTest 真实点击组头折叠
+        rect = lst.visualItemRect(lst.item(0))
+        QTest.mouseClick(lst.viewport(), Qt.LeftButton,
+                         pos=QPoint(rect.center().x(), rect.center().y()))
+        qapp.processEvents()
+        texts1 = [lst.item(i).text() for i in range(lst.count())]
+        assert texts1 == ["▸ 三星"], f"折叠空组后占位必须消失, 实际: {texts1}"
+        # 再点击展开 → 占位恢复
+        QTest.mouseClick(lst.viewport(), Qt.LeftButton,
+                         pos=QPoint(rect.center().x(), rect.center().y()))
+        qapp.processEvents()
+        texts2 = [lst.item(i).text() for i in range(lst.count())]
+        assert texts2 == ["▾ 三星", "　　(暂无用例)"], "展开后占位恢复"
+    finally:
+        w.close()

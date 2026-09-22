@@ -1304,11 +1304,12 @@ class MainWindow(QMainWindow):
             head.setData(CASE_STATE_ROLE, g)
             head.setToolTip(f"{g} 的用例组,点击折叠/展开")
             self.case_list.addItem(head)
-            hint = QListWidgetItem("　　(暂无用例)")   # 全角缩进: 显示在组头内部层级
-            hint.setFlags(Qt.ItemIsEnabled)
-            hint.setForeground(QColor("#94a3b8"))
-            hint.setData(Qt.UserRole, None)
-            self.case_list.addItem(hint)
+            if not collapsed_g:      # ★ 折叠的空组只显示组头, 不显示占位(用户实测 bug)
+                hint = QListWidgetItem("　　(暂无用例)")   # 全角缩进: 显示在组头内部层级
+                hint.setFlags(Qt.ItemIsEnabled)
+                hint.setForeground(QColor("#94a3b8"))
+                hint.setData(Qt.UserRole, None)
+                self.case_list.addItem(hint)
         for i in range(self.case_list.count()):
             if self.case_list.item(i).data(Qt.UserRole) == cur:
                 self.case_list.setCurrentRow(i)
