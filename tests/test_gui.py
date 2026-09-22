@@ -356,10 +356,16 @@ def test_真实用例文件回环不丢键(win):
                 for k in s_back:
                     assert k in known, f"{module} 步骤{i + 1} 出现未知键「{k}」"
 
-    cases_dir = os.path.join(BASE_DIR, "Test_cases", "涂鸦智能")
-    if not os.path.isdir(cases_dir):
+    cases_root = os.path.join(BASE_DIR, "Test_cases")
+    if not os.path.isdir(cases_root):
         pytest.skip("无用例目录")
-    files = sorted(glob.glob(os.path.join(cases_dir, "*.yaml")))
+    files = []
+    for sub in sorted(os.listdir(cases_root)):
+        sub_full = os.path.join(cases_root, sub)
+        if os.path.isdir(sub_full):
+            files += sorted(glob.glob(os.path.join(sub_full, "*.yaml")))
+        elif sub.endswith((".yaml", ".yml")):
+            files.append(sub_full)
     assert files, "Test_cases 下没有用例文件"
 
     for path in files:
@@ -1157,3 +1163,41 @@ def test_app_icon_set(win):
     assert not win.windowIcon().isNull()
     pm = win.windowIcon().pixmap(64, 64)
     assert pm.width() == 64 and not pm.isNull()
+
+
+def test_group_header_click_collapses(qapp, monkeypatch, tmp_path):
+    """点击 APP 组头 → 折叠该组(用例行隐藏),再点展开;
+    折叠后用例行不存在 → 勾选/排序自然作用于可见行"""
+    from PySide6.QtCore import Qt, QPoint
+    from PySide6.QtTest import QTest
+    from gui import main_window as mw
+    d = tmp_path / "Test_cases" / "涂鸦智能T4"
+    d.mkdir(parents=True)
+    for n in ("全局清扫", "划区清扫"):
+        (d / f"{n}.yaml").write_text(
+            "module: %s\ncases: [{name: a, steps: []}]\n" % n, encoding="utf-8")
+    monkeypatch.setattr(mw, "CASES_DIR", str(tmp_path / "Test_cases"), raising=False)
+    monkeypatch.setattr(mw, "CONFIG_PATH", str(tmp_path / "config.yaml"), raising=False)
+    w = mw.MainWindow()
+    w.resize(900, 700)
+    w.show()
+    try:
+        qapp.processEvents()
+        lst = w.case_list
+        assert lst.count() == 3               # 组头 + 2 用例
+        head_rect = lst.visualItemRect(lst.item(0))
+        QTest.mouseClick(lst.viewport(), Qt.LeftButton,
+                         pos=QPoint(head_rect.center().x(), head_rect.center().y()))
+        qapp.processEvents()
+        assert "涂鸦智能T4" in w._collapsed_groups
+        assert lst.count() == 1, "折叠后只剩组头行"
+        assert lst.item(0).text().startswith("▸ "), "折叠态组头带 ▸ 前缀"
+        # 再点展开
+        QTest.mouseClick(lst.viewport(), Qt.LeftButton,
+                         pos=QPoint(head_rect.center().x(), head_rect.center().y()))
+        qapp.processEvents()
+        assert "涂鸦智能T4" not in w._collapsed_groups
+        assert lst.count() == 3, "展开后用例行恢复"
+        assert lst.item(0).text().startswith("▾ ")
+    finally:
+        w.close()

@@ -1209,9 +1209,9 @@ class MainWindow(QMainWindow):
         last_group = object()
         for path in paths:
             group = groups.get(path) or "未分组"
+            collapsed = group in self._collapsed_groups
             # ── 组头行(组变化时插入;不可选/不可勾/不可拖;点击折叠/展开) ──
             if group != last_group:
-                collapsed = group in self._collapsed_groups
                 head = QListWidgetItem(("▸ " if collapsed else "▾ ") + group)
                 head.setFlags(Qt.ItemIsEnabled)
                 hf = head.font()
@@ -1223,8 +1223,8 @@ class MainWindow(QMainWindow):
                 head.setToolTip(f"{group} 的用例组,点击折叠/展开")
                 self.case_list.addItem(head)
                 last_group = group
-                if collapsed:
-                    continue               # 折叠组: 不填充用例行
+            if collapsed:
+                continue               # ★ 折叠组: 该组所有用例行都不填充
             name = os.path.splitext(os.path.basename(path))[0]
             # ★ item 完全原生:checkState 勾选 + text(拖拽快照的名称来源)。
             #   不要用 setItemWidget 做行内控件 —— 会盖 indicator/拦事件/断拖拽
