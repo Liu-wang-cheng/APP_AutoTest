@@ -99,6 +99,8 @@ QPushButton {
 }
 QPushButton:hover { border-color: #2563eb; color: #2563eb; }
 QPushButton:pressed { background: #eef4ff; }
+/* ★ QSS 设置 background 后 disabled 的自动变灰会失效, 必须显式写禁用态 */
+QPushButton:disabled { background: #f1f5f9; color: #a8b3c2; border-color: #e4e8ee; }
 
 QPushButton#runBtn { background: #2563eb; color: white; border: none; font-weight: bold; padding: 6px 20px; }
 QPushButton#runBtn:hover { background: #1d4fd7; }
@@ -115,8 +117,10 @@ QLineEdit, QComboBox {
     padding: 4px 8px; color: #333;
 }
 QLineEdit:focus, QComboBox:focus { border-color: #2563eb; }
+QLineEdit:disabled, QComboBox:disabled { background: #f1f5f9; color: #a0aec0; }   /* 执行锁定态视觉 */
 QLineEdit#caseName { font-weight: bold; }
 QComboBox::drop-down { border: none; width: 18px; }
+QComboBox::down-arrow { image: url(@CHEV_DOWN@); width: 10px; height: 6px; }   /* 下拉箭头标识 */
 
 /* 次数输入框:增减按钮内嵌框内右侧上下两半,细线 chevron 箭头(抗锯齿 PNG) */
 QSpinBox {
@@ -1292,7 +1296,7 @@ class MainWindow(QMainWindow):
             head.setData(CASE_STATE_ROLE, g)
             head.setToolTip(f"{g} 的用例组,点击折叠/展开")
             self.case_list.addItem(head)
-            hint = QListWidgetItem("(暂无用例)")
+            hint = QListWidgetItem("　　(暂无用例)")   # 全角缩进: 显示在组头内部层级
             hint.setFlags(Qt.ItemIsEnabled)
             hint.setForeground(QColor("#94a3b8"))
             hint.setData(Qt.UserRole, None)
