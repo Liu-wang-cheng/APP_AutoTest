@@ -1,5 +1,4 @@
-app: 涂鸦智能
-case_order: 1
+case_order: 2
 module: 快速建图
 cases:
 - name: 快速建图完整流程

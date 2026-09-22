@@ -56,11 +56,21 @@ def main():
     if not os.path.isdir(cases_dir):
         print(f"用例目录不存在: {cases_dir}")
         return 1
-    files = [f for f in sorted(os.listdir(cases_dir)) if f.endswith((".yaml", ".yml"))]
+    # 组目录(APP 分组, 如 涂鸦智能/)内的用例 + 根目录散落用例, 都要校验
+    files = []
+    for sub in sorted(os.listdir(cases_dir)):
+        sub_full = os.path.join(cases_dir, sub)
+        if os.path.isdir(sub_full):
+            for fn in sorted(os.listdir(sub_full)):
+                if fn.endswith((".yaml", ".yml")):
+                    files.append(os.path.join(sub, fn))
+        elif sub.endswith((".yaml", ".yml")):
+            files.append(sub)
 
     for fn in files:
+        full = os.path.join(cases_dir, fn)
         try:
-            data = load_yaml_file(os.path.join(cases_dir, fn))
+            data = load_yaml_file(full)
         except Exception as e:
             # 单个文件解析失败不能中断整轮校验 —— 否则修好一个才发现下一个
             print(f"[FAIL] {fn}: {e}")

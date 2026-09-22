@@ -48,28 +48,40 @@ def count_steps(steps):
 
 
 def collect_cases(name_filter=""):
-    """扫 Test_cases/*.yaml → [(module, case_name, steps, priority, case_wait)]
+    """扫 Test_cases/ 下**组目录**(<APP名>/*.yaml)与根目录 → [(module, case, steps, priority, wait)]
 
-    文件按顶层 case_order 升序排列(GUI 拖动箭头维护的执行顺序),
-    没写的排末尾再按文件名 —— 与 GUI 用例列表顺序一致。
+    组目录 = APP 分组(如 涂鸦智能/);文件按顶层 case_order 升序(GUI 拖动
+    箭头维护的执行顺序),没写的排末尾再按文件名 —— 与 GUI 列表顺序一致。
     """
     cases_dir = os.path.join(BASE_DIR, "Test_cases")
     out = []
     if not os.path.isdir(cases_dir):
         return out
     entries = []
-    for fn in sorted(os.listdir(cases_dir)):
-        if not fn.endswith((".yaml", ".yml")):
-            continue
-        try:
-            data = load_yaml_file(os.path.join(cases_dir, fn))
-        except Exception as e:
-            print(f"[跳过] {fn}: {e}")
-            continue
-        order = data.get("case_order") if isinstance(data, dict) else None
-        if not isinstance(order, (int, float)):   # 缺失/非法字符串一律按未排序处理
-            order = None
-        entries.append(((order is None, order or 0, fn), data, fn))
+
+    def _scan(scan_dir, group_name):
+        for fn in sorted(os.listdir(scan_dir)):
+            if not fn.endswith((".yaml", ".yml")):
+                continue
+            full = os.path.join(scan_dir, fn)
+            if not os.path.isfile(full):
+                continue
+            try:
+                data = load_yaml_file(full)
+            except Exception as e:
+                print(f"[跳过] {group_name}/{fn}: {e}")
+                continue
+            order = data.get("case_order") if isinstance(data, dict) else None
+            if not isinstance(order, (int, float)):   # 缺失/非法一律按未排序处理
+                order = None
+            entries.append(((order is None, order or 0, fn), data, fn))
+
+    # 组目录(APP 分组)优先,根目录散落文件兼容收集
+    for sub in sorted(os.listdir(cases_dir)):
+        sub_full = os.path.join(cases_dir, sub)
+        if os.path.isdir(sub_full) and not sub.startswith((".", "_")):
+            _scan(sub_full, sub)
+    _scan(cases_dir, "")
     entries.sort(key=lambda e: e[0])
     for _, data, fn in entries:
         for module, cases in iter_modules(data, fn):

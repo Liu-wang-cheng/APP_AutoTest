@@ -356,7 +356,7 @@ def test_真实用例文件回环不丢键(win):
                 for k in s_back:
                     assert k in known, f"{module} 步骤{i + 1} 出现未知键「{k}」"
 
-    cases_dir = os.path.join(BASE_DIR, "Test_cases")
+    cases_dir = os.path.join(BASE_DIR, "Test_cases", "涂鸦智能")
     if not os.path.isdir(cases_dir):
         pytest.skip("无用例目录")
     files = sorted(glob.glob(os.path.join(cases_dir, "*.yaml")))
@@ -403,13 +403,13 @@ def test_imageview_dialog_zoom_controls(win):
 def win_with_cases(qapp, monkeypatch, tmp_path):
     """Test_cases/ 预置两个用例文件后实例化窗口"""
     from gui import main_window as mw
-    cases_dir = tmp_path / "Test_cases"
-    cases_dir.mkdir()
+    cases_dir = tmp_path / "Test_cases" / "涂鸦智能"
+    cases_dir.mkdir(parents=True)
     (cases_dir / "全局清扫.yaml").write_text(
         "module: 全局清扫\ncases:\n  - name: 完整流程\n    steps: []\n", encoding="utf-8")
     (cases_dir / "划区清扫.yaml").write_text(
         "module: 划区清扫\ncases:\n  - name: 完整流程\n    steps: []\n", encoding="utf-8")
-    monkeypatch.setattr(mw, "CASES_DIR", str(cases_dir), raising=False)
+    monkeypatch.setattr(mw, "CASES_DIR", str(tmp_path / "Test_cases"), raising=False)
     monkeypatch.setattr(mw, "CONFIG_PATH", str(tmp_path / "config.yaml"), raising=False)
     w = mw.MainWindow()
     yield w
@@ -467,12 +467,12 @@ def test_click_case_row_loads_into_editor(win_with_cases):
 def test_case_order_sorts_list_on_load(qapp, monkeypatch, tmp_path):
     """加载时按 case_order 升序,缺失的排末尾按文件名"""
     from gui import main_window as mw
-    d = tmp_path / "Test_cases"
-    d.mkdir()
+    d = tmp_path / "Test_cases" / "涂鸦智能"
+    d.mkdir(parents=True)
     (d / "乙.yaml").write_text("case_order: 1\nmodule: 乙\ncases:\n  - name: a\n    steps: []\n", encoding="utf-8")
     (d / "甲.yaml").write_text("case_order: 2\nmodule: 甲\ncases:\n  - name: a\n    steps: []\n", encoding="utf-8")
     (d / "丙.yaml").write_text("module: 丙\ncases:\n  - name: a\n    steps: []\n", encoding="utf-8")
-    monkeypatch.setattr(mw, "CASES_DIR", str(d), raising=False)
+    monkeypatch.setattr(mw, "CASES_DIR", str(tmp_path / "Test_cases"), raising=False)
     monkeypatch.setattr(mw, "CONFIG_PATH", str(tmp_path / "config.yaml"), raising=False)
     w = mw.MainWindow()
     try:
@@ -504,13 +504,13 @@ def test_move_case_writes_order_and_keeps_check(qapp, monkeypatch, tmp_path):
     """行内箭头移动 → 列表换位 + 全部文件 case_order 1..N + 勾选保留"""
     from gui import main_window as mw
     from PySide6.QtCore import Qt
-    d = tmp_path / "Test_cases"
-    d.mkdir()
+    d = tmp_path / "Test_cases" / "涂鸦智能"
+    d.mkdir(parents=True)
     names = ["全局清扫", "划区清扫", "选区清扫"]
     for n in names:
         (d / f"{n}.yaml").write_text(
             f"module: {n}\ncases:\n  - name: 完整流程\n    steps: []\n", encoding="utf-8")
-    monkeypatch.setattr(mw, "CASES_DIR", str(d), raising=False)
+    monkeypatch.setattr(mw, "CASES_DIR", str(tmp_path / "Test_cases"), raising=False)
     monkeypatch.setattr(mw, "CONFIG_PATH", str(tmp_path / "config.yaml"), raising=False)
     w = mw.MainWindow()
     try:
@@ -545,13 +545,13 @@ def test_case_drag_drop_rebuild_and_persist(qapp, monkeypatch, tmp_path):
     """
     from gui import main_window as mw
     from PySide6.QtCore import Qt
-    d = tmp_path / "Test_cases"
-    d.mkdir()
+    d = tmp_path / "Test_cases" / "涂鸦智能"
+    d.mkdir(parents=True)
     names = ["全局清扫", "划区清扫", "选区清扫"]
     for n in names:
         (d / f"{n}.yaml").write_text(
             f"module: {n}\ncases:\n  - name: 完整流程\n    steps: []\n", encoding="utf-8")
-    monkeypatch.setattr(mw, "CASES_DIR", str(d), raising=False)
+    monkeypatch.setattr(mw, "CASES_DIR", str(tmp_path / "Test_cases"), raising=False)
     monkeypatch.setattr(mw, "CONFIG_PATH", str(tmp_path / "config.yaml"), raising=False)
     w = mw.MainWindow()
     try:
@@ -634,12 +634,12 @@ def test_case_arrows_real_click(qapp, monkeypatch, tmp_path):
     from PySide6.QtCore import Qt, QPoint
     from PySide6.QtTest import QTest
     from gui import main_window as mw
-    d = tmp_path / "Test_cases"
-    d.mkdir()
+    d = tmp_path / "Test_cases" / "涂鸦智能"
+    d.mkdir(parents=True)
     for n in ("全局清扫", "划区清扫"):
         (d / f"{n}.yaml").write_text(
             "module: %s\ncases: [{name: a, steps: []}]\n" % n, encoding="utf-8")
-    monkeypatch.setattr(mw, "CASES_DIR", str(d), raising=False)
+    monkeypatch.setattr(mw, "CASES_DIR", str(tmp_path / "Test_cases"), raising=False)
     monkeypatch.setattr(mw, "CONFIG_PATH", str(tmp_path / "config.yaml"), raising=False)
     w = mw.MainWindow()
     w.resize(900, 700)
@@ -662,12 +662,12 @@ def test_case_row_name_click_selects(qapp, monkeypatch, tmp_path):
     from PySide6.QtCore import Qt, QPoint
     from PySide6.QtTest import QTest
     from gui import main_window as mw
-    d = tmp_path / "Test_cases"
-    d.mkdir()
+    d = tmp_path / "Test_cases" / "涂鸦智能"
+    d.mkdir(parents=True)
     for n in ("全局清扫", "划区清扫"):
         (d / f"{n}.yaml").write_text(
             "module: %s\ncases: [{name: a, steps: []}]\n" % n, encoding="utf-8")
-    monkeypatch.setattr(mw, "CASES_DIR", str(d), raising=False)
+    monkeypatch.setattr(mw, "CASES_DIR", str(tmp_path / "Test_cases"), raising=False)
     monkeypatch.setattr(mw, "CONFIG_PATH", str(tmp_path / "config.yaml"), raising=False)
     w = mw.MainWindow()
     w.resize(900, 700)
@@ -691,13 +691,13 @@ def test_arrow_move_then_drag_coexist(qapp, monkeypatch, tmp_path):
     拖拽走原生管线 dropEvent → moved;两条路收敛同一个 _persist_case_order)"""
     from PySide6.QtCore import Qt
     from gui import main_window as mw
-    d = tmp_path / "Test_cases"
-    d.mkdir()
+    d = tmp_path / "Test_cases" / "涂鸦智能"
+    d.mkdir(parents=True)
     names = ["全局清扫", "划区清扫", "选区清扫"]
     for n in names:
         (d / f"{n}.yaml").write_text(
             "module: %s\ncases: [{name: a, steps: []}]\n" % n, encoding="utf-8")
-    monkeypatch.setattr(mw, "CASES_DIR", str(d), raising=False)
+    monkeypatch.setattr(mw, "CASES_DIR", str(tmp_path / "Test_cases"), raising=False)
     monkeypatch.setattr(mw, "CONFIG_PATH", str(tmp_path / "config.yaml"), raising=False)
     w = mw.MainWindow()
     try:
@@ -944,13 +944,13 @@ def test_case_lamp_rerun_resets(qapp, monkeypatch, tmp_path):
     """重新执行:点运行瞬间所有勾选用例灯重置为黄;结束信号再各自变绿/红"""
     from PySide6.QtCore import Qt
     import gui.main_window as mw
-    d = tmp_path / "Test_cases"
-    d.mkdir()
+    d = tmp_path / "Test_cases" / "涂鸦智能"
+    d.mkdir(parents=True)
     names = ["全局清扫", "划区清扫"]
     for n in names:
         (d / f"{n}.yaml").write_text(
             "module: %s\ncases: [{name: a, steps: []}]\n" % n, encoding="utf-8")
-    monkeypatch.setattr(mw, "CASES_DIR", str(d), raising=False)
+    monkeypatch.setattr(mw, "CASES_DIR", str(tmp_path / "Test_cases"), raising=False)
     monkeypatch.setattr(mw, "CONFIG_PATH", str(tmp_path / "config.yaml"), raising=False)
     w = mw.MainWindow()
     try:
@@ -984,8 +984,8 @@ def test_runworker_run_smoke(qapp, monkeypatch, tmp_path):
     from PySide6.QtCore import Qt
 
     # 1) 用例文件:一条用例一个纯等待步骤
-    d = tmp_path / "Test_cases"
-    d.mkdir()
+    d = tmp_path / "Test_cases" / "涂鸦智能"
+    d.mkdir(parents=True)
     case_file = d / "全局清扫.yaml"
     case_file.write_text(
         "module: 全局清扫\ncases:\n  - name: 冒烟\n    steps:\n"
@@ -1091,8 +1091,8 @@ def test_runworker_precondition_failure_blocks(qapp, monkeypatch, tmp_path):
     from gui import runner_thread as rt
     from gui.runner_thread import RunWorker
 
-    d = tmp_path / "Test_cases"
-    d.mkdir()
+    d = tmp_path / "Test_cases" / "涂鸦智能"
+    d.mkdir(parents=True)
     case_file = d / "全局清扫.yaml"
     case_file.write_text(
         "module: 全局清扫\ncases:\n  - name: 冒烟\n    steps:\n"

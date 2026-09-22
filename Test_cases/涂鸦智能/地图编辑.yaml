@@ -1,5 +1,4 @@
-app: 涂鸦智能
-case_order: 2
+case_order: 1
 module: 地图编辑
 cases:
 - name: 地图编辑完整流程

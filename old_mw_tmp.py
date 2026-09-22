@@ -1127,7 +1127,6 @@ class MainWindow(QMainWindow):
         self.case_list.set_owner(self)
         self.case_list.setFixedWidth(200)    # 宽度与设备下拉框视觉对齐;高度随步骤详情区填满右列
         self._case_states = {}               # path → 'running'/'passed'/'failed'(状态灯)
-        self._collapsed_groups = set()       # 折叠的组目录名
         self._fill_case_list()
         self.case_list.itemClicked.connect(self._on_case_item_clicked)
         self.case_list.moved.connect(self.on_case_rows_dropped)
@@ -1169,62 +1168,62 @@ class MainWindow(QMainWindow):
         with open(path, "w", encoding="utf-8", newline="") as f:
             f.write(new_text)
 
-    def _list_group_dirs(self):
-        """Test_cases/ 下的组目录(APP 分组)列表,按名称排序"""
-        if not os.path.isdir(CASES_DIR):
-            return []
-        return sorted(d for d in os.listdir(CASES_DIR)
-                      if os.path.isdir(os.path.join(CASES_DIR, d))
-                      and not d.startswith((".", "_")))
+    @staticmethod
+    def _read_case_meta(path):
+        """读用例 YAML 的 (app组, module, case_order);异常返回默认值"""
+        try:
+            with open(path, encoding="utf-8") as f:
+                data = yaml.safe_load(f) or {}
+            order = data.get("case_order")
+            app = str(data.get("app") or "未分组")
+            module = str(data.get("module") or "")
+            return app, module, (int(order) if isinstance(order, (int, float)) else None)
+        except Exception:
+            return "未分组", "", None
 
     def _fill_case_list(self, order_paths=None):
-        """(重)填充用例列表:**按组目录分节显示**(Test_cases/<APP名>/ = 一组),
-        组内按 case_order 升序(缺失排末尾)。组头行不可选/不可勾/不可拖,
-        点击组头可折叠/展开该组。order_paths 给定时按它排;
-        Test_cases/ 外的当前打开文件也追加显示。"""
+        """(重)填充用例列表:**按 APP 组(app 字段)分节显示**,不同 APP 的
+        用例分开;组内按 case_order 升序(缺失排末尾)。组头行不可选/不可勾。
+        order_paths 给定时按它排;Test_cases/ 外的当前打开文件也追加显示。"""
         import glob
         if order_paths is None:
             infos = []
-            for g in self._list_group_dirs():
-                gdir = os.path.join(CASES_DIR, g)
-                for p in sorted(glob.glob(os.path.join(gdir, "*.yaml"))):
-                    infos.append((p, g, self._read_case_order(p)))
+            for p in sorted(glob.glob(os.path.join(CASES_DIR, "*.yaml"))):
+                app, module, order = self._read_case_meta(p)
+                infos.append((p, app, module, order))
             extra = self.case_path
             if (extra and os.path.isfile(extra)
                     and all(os.path.abspath(extra) != os.path.abspath(p) for p, *_ in infos)
                     and extra.lower().endswith((".yaml", ".yml"))
                     and CASES_DIR.lower() not in os.path.abspath(extra).lower()):
-                infos.append((extra, "未分组", self._read_case_order(extra)))
-            infos.sort(key=lambda it: (it[1].lower(), it[2] is None, it[2] or 0,
+                app, module, order = self._read_case_meta(extra)
+                infos.append((extra, app, module, order))
+            infos.sort(key=lambda it: (it[1].lower(), it[3] is None, it[3] or 0,
                                        os.path.basename(it[0])))
             paths = [p for p, *_ in infos]
-            groups = {p: g for p, g, _ in infos}
+            apps = {p: a for p, a, *_ in infos}
         else:
             paths = list(order_paths)
-            groups = {p: os.path.basename(os.path.dirname(p)) for p in paths}
+            apps = {p: self._read_case_meta(p)[0] for p in paths}
         checked = set(self._checked_case_paths())
         cur_item = self.case_list.currentItem()
         cur = cur_item.data(Qt.UserRole) if cur_item else None
         self.case_list.clear()
-        last_group = object()
+        last_app = object()
         for path in paths:
-            group = groups.get(path) or "未分组"
-            # ── 组头行(组变化时插入;不可选/不可勾/不可拖;点击折叠/展开) ──
-            if group != last_group:
-                collapsed = group in self._collapsed_groups
-                head = QListWidgetItem(("▸ " if collapsed else "▾ ") + group)
+            app = apps.get(path) or "未分组"
+            # ── APP 组头行(组变化时插入;不可选/不可勾/不可拖,仅分组视觉) ──
+            if app != last_app:
+                head = QListWidgetItem(app)
                 head.setFlags(Qt.ItemIsEnabled)
                 hf = head.font()
                 hf.setBold(True)
                 head.setFont(hf)
                 head.setForeground(QColor("#0284c7"))
-                head.setData(Qt.UserRole, None)          # 标记: 非用例行(组头)
-                head.setData(CASE_STATE_ROLE, group)     # 组名存此供折叠切换
-                head.setToolTip(f"{group} 的用例组,点击折叠/展开")
+                head.setData(Qt.UserRole, None)          # 标记: 非用例行
+                head.setToolTip(f"{app} 的用例组")
                 self.case_list.addItem(head)
-                last_group = group
-                if collapsed:
-                    continue               # 折叠组: 不填充用例行
+                last_app = app
             name = os.path.splitext(os.path.basename(path))[0]
             # ★ item 完全原生:checkState 勾选 + text(拖拽快照的名称来源)。
             #   不要用 setItemWidget 做行内控件 —— 会盖 indicator/拦事件/断拖拽
@@ -1232,7 +1231,7 @@ class MainWindow(QMainWindow):
             item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
             item.setCheckState(Qt.Checked if path in checked else Qt.Unchecked)
             item.setData(Qt.UserRole, path)
-            item.setToolTip(f"{path} | 勾选参与批量执行;点右侧箭头或拖拽调整执行顺序")
+            item.setToolTip(f"{path}\n勾选参与批量执行;点右侧箭头或拖拽调整执行顺序")
             item.setSizeHint(QSize(0, 26))   # 略高于文字行,箭头绘制/命中更从容
             state = self._case_states.get(path, "idle")
             item.setData(CASE_STATE_ROLE, state)
@@ -1307,22 +1306,12 @@ class MainWindow(QMainWindow):
         except Exception as e:
             QMessageBox.warning(self, "保存顺序失败", str(e))
 
-
     def _on_case_item_clicked(self, item):
-        """单击用例行 → 右侧加载该用例编辑;单击组头行 → 折叠/展开该组(用户要求)"""
+        """单击用例行 → 右侧加载该用例编辑(与工具栏「打开」同一套逻辑;勾选状态不受影响)"""
         if self.worker:
             return
         path = item.data(Qt.UserRole)
-        if not path:
-            group = item.data(CASE_STATE_ROLE)
-            if group:
-                if group in self._collapsed_groups:
-                    self._collapsed_groups.discard(group)
-                else:
-                    self._collapsed_groups.add(group)
-                self._fill_case_list()
-            return
-        if not os.path.isfile(path) or path == self.case_path:
+        if not path or not os.path.isfile(path) or path == self.case_path:
             return
         try:
             with open(path, encoding="utf-8") as f:
@@ -1341,18 +1330,7 @@ class MainWindow(QMainWindow):
         self._load_case_into_ui()
         self.render_cards()
         self._refresh_case_selector()
-        self._fill_case_list()   # 打开的用例必须在左侧列表可见
-
-    def on_precondition_failed(self, detail):
-        """前置检查未通过(本轮已阻断):弹窗提醒 + 用例灯重置灰(未真正执行)"""
-        if self.worker:
-            for fp in self.worker.case_files:
-                self.set_case_state(fp, "idle")
-        QMessageBox.warning(self, "前置检查未通过",
-                            f"已阻断本轮执行,后续用例不再运行:\n{detail}\n\n"
-                            "请处理设备状态(充电/网络/APP)后重新运行。")
-
-
+        self._fill_case_list()   # ★ 打开的用例必须在左侧列表可见(Test_cases/ 外的也追加)
 
     def _set_cases_checked(self, state):
         for i in range(self.case_list.count()):
@@ -1830,18 +1808,18 @@ class MainWindow(QMainWindow):
             return
         self.create_case(name, app="涂鸦智能")
 
-    def create_case(self, name, group="涂鸦智能"):
-        """按名称在组目录 Test_cases/<group>/ 下创建空白用例文件
-        (已存在则提示)并加载到编辑区/列表"""
-        gdir = os.path.join(CASES_DIR, group)
-        os.makedirs(gdir, exist_ok=True)
-        path = os.path.join(gdir, f"{name}.yaml")
+    def create_case(self, name, app="涂鸦智能"):
+        """按名称创建空白用例文件(已存在则提示)并加载到编辑区/列表。
+        app = APP 组名(写入用例 YAML 的 app 字段,列表按它分组)"""
+        os.makedirs(CASES_DIR, exist_ok=True)
+        path = os.path.join(CASES_DIR, f"{name}.yaml")
         if os.path.exists(path):
-            QMessageBox.warning(self, "新建用例", f"用例已存在: {group}/{name}.yaml")
+            QMessageBox.warning(self, "新建用例", f"用例已存在: {name}.yaml")
             return
         self.case_path = path
         self.data = self._empty_data()
         self.data["module"] = name
+        self.data["app"] = app
         with open(path, "w", encoding="utf-8") as f:
             yaml.safe_dump(self._dump_data(), f, allow_unicode=True, sort_keys=False)
         self.case_idx = 0
