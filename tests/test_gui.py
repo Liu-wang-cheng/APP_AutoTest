@@ -1286,7 +1286,7 @@ def test_empty_group_dir_still_shown(qapp, monkeypatch, tmp_path):
     w = mw.MainWindow()
     try:
         texts = [w.case_list.item(i).text() for i in range(w.case_list.count())]
-        assert texts == ["▾ 涂鸦智能T4", "a", "▾ 三星", "(暂无用例)"], f"实际: {texts}"
+        assert texts == ["▾ 涂鸦智能T4", "a", "▾ 三星", "　　(暂无用例)"], f"实际: {texts}"
     finally:
         w.close()
 
