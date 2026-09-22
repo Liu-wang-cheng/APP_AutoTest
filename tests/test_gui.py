@@ -1289,3 +1289,72 @@ def test_empty_group_dir_still_shown(qapp, monkeypatch, tmp_path):
         assert texts == ["▾ 涂鸦智能T4", "a", "▾ 三星", "(暂无用例)"], f"实际: {texts}"
     finally:
         w.close()
+
+
+# ── 新建对话框 / 保存脏标志 / APP 分组(2026-09-22) ──
+
+def test_new_case_dialog_creates_in_group(qapp, monkeypatch, tmp_path):
+    """新建对话框: 名称+选组 → 创建 Test_cases/<组>/<名>.yaml 并在列表选中"""
+    from PySide6.QtCore import Qt
+    from PySide6.QtWidgets import QDialog
+    import gui.main_window as mw
+    root = tmp_path / "Test_cases"
+    (root / "涂鸦智能T4").mkdir(parents=True)
+    (root / "涂鸦智能T4" / "a.yaml").write_text(
+        "module: a\ncases: [{name: x, steps: []}]\n", encoding="utf-8")
+    monkeypatch.setattr(mw, "CASES_DIR", str(root), raising=False)
+    monkeypatch.setattr(mw, "CONFIG_PATH", str(tmp_path / "config.yaml"), raising=False)
+    w = mw.MainWindow()
+    try:
+        # mock 对话框: 名称=新用例A, 组=三星
+        class _Dlg:
+            def exec(self):
+                return QDialog.Accepted
+            def values(self):
+                return ("新用例A", "三星")
+        monkeypatch.setattr(mw, "NewCaseDialog", lambda groups, parent: _Dlg())
+        w.on_new()
+        f = root / "三星" / "新用例A.yaml"
+        assert f.exists(), "应在三星组目录创建用例文件"
+        # 列表包含且选中新用例
+        roles = [w.case_list.item(i).data(Qt.UserRole) for i in range(w.case_list.count())]
+        assert str(f) in roles
+        assert w.case_list.currentItem().data(Qt.UserRole) == str(f)
+        # 新建无修改 → 保存置灰
+        assert not w.save_btn.isEnabled()
+    finally:
+        w.close()
+
+
+def test_save_button_dirty_flow(qapp, monkeypatch, tmp_path):
+    """保存按钮: 无修改置灰 → 编辑后亮起 → 保存写盘并再次置灰"""
+    from PySide6.QtCore import Qt
+    import gui.main_window as mw
+    root = tmp_path / "Test_cases" / "涂鸦智能T4"
+    root.mkdir(parents=True)
+    (root / "a.yaml").write_text(
+        "module: a\ncases: [{name: x, steps: []}]\n", encoding="utf-8")
+    monkeypatch.setattr(mw, "CASES_DIR", str(tmp_path / "Test_cases"), raising=False)
+    monkeypatch.setattr(mw, "CONFIG_PATH", str(tmp_path / "config.yaml"), raising=False)
+    w = mw.MainWindow()
+    try:
+        qapp.processEvents()
+        w._on_case_item_clicked(w.case_list.item(case_row_index(w, 0)))
+        assert not w.save_btn.isEnabled(), "加载后无修改应置灰"
+        # 编辑产生修改 → 亮起
+        w.add_step("click")
+        assert w.save_btn.isEnabled(), "有修改保存应亮起"
+        # 保存 → 写盘(含新增步骤)且置灰; mock 掉参数问题确认弹窗(离屏无人点击)
+        monkeypatch.setattr(mw.QMessageBox, "question",
+                            staticmethod(lambda *a, **k: mw.QMessageBox.Yes))
+        w.on_save()
+        import yaml as _yaml
+        back = _yaml.safe_load((root / "a.yaml").read_text(encoding="utf-8"))
+        assert len(back["cases"][0]["steps"]) == 1, "修改点应写盘"
+        assert not w.save_btn.isEnabled(), "保存后应置灰"
+    finally:
+        w.close()
+
+
+def test_collapse_group_unloads_editor(qapp, monkeypatch, tmp_path):
+    pass

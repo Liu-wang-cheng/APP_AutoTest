@@ -799,6 +799,39 @@ class DeviceScanThread(QThread):
         self.done.emit(devices, "")
 
 
+class NewCaseDialog(QDialog):
+    """新建用例对话框: 用例名称 + APP 用例组(可选现有组或输入新组)"""
+
+    def __init__(self, groups, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("新建用例")
+        v = QVBoxLayout(self)
+        v.addWidget(QLabel("用例名称"))
+        self.name_edit = QLineEdit()
+        v.addWidget(self.name_edit)
+        v.addWidget(QLabel("APP 用例组"))
+        self.group_combo = QComboBox()
+        self.group_combo.setEditable(True)
+        self.group_combo.addItems(groups or ["涂鸦智能"])
+        self.group_combo.setCurrentIndex(0)
+        v.addWidget(self.group_combo)
+        btns = QHBoxLayout()
+        cancel = QPushButton("取消")
+        ok = QPushButton("创建")
+        ok.setObjectName("runBtn")
+        cancel.clicked.connect(self.reject)
+        ok.clicked.connect(self.accept)
+        btns.addStretch(1)
+        btns.addWidget(cancel)
+        btns.addWidget(ok)
+        v.addLayout(btns)
+        self.name_edit.setFocus()
+
+    def values(self):
+        return (self.name_edit.text().strip(),
+                self.group_combo.currentText().strip() or "涂鸦智能")
+
+
 class CaseListWidget(QListWidget):
     """用例列表:行内 ↑↓ 箭头 = delegate 绘制 + 命中计算。
 
@@ -962,6 +995,7 @@ class MainWindow(QMainWindow):
             b.clicked.connect(fn)
             setattr(self, attr, b)
             lay.addWidget(b)
+        self.save_btn.setEnabled(False)   # 初始无修改,保存置灰(有修改才亮起)
         self.file_label = QLabel("未打开文件")
         self.file_label.setStyleSheet("color:#94a3b8;")
         lay.addWidget(self.file_label)
@@ -1128,6 +1162,7 @@ class MainWindow(QMainWindow):
         self.case_list.setFixedWidth(200)    # 宽度与设备下拉框视觉对齐;高度随步骤详情区填满右列
         self._case_states = {}               # path → 'running'/'passed'/'failed'(状态灯)
         self._collapsed_groups = set()       # 折叠的组目录名
+        self._dirty = False                  # 有未保存修改
         self._fill_case_list()
         self.case_list.itemClicked.connect(self._on_case_item_clicked)
         self.case_list.moved.connect(self.on_case_rows_dropped)
@@ -1366,6 +1401,8 @@ class MainWindow(QMainWindow):
         self._load_case_into_ui()
         self.render_cards()
         self._refresh_case_selector()
+        self._dirty = False
+        self.save_btn.setEnabled(False)
         self._fill_case_list()   # 打开的用例必须在左侧列表可见
 
     def on_precondition_failed(self, detail):
@@ -1586,26 +1623,15 @@ class MainWindow(QMainWindow):
         self.expanded_key = key
         self.render_cards()
 
-    def _auto_save(self):
-        """编辑自动保存:已关联文件的用例,每次修改立即写盘(用户要求)。
-        未命名(新建未保存)不触发 —— 首次保存仍走「保存」命名。"""
-        if self.worker or not self.case_path:
-            return
-        try:
-            prev_order = self._read_case_order(self.case_path)
-            with open(self.case_path, "w", encoding="utf-8") as f:
-                yaml.safe_dump(self._dump_data(), f, allow_unicode=True, sort_keys=False)
-            if prev_order is not None:
-                self._write_case_order(self.case_path, prev_order)
-            self.status_label.setText(
-                f"已自动保存 {os.path.basename(self.case_path)} "
-                f"{time.strftime('%H:%M:%S')}")
-        except Exception as e:
-            self.log_view.appendPlainText(f"[自动保存失败] {e}")
+    def _mark_dirty(self):
+        """产生修改 → 保存按钮亮起(无修改时置灰,用户要求);
+        实际写盘由「保存」按钮完成(只保存当前选中用例的修改点)"""
+        self._dirty = True
+        self.save_btn.setEnabled(True)
 
     def on_card_edited(self):
         self._refresh_yaml_text()
-        self._auto_save()
+        self._mark_dirty()
 
     # ── 步骤操作 ──
     def add_step(self, key):
@@ -1618,7 +1644,7 @@ class MainWindow(QMainWindow):
         self.steps.append(step)
         self.expanded_key = (len(self.steps) - 1,)
         self.render_cards()
-        self._auto_save()
+        self._mark_dirty()
         self._scroll_to_end()
 
     def _scroll_to_end(self):
@@ -1635,7 +1661,7 @@ class MainWindow(QMainWindow):
         if self.expanded_key == (index,):
             self.expanded_key = (new,)
         self.render_cards()
-        self._auto_save()
+        self._mark_dirty()
 
     def dup_step(self, index):
         if self.worker:
@@ -1643,7 +1669,7 @@ class MainWindow(QMainWindow):
         self.steps.insert(index + 1, copy.deepcopy(self.steps[index]))
         self.expanded_key = (index + 1,)
         self.render_cards()
-        self._auto_save()
+        self._mark_dirty()
 
     def del_step(self, index):
         if self.worker:
@@ -1652,7 +1678,7 @@ class MainWindow(QMainWindow):
         if self.expanded_key and self.expanded_key[0] >= len(self.steps):
             self.expanded_key = (len(self.steps) - 1,) if self.steps else None
         self.render_cards()
-        self._auto_save()
+        self._mark_dirty()
 
     # ── else 子步骤操作 ──
     def _else_list(self, parent_index):
@@ -1669,7 +1695,7 @@ class MainWindow(QMainWindow):
         else_list.append(step)
         self.expanded_key = (parent_index, len(else_list) - 1)
         self.render_cards()
-        self._auto_save()
+        self._mark_dirty()
         self._scroll_to_end()
 
     def move_sub(self, parent_index, sub_index, delta):
@@ -1683,7 +1709,7 @@ class MainWindow(QMainWindow):
         if self.expanded_key == (parent_index, sub_index):
             self.expanded_key = (parent_index, new)
         self.render_cards()
-        self._auto_save()
+        self._mark_dirty()
 
     def dup_sub(self, parent_index, sub_index):
         if self.worker:
@@ -1692,7 +1718,7 @@ class MainWindow(QMainWindow):
         else_list.insert(sub_index + 1, copy.deepcopy(else_list[sub_index]))
         self.expanded_key = (parent_index, sub_index + 1)
         self.render_cards()
-        self._auto_save()
+        self._mark_dirty()
 
     def del_sub(self, parent_index, sub_index):
         if self.worker:
@@ -1703,7 +1729,7 @@ class MainWindow(QMainWindow):
         if self.expanded_key and len(self.expanded_key) == 2 and self.expanded_key[0] == parent_index:
             self.expanded_key = (parent_index,)  # 收回到父卡片
         self.render_cards()
-        self._auto_save()
+        self._mark_dirty()
 
     # ── 数据模型 ──
     def _empty_data(self):
@@ -1768,13 +1794,14 @@ class MainWindow(QMainWindow):
     # ── 执行期间锁定编排区 ──
     def _set_locked(self, locked):
         self._locked = locked
-        widgets = [self.new_btn, self.open_btn, self.save_btn, self.add_btn,
+        widgets = [self.new_btn, self.open_btn, self.add_btn,
                    self.case_name_edit, self.module_edit, self.priority_combo,
                    self.case_wait_edit, self.case_combo,
                    self.yaml_refresh_btn, self.yaml_apply_btn]
         widgets += self._quick_btns
         for w in widgets:
             w.setEnabled(not locked)
+        self.save_btn.setEnabled((not locked) and self._dirty)  # 无修改置灰(用户要求)
         self.cards_scroll.widget().setEnabled(not locked)  # 卡片区只读(仍可滚动)
 
     def _find_action(self, step):
@@ -1848,15 +1875,17 @@ class MainWindow(QMainWindow):
         列表刷新并选中新用例,右侧进入编辑(后续编辑自动保存)"""
         if self.worker:
             return
-        from PySide6.QtWidgets import QInputDialog
-        name, ok = QInputDialog.getText(self, "新建用例", "用例名称(APP 组默认 涂鸦智能):")
-        if not ok:
+        groups = self._list_group_dirs() or ["涂鸦智能"]
+        if "涂鸦智能" not in groups:
+            groups = ["涂鸦智能"] + groups
+        dlg = NewCaseDialog(sorted(set(groups)), self)
+        if dlg.exec() != QDialog.Accepted:
             return
-        name = name.strip()
+        name, group = dlg.values()
         if not name:
             QMessageBox.warning(self, "新建用例", "用例名称不能为空")
             return
-        self.create_case(name, app="涂鸦智能")
+        self.create_case(name, group=group)
 
     def _unload_case(self):
         """清空右侧编辑区,恢复未选中状态(收起包含当前用例的组时调用)"""
@@ -1868,6 +1897,8 @@ class MainWindow(QMainWindow):
         self._load_case_into_ui()
         self.render_cards()
         self._refresh_case_selector()
+        self._dirty = False
+        self.save_btn.setEnabled(False)
 
     def create_case(self, name, group="涂鸦智能"):
         """按名称在组目录 Test_cases/<group>/ 下创建空白用例文件
@@ -1894,7 +1925,9 @@ class MainWindow(QMainWindow):
             if self.case_list.item(i).data(Qt.UserRole) == path:
                 self.case_list.setCurrentRow(i)   # 选中新用例
                 break
-        self.status_label.setText(f"已新建用例: {name}.yaml(编辑自动保存)")
+        self._dirty = False
+        self.save_btn.setEnabled(False)   # 新建无修改,保存置灰
+        self.status_label.setText(f"已新建用例: {group}/{name}.yaml")
         self.log_view.appendPlainText(f"[新建] {path}")
 
     def on_open(self):
@@ -1921,6 +1954,8 @@ class MainWindow(QMainWindow):
         self._load_case_into_ui()
         self.render_cards()
         self._refresh_case_selector()
+        self._dirty = False
+        self.save_btn.setEnabled(False)
         self._fill_case_list()   # ★ 打开的用例必须在左侧列表可见(Test_cases/ 外的也追加)
 
     def _dump_data(self):
@@ -1957,6 +1992,8 @@ class MainWindow(QMainWindow):
         if prev_order is not None:
             self._write_case_order(self.case_path, prev_order)
         self._fill_case_list()   # 新保存的用例进入列表(勾选/选中状态保留)
+        self._dirty = False
+        self.save_btn.setEnabled(False)   # 已保存,无修改 → 置灰
         self.file_label.setText(_safe_relpath(self.case_path))
         self.status_label.setText(f"已保存: {os.path.basename(self.case_path)}")
         self.log_view.appendPlainText(f"[保存] {self.case_path}")
@@ -1983,7 +2020,7 @@ class MainWindow(QMainWindow):
         self.expanded_key = None
         self._load_case_into_ui()
         self.render_cards()
-        self._auto_save()
+        self._mark_dirty()
         self._refresh_case_selector()
 
     # ── 执行 ──
