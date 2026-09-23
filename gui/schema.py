@@ -18,7 +18,7 @@ GENERIC_FIELDS = [
 ACTIONS = [
     # ── 操作 ──
     {"key": "click", "label": "点击", "category": "操作", "fields": [
-        {"key": "click", "label": "点击模板", "type": "template",
+        {"key": "click", "label": "点击模板", "type": "template", "required": True,
          "hint": "从当前 APP 组的模板中选择"},
     ]},
     {"key": "long_click", "label": "长按", "category": "操作", "fields": [

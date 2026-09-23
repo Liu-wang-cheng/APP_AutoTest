@@ -23,7 +23,7 @@ def test_用例不能被重复收集():
     sys.path.insert(0, str(ROOT))
     from tests.test_yaml_runner import collect_cases
     cases = collect_cases()
-    keys = [f"{m}::{n}" for m, n, _, _, _ in cases]
+    keys = [f"{m}::{n}" for m, n, *_ in cases]
     dup = sorted({k for k in keys if keys.count(k) > 1})
     assert not dup, f"这些用例被重复收集(检查 Test_cases/ 是否两套等价文件并存): {dup}"
 
@@ -34,7 +34,7 @@ def test_collect_cases_returns_list():
     from tests.test_yaml_runner import collect_cases
     cases = collect_cases()
     assert isinstance(cases, list)
-    for module, name, steps, priority, wait in cases:
+    for module, name, steps, priority, wait, *_ in cases:
         assert isinstance(steps, list)
         assert priority in ("P0", "P1")
 

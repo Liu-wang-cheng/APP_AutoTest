@@ -74,7 +74,7 @@ def collect_cases(name_filter=""):
             order = data.get("case_order") if isinstance(data, dict) else None
             if not isinstance(order, (int, float)):   # 缺失/非法一律按未排序处理
                 order = None
-            entries.append(((order is None, order or 0, fn), data, fn))
+            entries.append(((order is None, order or 0, fn), data, fn, full))
 
     # 组目录(APP 分组)优先,根目录散落文件兼容收集
     for sub in sorted(os.listdir(cases_dir)):
@@ -83,7 +83,7 @@ def collect_cases(name_filter=""):
             _scan(sub_full, sub)
     _scan(cases_dir, "")
     entries.sort(key=lambda e: e[0])
-    for _, data, fn in entries:
+    for _, data, fn, full in entries:
         for module, cases in iter_modules(data, fn):
             for case in cases:
                 name = case.get("name", "")
