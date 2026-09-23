@@ -2571,3 +2571,39 @@ def test_both_name_combos_popup_equal_width(qapp, monkeypatch, tmp_path, fake_se
             qapp.processEvents()
     finally:
         w.close()
+
+
+def test_popup_no_scrollbar_no_extra_gap(qapp, monkeypatch, tmp_path, fake_settings):
+    """★ 下拉不应出现滚动条/底部空白。
+
+    popup 自身有边框, 若把"内容高"直接设给 popup → view 可用高少 2px →
+    出现滚动条且末行被挤(用户实测: 设备名称下拉多一行空白)。
+    正确做法: view 设内容高 + popup.adjustSize() 让 Qt 算边框。
+    """
+    import gui.main_window as mw
+    monkeypatch.setattr(mw, "CASES_DIR", str(tmp_path / "Test_cases"), raising=False)
+    monkeypatch.setattr(mw, "CONFIG_PATH", str(tmp_path / "config.yaml"), raising=False)
+    monkeypatch.setattr(mw, "load_config", lambda: {"app": {}, "device": {}}, raising=False)
+    fake_settings.store["hist/device_name"] = ["SE3L", "L10", "扫地机器0087"]
+    fake_settings.store["hist/app_name"] = ["涂鸦智能", "SmartThings"]
+    w = mw.MainWindow()
+    w.resize(1100, 400)
+    w.show()
+    try:
+        qapp.processEvents()
+        for label, combo in (("设备名称", w.device_name_edit), ("测试APP", w.app_name_edit)):
+            combo.showPopup()
+            qapp.processEvents()
+            view = combo.view()
+            n = combo.count()
+            need = combo._row_height() * n
+            assert view.height() >= need, \
+                f"{label}: view 高度不足(末行被挤): {view.height()} < {need}"
+            assert view.verticalScrollBar().maximum() == 0, \
+                f"{label}: 不应出现垂直滚动条"
+            assert combo.view().window().width() == combo.width(), \
+                f"{label}: 应与输入框等宽"
+            combo.hidePopup()
+            qapp.processEvents()
+    finally:
+        w.close()

@@ -1003,12 +1003,18 @@ class _FitCombo(QComboBox):
         popup = self.view().window()
         if popup is None or not popup.isVisible():
             return
-        want_w = self.width()      # ★ 与输入框等宽(用户要求两者长度一致)
-        # 高度也要重设: popup 打开期间 Qt 不会按新项数重算 → 删除后底部多一行空白
+        # 高度: 先让 view 精确等于内容高, 再让 popup 自己算(含它自身的边框)。
+        # ★ 直接给 popup 设"内容高"会少算 2px 边框 → view 差 2px → 出滚动条,
+        #   视觉上就是底部多一条空白(用户实测)
         rows = self.count()
-        want_h = (self._row_height() * rows + 2 * self.view().frameWidth()) if rows else 30
-        if popup.width() != want_w or popup.height() != want_h:
-            popup.setFixedSize(want_w, want_h)
+        if rows:
+            self.view().setFixedHeight(self._row_height() * rows)
+            popup.adjustSize()
+        else:
+            popup.setFixedHeight(30)
+        # ★ 宽度必须放在 adjustSize **之后** —— adjustSize 会把宽度也算掉
+        if popup.width() != self.width():
+            popup.setFixedWidth(self.width())   # 与输入框等宽(用户要求)
         # 诊断日志(真机排查用): 项数 / 实际尺寸 / 行高
         log.info(f"[下拉] 项数={self.count()} popup={popup.width()}x{popup.height()} "
                  f"view={self.view().width()}x{self.view().height()} "
