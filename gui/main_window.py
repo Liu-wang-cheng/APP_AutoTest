@@ -976,7 +976,8 @@ class PreconditionsDialog(QDialog):
         self._label = _item_label
         self.items = [dict(x) for x in items]
         v = QVBoxLayout(self)
-        v.addWidget(QLabel("按顺序依次执行; 取消勾选则不执行"))
+        self._hint_label = QLabel("按顺序依次执行; 取消勾选则不执行; 参数用「编辑」调整")
+        v.addWidget(self._hint_label)
         self.table = QTableWidget(0, 3)
         self.table.setHorizontalHeaderLabels(["启用 / 前置条件", "编辑", "删除"])
         self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
@@ -1053,20 +1054,21 @@ class PreconditionsDialog(QDialog):
         return menu
 
     def _add_of_type(self, type_key):
-        """按类型添加: 无参数类型直接加入; 有参数则先弹参数对话框(预选该类型)"""
+        """点菜单即添加(与「添加步骤」一致): 用该类型的默认参数直接入列表,
+        之后在列表里点「编辑」改参数 —— 不做"每次都要填表"的拦路对话框。"""
         from core.session import PRECONDITION_TYPES
         spec = PRECONDITION_TYPES.get(type_key) or {}
-        if not spec.get("params"):
-            item = {"type": type_key, "enabled": True}
-            dlg = PreconditionEditDialog(item, self)
-            if dlg.exec() == QDialog.Accepted:
-                self.items.append(dlg.values())
-                self._render()
-            return
-        dlg = PreconditionEditDialog({"type": type_key, "enabled": True}, self)
-        if dlg.exec() == QDialog.Accepted:
-            self.items.append(dlg.values())
-            self._render()
+        item = {"type": type_key, "enabled": True}
+        for prm in spec.get("params", []):
+            d = prm.get("default")
+            if d not in (None, ""):
+                item[prm["key"]] = d
+        self.items.append(item)
+        self._render()
+        # 新增行滚动可见, 并提示下一步(自定义类型需要填参数)
+        self.table.scrollToBottom()
+        if type_key == "text_check":
+            self._hint_label.setText("已添加自定义前置条件 —— 点「编辑」填写名称与操作内容")
 
     def values(self):
         return self.items
