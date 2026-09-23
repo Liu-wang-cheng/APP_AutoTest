@@ -28,8 +28,8 @@ def test_只导入runner就要注册全部动作():
     out = subprocess.run([sys.executable, "-c", code], cwd=str(ROOT),
                          capture_output=True, text=True, timeout=120)
     assert out.returncode == 0, f"子进程失败: {out.stderr}"
-    assert out.stdout.strip() == "24", (
-        f"只导入 runner 时动作表有 {out.stdout.strip()} 个动作(应为 24) —— "
+    assert out.stdout.strip() == "25", (
+        f"只导入 runner 时动作表有 {out.stdout.strip()} 个动作(应为 25) —— "
         f"core/runner.py 是不是漏了 `import core.actions`?")
 
 

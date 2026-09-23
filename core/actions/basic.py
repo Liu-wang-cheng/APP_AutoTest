@@ -30,6 +30,14 @@ def do_click(runner, step):
         runner._click_by_locator(value, timeout)
 
 
+@reg.action("click_template", priority=46)
+def do_click_template(runner, step):
+    """点击模板: 值 = 当前 APP 组的模板名(下拉选择), 按模板匹配点击"""
+    value = step["click_template"]
+    timeout = step.get("timeout", runner.click_timeout)
+    runner._click_by_template(value, timeout)
+
+
 @reg.action("long_click", priority=45)
 def do_long_click(runner, step):
     value = step["long_click"]

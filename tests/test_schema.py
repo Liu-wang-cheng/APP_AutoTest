@@ -7,7 +7,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from gui import schema
 
 # screenshot 不是动作,而是每个步骤都能挂的通用字段(见 GENERIC_FIELDS)
-MUST = {"click", "assert", "input", "latest_record", "find_click", "if", "if not",
+MUST = {"click", "click_template", "assert", "input", "latest_record", "find_click", "if", "if not",
         "back", "long_click", "switch_to", "assert_switch", "add_timer", "swipe",
         "room_zones", "room_click", "merge_zones", "split_zone", "if_click",
         "compare", "set_time", "wait_loading", "wait_for", "diff",
@@ -18,7 +18,7 @@ GENERIC = {"desc", "screenshot", "wait", "timeout", "retry"}
 def test_actions_complete():
     keys = {a["key"] for a in schema.ACTIONS}
     assert keys == MUST, f"缺失 {MUST - keys}, 多余 {keys - MUST}"
-    assert len(schema.ACTIONS) == 26
+    assert len(schema.ACTIONS) == 27
 
 
 def test_screenshot_is_generic_field():

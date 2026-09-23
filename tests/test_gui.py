@@ -115,10 +115,18 @@ def test_locked_disables_all_edit_buttons(win):
 
 
 def test_step_summary_shown_in_card(win):
+    """动作名在 chip(彩色标签); summary 只放具体参数, 不重复动作名"""
+    from PySide6.QtWidgets import QLabel
     win.create_case("测试组", group="测试组")
-    win.add_step("back")
+    win.add_step("click")
+    win.steps[0]["click"] = "开始清扫.png"
+    win.render_cards()
     card = win.cards_lay.itemAt(0).widget()
-    assert "返回键" in card.summary_label.text()
+    chip = next(l for l in card.findChildren(QLabel) if l.objectName() == "chip")
+    assert chip.text() == "点击"
+    assert card.summary_label.text().startswith("开始清扫.png"), \
+        f"summary 应只显示参数: {card.summary_label.text()!r}"
+    assert "点击" not in card.summary_label.text(), "不重复动作名(chip 已有)"
 
 
 # ── 步骤 / 子步骤操作 ──
@@ -1362,10 +1370,6 @@ def test_save_button_dirty_flow(qapp, monkeypatch, tmp_path):
         w.close()
 
 
-def test_collapse_group_unloads_editor(qapp, monkeypatch, tmp_path):
-    pass
-
-
 def test_collapsed_group_not_marked_empty(qapp, monkeypatch, tmp_path):
     """★ 排序重建(order_paths 分支)后, 折叠组的数据必须补全 ——
     否则折叠组被误判为空组, 错插「暂无用例」占位(用户实测);
@@ -1690,76 +1694,320 @@ def test_delete_current_case_unloads_editor(qapp, monkeypatch, tmp_path):
 
 # ── 点击模板勾选组合控件(2026-09-23) ──
 
-def test_template_field_toggle_and_value(qapp, monkeypatch, tmp_path):
-    """点击目标组合控件: 勾选「模板」→ 下拉选当前组模板;不勾 → 手填按钮名/坐标;
-    旧模板名值加载时自动勾选;值经 changed/getter 正确写回"""
-    from PySide6.QtCore import Qt
-    from PySide6.QtWidgets import QLineEdit
-    import gui.main_window as mw
-    d = tmp_path / "Test_cases" / "涂鸦智能T4"
-    d.mkdir(parents=True)
-    (d / "a.yaml").write_text(
-        "module: a\ncases: [{name: x, steps: []}]\n", encoding="utf-8")
-    monkeypatch.setattr(mw, "CASES_DIR", str(d), raising=False)
+def test_collapse_via_real_click_after_reorder(qapp, monkeypatch, tmp_path):
+    """★ 完整用户路径验证: 排序(order_paths 分支)→ QTest 真实点击组头折叠 →
+    折叠组只有 ▸ 组头无占位; 空组占位仍在; 再点击展开数据完整"""
+    from PySide6.QtCore import Qt, QPoint
+    from PySide6.QtTest import QTest
+    from gui import main_window as mw
+    root = tmp_path / "Test_cases"
+    (root / "涂鸦智能T4").mkdir(parents=True)
+    (root / "三星").mkdir()
+    for n in ("全局清扫", "划区清扫"):
+        (root / "涂鸦智能T4" / f"{n}.yaml").write_text(
+            "module: %s\ncases: [{name: a, steps: []}]\n" % n, encoding="utf-8")
+    monkeypatch.setattr(mw, "CASES_DIR", str(root), raising=False)
     monkeypatch.setattr(mw, "CONFIG_PATH", str(tmp_path / "config.yaml"), raising=False)
     w = mw.MainWindow()
     w.resize(900, 700)
     w.show()
     try:
         qapp.processEvents()
-        w.add_step("click")
-        card = _card_widgets(w)[0]
-        tf = card.widgets.get("click")
-        assert tf is not None and hasattr(tf, "changed"), "点击目标应为组合控件"
-        # 新步骤空值 → 默认手填模式(用户尚未选模板)
-        assert not tf.chk.isChecked()
-        # 手填按钮名 → getter 返回
-        tf.edit.setText("开始清扫")
-        assert tf.current_value() == "开始清扫"
-        # 勾选 → 模板下拉(自动列出当前组模板)且隐藏文本输入
-        tf.chk.setChecked(True)
+        lst = w.case_list
+        # 第一步: 箭头移动(触发 order_paths 重建分支 —— bug 触发条件)
+        first = lst.item(case_row_index(lst, 0)).data(Qt.UserRole)
+        w._move_case(first, +1)
+        texts_after_move = [lst.item(i).text() for i in range(lst.count())]
+        # 三星是空组: 排序后显示占位是正确行为; 但不得给有用例的组插占位
+        assert texts_after_move.count("　　(暂无用例)") == 1, "占位只属于真空组"
+        # 第二步: QTest 真实点击「涂鸦智能T4」组头(排序后它排在三星之后)
+        head_idx = next(i for i in range(lst.count())
+                        if lst.item(i).data(0x0100) is None
+                        and "涂鸦智能T4" in lst.item(i).text())
+        rect = lst.visualItemRect(lst.item(head_idx))
+        QTest.mouseClick(lst.viewport(), Qt.LeftButton,
+                         pos=QPoint(rect.center().x(), rect.center().y()))
         qapp.processEvents()
-        assert tf.combo.isVisible() and not tf.edit.isVisible(), "勾选时应显示模板下拉"
-        # 从下拉选模板 → getter 返回模板名
-        tf.combo.setEditText("开始清扫")
-        assert tf.current_value() == "开始清扫"
-        # 不勾 → 手填坐标
-        tf.chk.setChecked(False)
-        tf.edit.setText("540,1700")
-        assert tf.current_value() == "540,1700"
+        texts = [lst.item(i).text() for i in range(lst.count())]
+        assert "涂鸦智能T4" in w._collapsed_groups
+        assert not any("暂无用例" in t and "涂鸦智能T4" in t for t in texts), \
+            f"折叠的有用例组不得显示占位: {texts}"
+        assert sum("涂鸦智能T4" in t for t in texts) == 1, "折叠组只显示一个组头"
+        # 第三步: 再点击展开 → 用例数据完整恢复
+        QTest.mouseClick(lst.viewport(), Qt.LeftButton,
+                         pos=QPoint(rect.center().x(), rect.center().y()))
+        qapp.processEvents()
+        roles = [lst.item(i).data(Qt.UserRole) for i in range(lst.count())
+                 if lst.item(i).data(Qt.UserRole)]
+        assert len(roles) == 2 and all(roles), "展开后两条用例数据完整"
     finally:
         w.close()
 
 
-def test_template_field_writeback(qapp, monkeypatch, tmp_path):
-    """组合控件 changed → _write_back: 模板选择/手填坐标都写回 step 字典并自动保存"""
-    import yaml as _y
-    from PySide6.QtCore import Qt
-    import gui.main_window as mw
-    d = tmp_path / "Test_cases" / "涂鸦智能T4"
-    d.mkdir(parents=True)
-    (d / "a.yaml").write_text(
+def test_collapse_empty_group_hides_placeholder(qapp, monkeypatch, tmp_path):
+    """★ 收起空组(三星)后占位行必须消失(用户实测 bug); 再展开恢复"""
+    from PySide6.QtCore import Qt, QPoint
+    from PySide6.QtTest import QTest
+    from gui import main_window as mw
+    root = tmp_path / "Test_cases"
+    (root / "三星").mkdir(parents=True)          # 空组
+    monkeypatch.setattr(mw, "CASES_DIR", str(root), raising=False)
+    monkeypatch.setattr(mw, "CONFIG_PATH", str(tmp_path / "config.yaml"), raising=False)
+    w = mw.MainWindow()
+    w.resize(900, 700)
+    w.show()
+    try:
+        qapp.processEvents()
+        lst = w.case_list
+        texts0 = [lst.item(i).text() for i in range(lst.count())]
+        assert texts0 == ["▾ 三星", "　　(暂无用例)"]
+        # QTest 真实点击组头折叠
+        rect = lst.visualItemRect(lst.item(0))
+        QTest.mouseClick(lst.viewport(), Qt.LeftButton,
+                         pos=QPoint(rect.center().x(), rect.center().y()))
+        qapp.processEvents()
+        texts1 = [lst.item(i).text() for i in range(lst.count())]
+        assert texts1 == ["▸ 三星"], f"折叠空组后占位必须消失, 实际: {texts1}"
+        # 再点击展开 → 占位恢复
+        QTest.mouseClick(lst.viewport(), Qt.LeftButton,
+                         pos=QPoint(rect.center().x(), rect.center().y()))
+        qapp.processEvents()
+        texts2 = [lst.item(i).text() for i in range(lst.count())]
+        assert texts2 == ["▾ 三星", "　　(暂无用例)"], "展开后占位恢复"
+    finally:
+        w.close()
+
+
+# ── 动作键完整性 + 截图开关(2026-09-22) ──
+
+def test_all_actions_have_key_after_new_step():
+    """★ 全部动作 new_step 后动作键必须存在(此前 back/set_time/room_click
+    等新建后无动作键 → 卡片显示未知、引擎无动作);serialize 也不得丢键"""
+    from gui import schema
+    missing = []
+    for a in schema.ACTIONS:
+        step = schema.new_step(a["key"])
+        if a["key"] not in step:
+            missing.append((a["key"], list(step.keys())))
+        ser = schema.serialize_step(dict(step))
+        if a["key"] not in ser:
+            missing.append((a["key"] + "(serialize丢键)", list(ser.keys())))
+    assert not missing, f"动作键缺失: {missing}"
+    # 语义默认抽查
+    assert schema.new_step("back")["back"] is True
+    assert schema.new_step("set_time")["set_time"] == 0      # 0=当前时间
+    assert schema.new_step("room_click")["room_click"] == 1  # 第1个分区
+    # 条件动作: 空条件保留键(serialize 不清动作键)
+    assert "if" in schema.serialize_step(schema.new_step("if"))
+
+
+def test_screenshot_switch_and_auto_name(qapp, monkeypatch, tmp_path):
+    """截图字段 = 开关(True 自动命名), 旧字符串路径兼容保留"""
+    from types import SimpleNamespace
+    from core import runner as cr
+    root = tmp_path / "Test_img"
+    monkeypatch.setattr(cr, "BASE_DIR", str(tmp_path), raising=False)
+    saved = {"path": None}
+
+    class _Dev:
+        def screenshot(self, path=None):
+            saved["path"] = path
+            return path
+
+    dev = _Dev()
+    cfg = {"step_interval": 0, "default_timeout": 1, "click_timeout": 1}
+    r = cr.ActionRunner(dev, cfg, case_name="冒烟用例")
+    r._execute({"desc": "点击 主界面 按钮", "screenshot": True})
+    p1 = saved["path"].replace("\\", "/")
+    assert "冒烟用例" in p1 and "step01" in p1, f"自动命名: {p1}"
+    assert "点击_主界面_按钮" in p1, "自动命名应含描述"
+    # 旧字符串路径兼容(screenshots/ 前缀补 Test_img/)
+    r._execute({"desc": "d", "screenshot": "screenshots/manual.png"})
+    p2 = saved["path"].replace("\\", "/")
+    assert p2.endswith("Test_img/screenshots/manual.png"), f"旧路径兼容: {p2}"
+
+
+def test_compare_baseline_step_dropdown(qapp, monkeypatch, tmp_path):
+    """compare 基准图 = 下拉选择前面开启截图的步骤(值 step:N);
+    执行端 runner 解析 step:N 为该步截图路径;无截图时明确报错"""
+    from PySide6.QtWidgets import QComboBox
+    from gui import main_window as mw
+    from core import runner as cr
+    root = tmp_path / "Test_cases" / "涂鸦智能T4"
+    root.mkdir(parents=True)
+    (root / "a.yaml").write_text(
         "module: a\ncases: [{name: x, steps: []}]\n", encoding="utf-8")
-    monkeypatch.setattr(mw, "CASES_DIR", str(d), raising=False)
+    monkeypatch.setattr(mw, "CASES_DIR", str(root), raising=False)
     monkeypatch.setattr(mw, "CONFIG_PATH", str(tmp_path / "config.yaml"), raising=False)
     w = mw.MainWindow()
     try:
-        w.create_case("测试组", group="涂鸦智能T4")
+        # 步骤: 1 开截图, 2 不开, 3 开截图, 4 compare
         w.add_step("click")
-        card = _card_widgets(w)[0]
-        tf = card.widgets["click"]
-        # 手填模式填坐标 → 触发 changed → 写回 step + 自动保存
-        tf.edit.setText("100,200")
-        tf.edit.editingFinished.emit()
-        assert w.steps[0]["click"] == "100,200"
-        back = _y.safe_load(open(w.case_path, encoding="utf-8").read())
-        from PySide6.QtTest import QTest
-        QTest.qWait(400)   # 等防抖写盘
-        back = _y.safe_load(open(w.case_path, encoding="utf-8").read())
-        assert back["cases"][0]["steps"][0]["click"] == "100,200", "应自动保存"
-        # 切到模板选择
-        tf.chk.setChecked(True)
-        tf.combo.setCurrentText("开始清扫")
-        assert w.steps[0]["click"] == "开始清扫"
+        w.steps[0]["screenshot"] = True     # 步骤1 开截图
+        w.add_step("click")                  # 步骤2 不开
+        w.add_step("click")                  # 步骤3 开截图
+        w.steps[2]["screenshot"] = True
+        w.add_step("compare")                # 步骤4 对比
+        card = [wd for wd in _card_widgets(w)][3]
+        combo = card.widgets.get("compare")
+        assert isinstance(combo, QComboBox), "基准图应为下拉选择"
+        data = [combo.itemData(i) for i in range(combo.count())]
+        assert data == ["step:1", "step:3"], f"选项应为开启截图的步骤: {data}"
+        combo.setCurrentIndex(1)         # 选 步骤3
+        w._sync_header() if hasattr(w, "_sync_header") else None
+        assert w.steps[3]["compare"] == "step:3"
+    finally:
+        w.close()
+
+
+def test_runner_compare_resolves_step_ref(qapp, tmp_path):
+    """runner: compare=step:N → 取第 N 步结果截图;无截图时明确报错"""
+    import core.actions.asserts as asserts_mod
+    from types import SimpleNamespace
+    from core import runner as cr
+    saved = {"path": None}
+
+    import numpy as np
+    from PIL import Image
+    Image.new("RGB", (64, 64), "white").save(tmp_path / "shot1.png")
+
+    class _Dev:
+        def screenshot(self, path=None, format=None):
+            if format == "opencv":
+                import numpy as np
+                return np.zeros((32, 32, 3), dtype=np.uint8)
+            saved["path"] = path
+            return path
+
+    dev = _Dev()
+    r = cr.ActionRunner(dev, {"step_interval": 0, "default_timeout": 1,
+                              "click_timeout": 1}, case_name="c")
+    # 模拟第 1 步已截图
+    r.results.append({"desc": "步骤1", "passed": True,
+                      "screenshot": str(tmp_path / "shot1.png")})
+    assert asserts_mod._resolve_baseline(r, "step:1") == str(tmp_path / "shot1.png"), \
+        "step:1 应解析为第1步截图路径"
+    # 无截图引用 → 明确报错
+    import pytest
+    with pytest.raises(RuntimeError, match="没有截图"):
+        asserts_mod._resolve_baseline(r, "step:2")
+
+
+def test_delete_selected_case_and_group(qapp, monkeypatch, tmp_path):
+    """删除按钮: 删除选中用例(文件移除+编辑区清空)与删除选中组(整目录移除),
+    均需确认弹窗(测试中 mock);只删除选中的那一个"""
+    from PySide6.QtCore import Qt
+    from PySide6.QtWidgets import QMessageBox
+    import gui.main_window as mw
+    root = tmp_path / "Test_cases"
+    (root / "涂鸦智能T4").mkdir(parents=True)
+    (root / "三星").mkdir(parents=True)
+    for n in ("全局清扫", "划区清扫"):
+        (root / "涂鸦智能T4" / f"{n}.yaml").write_text(
+            "module: %s\ncases: [{name: a, steps: []}]\n" % n, encoding="utf-8")
+    monkeypatch.setattr(mw, "CASES_DIR", str(root), raising=False)
+    monkeypatch.setattr(mw, "CONFIG_PATH", str(tmp_path / "config.yaml"), raising=False)
+    boxes = []
+    monkeypatch.setattr(mw.QMessageBox, "question",
+                        staticmethod(lambda *a, **k: boxes.append(a) or
+                                     QMessageBox.Yes))
+    w = mw.MainWindow()
+    w.resize(900, 700)
+    w.show()
+    try:
+        qapp.processEvents()
+        lst = w.case_list
+        # ── 删除单个用例(划区清扫) ──
+        idx = case_row_index(lst, 1)
+        lst.setCurrentRow(idx)
+        w.on_delete_selected()
+        qapp.processEvents()
+        assert boxes, "删除必须弹确认框"
+        assert not (root / "涂鸦智能T4" / "划区清扫.yaml").exists()
+        roles = [lst.item(i).data(Qt.UserRole) for i in range(lst.count())
+                 if lst.item(i).data(Qt.UserRole)]
+        assert roles == [str(root / "涂鸦智能T4" / "全局清扫.yaml")]
+        # ── 删除整组(三星, 空组): 选中三星组头行 ──
+        head_idx = next(i for i in range(lst.count())
+                        if lst.item(i).data(Qt.UserRole) is None
+                        and "三星" in lst.item(i).text())
+        lst.setCurrentRow(head_idx)
+        assert lst.currentItem().data(Qt.UserRole) is None
+        w.on_delete_selected()
+        qapp.processEvents()
+        assert not (root / "三星").exists(), "删除组应移除整个目录"
+        assert len(boxes) == 2, "两次删除各弹一次确认"
+    finally:
+        w.close()
+
+
+def test_delete_current_case_unloads_editor(qapp, monkeypatch, tmp_path):
+    """删除的正是当前编辑用例时, 编辑区同步清空"""
+    from PySide6.QtCore import Qt, QPoint
+    from PySide6.QtWidgets import QMessageBox
+    from PySide6.QtTest import QTest
+    from gui import main_window as mw
+    root = tmp_path / "Test_cases"
+    (root / "涂鸦智能T4").mkdir(parents=True)
+    (root / "涂鸦智能T4" / "a.yaml").write_text(
+        "module: a\ncases: [{name: x, steps: [{desc: s, click: y}]}]\n",
+        encoding="utf-8")
+    monkeypatch.setattr(mw, "CASES_DIR", str(root), raising=False)
+    monkeypatch.setattr(mw, "CONFIG_PATH", str(tmp_path / "config.yaml"), raising=False)
+    w = mw.MainWindow()
+    w.resize(900, 700)
+    w.show()
+    try:
+        qapp.processEvents()
+        lst = w.case_list
+        w._on_case_item_clicked(lst.item(case_row_index(lst, 0)))
+        assert w.case_path and w.data["module"] == "a"
+        monkeypatch.setattr(mw.QMessageBox, "question",
+                            staticmethod(lambda *a, **k: QMessageBox.Yes))
+        lst.setCurrentRow(case_row_index(lst, 0))
+        w.on_delete_selected()
+        qapp.processEvents()
+        assert w.case_path is None and len(w.steps) == 0, \
+            "删除当前编辑用例后编辑区应清空"
+        assert w.file_label.text() == "未选中用例"
+    finally:
+        w.close()
+
+# ── 点击 / 点击模板 拆分动作(2026-09-23) ──
+
+def test_click_and_click_template_split(qapp, monkeypatch, tmp_path):
+    """click(手填目标)与 click_template(下拉选模板)为两个独立动作:
+    click → 目标 QLineEdit; click_template → 模板下拉(当前 APP 组自动列出)"""
+    from PySide6.QtWidgets import QLineEdit, QComboBox
+    import gui.main_window as mw
+    root = tmp_path / "Test_cases"
+    gdir = root / "涂鸦智能T4"
+    tdir = gdir / "templates"
+    tdir.mkdir(parents=True)
+    (tdir / "涂鸦_开始清扫.png").write_bytes(b"fake")
+    monkeypatch.setattr(mw, "CASES_DIR", str(root), raising=False)
+    monkeypatch.setattr(mw, "CONFIG_PATH", str(tmp_path / "config.yaml"), raising=False)
+    w = mw.MainWindow()
+    w.resize(900, 700)
+    w.show()
+    try:
+        qapp.processEvents()
+        # create_case 设置 case_path → 模板上下文绑定到「涂鸦智能T4」组
+        w.create_case("a", group="涂鸦智能T4")
+        # 分步: 新加的步骤默认展开, 先读 click
+        w.add_step("click")
+        cards = _card_widgets(w)
+        w1 = cards[0].widgets["click"]
+        assert isinstance(w1, QLineEdit), "click 目标 = 手填输入框"
+        # 再加 click_template(它展开, 第一张收起)
+        w.add_step("click_template")
+        cards = _card_widgets(w)
+        w2 = cards[1].widgets["click_template"]
+        assert isinstance(w2, QComboBox), "click_template = 模板下拉"
+        assert "开始清扫" in [w2.itemText(i) for i in range(w2.count())], \
+            "下拉应自动列出当前 APP 组模板"
+        w2.setCurrentText("开始清扫")
+        w2.currentIndexChanged.emit(0)   # combo 的写回信号
+        assert w.steps[1]["click_template"] == "开始清扫"
     finally:
         w.close()

@@ -40,6 +40,7 @@ CASE_STATE_COLORS = {"idle": "#cbd5e1", "running": "#f5b301",
 CASE_STATE_ROLE = int(Qt.UserRole) + 1     # item 存状态字符串
 _LAMP_SIZE = 12                            # 状态灯直径
 _ARROW_W = 44                              # 右侧箭头命中区宽(↑22 + ↓22)
+_FIELD_LABEL_W = 96                        # 步骤字段标签列固定宽(对齐整齐)
 
 
 def make_lamp_pixmap(color, size=_LAMP_SIZE):
@@ -475,52 +476,6 @@ def make_action_menu(parent, on_pick):
     return menu
 
 
-class _TemplateField(QWidget):
-    """点击目标组合控件: 勾选「模板」→ 下拉选当前 APP 组模板;
-    不勾 → 手填按钮名称或坐标(用户要求)。值变化发 changed 信号。"""
-
-    changed = Signal()
-
-    def __init__(self, templates, value, parent=None):
-        super().__init__(parent)
-        lay = QVBoxLayout(self)
-        lay.setContentsMargins(0, 0, 0, 0)
-        lay.setSpacing(3)
-        # ★ 第一行: 勾选框(文字「点击」); 第二行: 模板下拉或手填输入
-        #   (用户要求: 复选框不与输入框同行)
-        self.chk = QCheckBox("点击")
-        self.chk.setToolTip("勾选=从当前 APP 组模板中选择;不勾=填按钮名称或坐标")
-        lay.addWidget(self.chk)
-        self.combo = QComboBox()
-        self.combo.setEditable(True)
-        self.combo.addItems(templates)
-        self.combo.setPlaceholderText("选择当前 APP 组的模板")
-        self.edit = QLineEdit()
-        self.edit.setPlaceholderText("按钮名 / x,y 坐标")
-        lay.addWidget(self.combo)
-        lay.addWidget(self.edit)
-        self.chk.toggled.connect(self._sync_mode)
-        self.combo.currentTextChanged.connect(lambda _: self.changed.emit())
-        self.edit.editingFinished.connect(self.changed.emit)
-        # 初始态: 值是已知模板名 → 勾选走模板;否则手填
-        is_tpl = bool(value) and value in templates
-        self.chk.setChecked(is_tpl)
-        self._sync_mode(is_tpl)
-        if is_tpl:
-            self.combo.setCurrentText(value)
-        else:
-            self.edit.setText(value or "")
-
-    def _sync_mode(self, checked):
-        self.combo.setVisible(checked)
-        self.edit.setVisible(not checked)
-        self.changed.emit()
-
-    def current_value(self):
-        if self.chk.isChecked():
-            return self.combo.currentText().strip()
-        return self.edit.text().strip()
-
 
 def _make_field_widget(field, value, steps=None, exclude_index=None):
     """按 schema 字段类型建控件,返回 (widget, 取值getter)。
@@ -529,8 +484,13 @@ def _make_field_widget(field, value, steps=None, exclude_index=None):
     hint = field.get("hint", "")
     if t == "template":
         from core import vision
-        w = _TemplateField(vision.list_templates(), str(value) if value else "")
-        return w, w.current_value
+        combo = QComboBox()
+        combo.setEditable(True)
+        combo.addItems(vision.list_templates())
+        if value:
+            combo.setCurrentText(str(value))
+        combo.lineEdit().setPlaceholderText(hint or "选择模板")
+        return combo, combo.currentText
     if t == "stepshot":
         # 基准图下拉: 选项 = 当前用例中开启了自动截图的其他步骤(用户要求)
         combo = QComboBox()
@@ -797,13 +757,16 @@ class StepCard(QFrame):
     def _add_field(self, grid, row, field):
         lbl = QLabel(field["label"])
         lbl.setObjectName("fieldLabel")
+        lbl.setFixedWidth(_FIELD_LABEL_W)   # ★ 标签列固定宽(否则被 grid 拉伸)
+        lbl.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
         grid.addWidget(lbl, row, 0)
+        grid.setColumnStretch(1, 1)         # 控件列吃剩余空间(控件靠左, 不居中)
         w, getter = _make_field_widget(field, self.step.get(field["key"]),
                                        steps=self.main.steps,
                                        exclude_index=self.index)
-        w.setMinimumWidth(240)
-        w.setMaximumWidth(430)
-        grid.addWidget(w, row, 1)
+        w.setMinimumWidth(200)
+        w.setMaximumWidth(300)   # 收紧(原 430 右侧大片留白)
+        grid.addWidget(w, row, 1, Qt.AlignLeft)   # 靠左紧贴标签(拉伸列内不居中)
         self.widgets[field["key"]] = w
         self.getters[field["key"]] = getter
         if hasattr(w, "changed"):             # 组合控件(点击模板勾选): 自带 changed 信号
@@ -1810,6 +1773,9 @@ class MainWindow(QMainWindow):
     def _do_auto_save(self):
         if self.worker or not self.case_path:
             return
+        if getattr(self, "_edit_timer", None) is not None and self._edit_timer.isActive():
+            self._edit_timer.stop()
+            self._refresh_yaml_text()   # 写盘前保证 YAML 视图一致
         try:
             prev_order = self._read_case_order(self.case_path)
             with open(self.case_path, "w", encoding="utf-8") as f:
@@ -1824,6 +1790,16 @@ class MainWindow(QMainWindow):
             self.log_view.appendPlainText(f"[自动保存失败] {e}")
 
     def on_card_edited(self):
+        """卡片编辑 → 防抖刷新 YAML 文本 + 自动保存(勾选连续切换只触发一次,
+        避免每次 toggle 都全量重绘导致勾选框闪动)"""
+        if getattr(self, "_edit_timer", None) is None:
+            self._edit_timer = QTimer(self)
+            self._edit_timer.setSingleShot(True)
+            self._edit_timer.setInterval(300)
+            self._edit_timer.timeout.connect(self._flush_card_edit)
+        self._edit_timer.start()
+
+    def _flush_card_edit(self):
         self._refresh_yaml_text()
         self._auto_save()
 

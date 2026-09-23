@@ -18,7 +18,11 @@ GENERIC_FIELDS = [
 ACTIONS = [
     # ── 操作 ──
     {"key": "click", "label": "点击", "category": "操作", "fields": [
-        {"key": "click", "label": "点击模板", "type": "template", "required": True,
+        {"key": "click", "label": "目标", "type": "text", "required": True,
+         "hint": "按钮名 / 图片名(.png) / x,y 坐标"},
+    ]},
+    {"key": "click_template", "label": "点击模板", "category": "操作", "fields": [
+        {"key": "click_template", "label": "模板", "type": "template", "required": True,
          "hint": "从当前 APP 组的模板中选择"},
     ]},
     {"key": "long_click", "label": "长按", "category": "操作", "fields": [
@@ -281,10 +285,11 @@ def step_summary(step):
         val = ",".join(f"{k}={v}" for k, v in val.items() if v not in (None, ""))
     elif isinstance(val, list):
         val = f"[{','.join(map(str, val))}]"
-    detail = f"{action['label']}: {val}" if val not in (True, "") else action["label"]
+    # ★ chip(彩色标签)已经显示动作名, summary 只显示「具体参数」, 不再重复
+    detail = "" if val in (True, "") else str(val)
     desc = str(step.get("desc", "")).strip()
     if desc and desc != action["label"]:
-        main = f"{desc} · {detail}"
+        main = f"{desc} · {detail}" if detail else desc
     else:
         main = detail
     badges = []

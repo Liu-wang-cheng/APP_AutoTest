@@ -9,9 +9,9 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 # 引擎侧注册的动作数(grab/match/screenshot 不进分发表,见下)
-EXPECTED_ACTION_COUNT = 24
+EXPECTED_ACTION_COUNT = 25
 # schema 声明的动作数:不含 screenshot —— 它是通用字段,任何步骤都能挂
-EXPECTED_SCHEMA_COUNT = 26
+EXPECTED_SCHEMA_COUNT = 27
 GENERIC_FIELD_KEYS = {"desc", "screenshot", "wait", "timeout", "retry"}
 
 
