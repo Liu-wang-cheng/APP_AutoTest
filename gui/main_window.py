@@ -933,6 +933,18 @@ class _HistCombo(QComboBox):
         super().__init__(parent)
         self.view().viewport().installEventFilter(self)
 
+    def _fit_popup_width(self):
+        """弹出列表宽度按「最长的历史项」自适应(含 ✕ 命中区)。
+        删除/新增项后再弹出会重新计算(用户要求)"""
+        fm = self.lineEdit().fontMetrics()
+        longest = max([fm.horizontalAdvance(self.itemText(i))
+                       for i in range(self.count())] or [0])
+        self.view().setMinimumWidth(max(self.width(), longest + 48))
+
+    def showPopup(self):
+        self._fit_popup_width()
+        super().showPopup()
+
     def eventFilter(self, obj, ev):
         if obj is self.view().viewport() and ev.type() == QEvent.MouseButtonRelease:
             idx = self.view().indexAt(ev.pos())

@@ -2269,3 +2269,48 @@ def test_detect_app_restores_cursor_and_button(qapp, monkeypatch, tmp_path):
         assert w.detect_btn.isEnabled()
     finally:
         w.close()
+
+
+def test_history_popup_width_adapts_and_recomputes(qapp, monkeypatch, tmp_path, fake_settings):
+    """★ 弹出列表宽度按最长历史项自适应; 删除项后重新弹出会重算(用户要求)"""
+    from PySide6.QtCore import Qt, QPoint
+    from PySide6.QtTest import QTest
+    import gui.main_window as mw
+    monkeypatch.setattr(mw, "CASES_DIR", str(tmp_path / "Test_cases"), raising=False)
+    monkeypatch.setattr(mw, "CONFIG_PATH", str(tmp_path / "config.yaml"), raising=False)
+    monkeypatch.setattr(mw, "load_config", lambda: {"app": {}, "device": {}}, raising=False)
+    fake_settings.store["hist/app_name"] = ["短", "中等长度的应用名",
+                                           "超级无敌长的应用名称测试用例ABCDEF"]
+    w = mw.MainWindow()
+    w.resize(1000, 400)
+    w.show()
+    try:
+        qapp.processEvents()
+        combo = w.app_name_edit
+        combo.setCurrentText("短")          # 输入框窄, 列表仍应放得下长项
+        qapp.processEvents()
+        combo.showPopup()
+        qapp.processEvents()
+        view = combo.view()
+        fm = combo.lineEdit().fontMetrics()
+        longest = max(fm.horizontalAdvance(combo.itemText(i))
+                      for i in range(combo.count()))
+        assert view.width() >= longest + 40, \
+            f"列表宽应容纳最长项: {view.width()} < {longest + 40}"
+        assert view.width() > combo.width(), "列表可比输入框宽(内容驱动)"
+        # 监控最长项(第 3 项)的整行宽度足够显示
+        row_w = view.visualRect(combo.model().index(2, 0)).width()
+        assert row_w >= longest, f"行宽不足: {row_w} < {longest}"
+        # 删掉最长项 → 重弹应变窄
+        wide = view.width()
+        rect = view.visualRect(combo.model().index(2, 0))
+        QTest.mouseClick(view.viewport(), Qt.LeftButton,
+                         pos=QPoint(rect.right() - 6, rect.center().y()))
+        qapp.processEvents()
+        assert combo.count() == 2, "最长项应已删除"
+        combo.showPopup()
+        qapp.processEvents()
+        assert combo.view().width() < wide, \
+            f"删除最长项后列表应变窄: {combo.view().width()} vs {wide}"
+    finally:
+        w.close()
