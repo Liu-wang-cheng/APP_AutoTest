@@ -73,9 +73,8 @@ class RunWorker(QThread):
 
     # ── 线程主体 ──
     def run(self):
-        handler = _QtLogHandler(self.log_line.emit)
-        root_log = logging.getLogger("vacuum_test")
-        root_log.addHandler(handler)
+        # ★ 不再自己挂日志 handler —— MainWindow 已有全局转发(_attach_log_handler),
+        #   两边都挂会让同一条日志在运行日志里显示两遍。log_line 信号保留兼容。
         report = None
         report_saved = False
         try:
@@ -213,7 +212,6 @@ class RunWorker(QThread):
             self.log_line.emit(f"[异常] {type(e).__name__}: {e}")
             self.finished_run.emit(False, f"执行异常: {e}")
         finally:
-            root_log.removeHandler(handler)
             # 中途异常也保住已执行部分的报告
             if report is not None and not report_saved:
                 try:

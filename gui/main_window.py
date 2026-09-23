@@ -2916,6 +2916,9 @@ class MainWindow(QMainWindow):
         # 运行日志
         self.log_view = QPlainTextEdit()
         self.log_view.setReadOnly(True)
+        # ★ 自动换行: 默认 NoWrap 会把长日志行在右侧截断(用户反馈"显示不完整")
+        self.log_view.setLineWrapMode(QPlainTextEdit.WidgetWidth)
+        self.log_view.setMaximumBlockCount(5000)   # 限制条数, 防止长时间运行涨爆内存
         self.tabs.addTab(self.log_view, "运行日志")
 
         splitter.addWidget(self.tabs)
@@ -3094,7 +3097,8 @@ class MainWindow(QMainWindow):
 
         self.worker = RunWorker(device_id, case_files, pre_items, repeat)
         self.worker.step_done.connect(self.on_step_done)
-        self.worker.log_line.connect(self.log_view.appendPlainText)
+        # 注: 不再连接 log_line → 运行日志(执行期间的 core 日志已由全局
+        #     handler 转发, 再连一次会每条显示两遍)
         self.worker.status.connect(self.on_worker_status)
         self.worker.finished_run.connect(self.on_run_finished)
         # 状态灯:执行中黄 / 通过绿 / 失败红(画在用例名后面)

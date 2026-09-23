@@ -2677,3 +2677,28 @@ def test_chipbtn_has_visible_border_and_list_title(qapp, monkeypatch, tmp_path):
                 and "13px" in t.styleSheet(), f"「{t.text()}」样式应一致"
     finally:
         w.close()
+
+
+def test_log_view_wraps_and_no_duplicate_handler(qapp, monkeypatch, tmp_path):
+    """★ 运行日志: ① 自动换行(否则长行被右侧截断, 看着"不完整")
+    ② 不重复 —— RunWorker 不能再挂 handler(与主窗口全局转发冲突)"""
+    import inspect
+    from PySide6.QtWidgets import QPlainTextEdit
+    import gui.main_window as mw
+    import gui.runner_thread as rt
+    monkeypatch.setattr(mw, "CASES_DIR", str(tmp_path / "Test_cases"), raising=False)
+    monkeypatch.setattr(mw, "CONFIG_PATH", str(tmp_path / "config.yaml"), raising=False)
+    w = mw.MainWindow()
+    try:
+        assert w.log_view.lineWrapMode() == QPlainTextEdit.WidgetWidth, \
+            "运行日志必须自动换行(NoWrap 会截断长行)"
+        # 全部 core 日志都走 vacuum_test logger → 全局转发覆盖
+        from core.logger import get_logger
+        get_logger().info("[测试] 这条应出现在运行日志")
+        qapp.processEvents()
+        assert "[测试] 这条应出现在运行日志" in w.log_view.toPlainText()
+        # RunWorker 不应再挂 handler(否则同一条显示两遍)
+        src = inspect.getsource(rt.RunWorker.run)
+        assert "addHandler" not in src, "RunWorker 不应挂日志 handler(会重复)"
+    finally:
+        w.close()

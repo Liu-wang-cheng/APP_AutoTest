@@ -21,7 +21,7 @@ cases:
       timeout: 0
   - desc: 进入设置界面
     click_template: 进入设置.png
-    screenshot: screenshots/地图编辑_00_进入设置.png
+    screenshot: true
   - desc: 进入地图管理
     click: 地图管理
     screenshot: screenshots/地图编辑_01_地图管理.png
