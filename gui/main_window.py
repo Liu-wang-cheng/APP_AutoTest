@@ -1023,10 +1023,12 @@ class _FitCombo(QComboBox):
         if popup.width() != self.width():
             popup.setFixedWidth(self.width())   # 与输入框等宽(用户要求)
         # 诊断日志(真机排查用): 项数 / 实际尺寸 / 行高
-        log.info(f"[下拉] 项数={self.count()} popup={popup.width()}x{popup.height()} "
+        log.info(f"[下拉] 项数={self.count()} 输入框宽={self.width()} "
+                 f"popup={popup.width()}x{popup.height()} "
                  f"view={self.view().width()}x{self.view().height()} "
                  f"行高={self._row_height()} "
-                 f"滚动条={self.view().verticalScrollBar().maximum()}")
+                 f"滚动条={self.view().verticalScrollBar().maximum()} "
+                 f"可见={popup.isVisible()}")
 
     def showPopup(self):
         super().showPopup()
