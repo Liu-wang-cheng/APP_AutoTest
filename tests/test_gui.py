@@ -1344,9 +1344,11 @@ def test_save_button_dirty_flow(qapp, monkeypatch, tmp_path):
         assert not w.save_btn.isEnabled(), "加载后无修改应置灰"
         # 编辑产生修改 → 亮起
         w.add_step("click")
+        from PySide6.QtTest import QTest
+        QTest.qWait(400)   # 防抖 300ms 后写盘
         import yaml as _y
         back = _y.safe_load(open(w.case_path, encoding="utf-8").read())
-        assert len(back["cases"][0]["steps"]) == 1, "自动保存: 编辑应立即写盘"
+        assert len(back["cases"][0]["steps"]) == 1, "自动保存: 编辑应写盘"
         # 保存 → 写盘(含新增步骤)且置灰; mock 掉参数问题确认弹窗(离屏无人点击)
         # on_save 的参数校验可能弹确认框(离屏无人点击会卡死), mock 为 Yes
         monkeypatch.setattr(mw.QMessageBox, "question",
@@ -1750,6 +1752,9 @@ def test_template_field_writeback(qapp, monkeypatch, tmp_path):
         tf.edit.setText("100,200")
         tf.edit.editingFinished.emit()
         assert w.steps[0]["click"] == "100,200"
+        back = _y.safe_load(open(w.case_path, encoding="utf-8").read())
+        from PySide6.QtTest import QTest
+        QTest.qWait(400)   # 等防抖写盘
         back = _y.safe_load(open(w.case_path, encoding="utf-8").read())
         assert back["cases"][0]["steps"][0]["click"] == "100,200", "应自动保存"
         # 切到模板选择

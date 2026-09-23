@@ -17,4 +17,7 @@ cases:
   - desc: 点击
     click: 三星_开始清扫.png
     screenshot: true
+  - desc: 点击
+    click: ''
+    screenshot: true
   wait: null

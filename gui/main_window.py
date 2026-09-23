@@ -161,6 +161,9 @@ QLabel#fieldLabel { color: #64748b; }
 QLabel#badges { color: #94a3b8; font-size: 11px; }
 
 QFrame#chipStrip { background: #ffffff; border: 1px solid #e4e8ee; border-radius: 8px; }
+/* 步骤卡片内勾选框: 固定透明背景, 防止写盘重绘时闪烁 */
+QFrame#stepCard QCheckBox, QFrame#stepCardOpen QCheckBox,
+QFrame#subStepCard QCheckBox, QFrame#subStepCardOpen QCheckBox { background: transparent; }
 QPushButton#chipBtn {
     background: #f1f5f9; border: 1px solid transparent; border-radius: 12px;
     padding: 3px 12px; color: #475569;
@@ -480,19 +483,22 @@ class _TemplateField(QWidget):
 
     def __init__(self, templates, value, parent=None):
         super().__init__(parent)
-        lay = QHBoxLayout(self)
+        lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
-        lay.setSpacing(4)
-        self.chk = QCheckBox("模板")
+        lay.setSpacing(3)
+        # ★ 第一行: 勾选框(文字「点击」); 第二行: 模板下拉或手填输入
+        #   (用户要求: 复选框不与输入框同行)
+        self.chk = QCheckBox("点击")
         self.chk.setToolTip("勾选=从当前 APP 组模板中选择;不勾=填按钮名称或坐标")
+        lay.addWidget(self.chk)
         self.combo = QComboBox()
         self.combo.setEditable(True)
         self.combo.addItems(templates)
+        self.combo.setPlaceholderText("选择当前 APP 组的模板")
         self.edit = QLineEdit()
         self.edit.setPlaceholderText("按钮名 / x,y 坐标")
-        lay.addWidget(self.chk)
-        lay.addWidget(self.combo, 1)
-        lay.addWidget(self.edit, 1)
+        lay.addWidget(self.combo)
+        lay.addWidget(self.edit)
         self.chk.toggled.connect(self._sync_mode)
         self.combo.currentTextChanged.connect(lambda _: self.changed.emit())
         self.edit.editingFinished.connect(self.changed.emit)
@@ -1789,8 +1795,19 @@ class MainWindow(QMainWindow):
         self.render_cards()
 
     def _auto_save(self):
-        """编辑自动保存(最终模型, 用户定稿): 每次修改立即写盘,
-        保留 case_order;「保存」按钮保留作为手动强制保存"""
+        """编辑自动保存(防抖 300ms): 停止编辑后写盘一次,
+        避免勾选切换时的连续写盘抖动;「保存」按钮为手动强制保存"""
+        if self.worker or not self.case_path:
+            return
+        if getattr(self, "_autosave_timer", None) is None:
+            from PySide6.QtCore import QTimer as _QTimer
+            self._autosave_timer = _QTimer(self)
+            self._autosave_timer.setSingleShot(True)
+            self._autosave_timer.setInterval(300)
+            self._autosave_timer.timeout.connect(self._do_auto_save)
+        self._autosave_timer.start()
+
+    def _do_auto_save(self):
         if self.worker or not self.case_path:
             return
         try:
@@ -1799,6 +1816,7 @@ class MainWindow(QMainWindow):
                 yaml.safe_dump(self._dump_data(), f, allow_unicode=True, sort_keys=False)
             if prev_order is not None:
                 self._write_case_order(self.case_path, prev_order)
+            self._dirty = False
             self.status_label.setText(
                 f"已自动保存 {os.path.basename(self.case_path)} "
                 f"{time.strftime('%H:%M:%S')}")
