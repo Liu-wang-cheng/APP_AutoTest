@@ -2061,6 +2061,44 @@ def test_name_combo_history_and_clear_button(qapp, monkeypatch, tmp_path, fake_s
         w.close()
 
 
+def test_history_item_delete_real_click(qapp, monkeypatch, tmp_path, fake_settings):
+    """★ 真实鼠标点击下拉项右侧 ✕ → 删除该条历史, 且不把该项填进输入框。
+
+    (教训: QAbstractItemView 普通点击不调用 delegate.editorEvent, 之前用
+     直接调用 editorEvent 的测试"通过"但真机点了没反应 —— 必须走 QTest 真实事件)
+    """
+    from PySide6.QtCore import Qt, QPoint
+    from PySide6.QtTest import QTest
+    import gui.main_window as mw
+    monkeypatch.setattr(mw, "CASES_DIR", str(tmp_path / "Test_cases"), raising=False)
+    monkeypatch.setattr(mw, "CONFIG_PATH", str(tmp_path / "config.yaml"), raising=False)
+    monkeypatch.setattr(mw, "load_config", lambda: {"app": {}, "device": {}}, raising=False)
+    fake_settings.store["hist/app_name"] = ["涂鸦智能", "SmartThings", "米家"]
+    w = mw.MainWindow()
+    w.resize(900, 400)
+    w.show()
+    try:
+        qapp.processEvents()
+        combo = w.app_name_edit
+        assert combo.count() == 3
+        combo.setCurrentText("")          # 清空, 便于验证"未被填入"
+        combo.showPopup()
+        qapp.processEvents()
+        view = combo.view()
+        idx = combo.model().index(1, 0)   # SmartThings
+        rect = view.visualRect(idx)
+        QTest.mouseClick(view.viewport(), Qt.LeftButton,
+                         pos=QPoint(rect.right() - 6, rect.center().y()))
+        qapp.processEvents()
+        # ① 历史已删除(内存 + QSettings)
+        assert fake_settings.store["hist/app_name"] == ["涂鸦智能", "米家"],             f"✕ 应删除该条历史: {fake_settings.store['hist/app_name']}"
+        assert [combo.itemText(i) for i in range(combo.count())] == ["涂鸦智能", "米家"]
+        # ② 输入框未被填入被删项(这是用户报的 bug)
+        assert combo.currentText() != "SmartThings", "点 ✕ 不应把该项填进输入框"
+    finally:
+        w.close()
+
+
 def test_name_combo_width_adapts_to_content(qapp, monkeypatch, tmp_path, fake_settings):
     """输入框宽度随内容自适应(长名称不被截断)"""
     import gui.main_window as mw
@@ -2127,43 +2165,107 @@ def test_name_save_writes_config_and_history(qapp, monkeypatch, tmp_path, fake_s
         w.close()
 
 
-def test_history_item_delete_via_delegate(qapp, monkeypatch, tmp_path, fake_settings):
-    """下拉项右侧 ✕ 删除该条历史(同步 QSettings, 当前值被删则清空)"""
+def test_name_combo_width_adapts_to_content(qapp, monkeypatch, tmp_path, fake_settings):
+    """输入框宽度随内容自适应(长名称不被截断)"""
     import gui.main_window as mw
-    from PySide6.QtCore import QEvent, QPoint, Qt
-    from PySide6.QtGui import QMouseEvent
     monkeypatch.setattr(mw, "CASES_DIR", str(tmp_path / "Test_cases"), raising=False)
     monkeypatch.setattr(mw, "CONFIG_PATH", str(tmp_path / "config.yaml"), raising=False)
-    fake_settings.store["hist/app_name"] = ["涂鸦智能", "SmartThings", "米家"]
     w = mw.MainWindow()
     try:
-        combo = w.app_name_edit
-        assert [combo.itemText(i) for i in range(combo.count())] == \
-            ["涂鸦智能", "SmartThings", "米家"]
-        # 模拟点击第 2 项(SmartThings)右侧 ✕
-        view = combo.view()
-        idx = combo.model().index(1, 0)
-        rect = view.visualRect(idx)
-        pos = QPoint(rect.right() - 5, rect.center().y())
-        ev = QMouseEvent(QEvent.MouseButtonRelease, pos, pos,
-                         Qt.LeftButton, Qt.LeftButton, Qt.NoModifier)
-        combo.itemDelegate().editorEvent(ev, combo.model(),
-                                         type("O", (), {"rect": rect})(), idx)
+        w.app_name_edit.setCurrentText("短")
         qapp.processEvents()
-        assert fake_settings.store["hist/app_name"] == ["涂鸦智能", "米家"], \
-            f"历史应删掉 SmartThings: {fake_settings.store['hist/app_name']}"
-        assert [combo.itemText(i) for i in range(combo.count())] == ["涂鸦智能", "米家"]
-        # 删除当前值 → 输入框清空
-        combo.setCurrentText("米家")
-        idx2 = combo.model().index(1, 0)
-        rect2 = view.visualRect(idx2)
-        ev2 = QMouseEvent(QEvent.MouseButtonRelease,
-                          QPoint(rect2.right() - 5, rect2.center().y()),
-                          QPoint(rect2.right() - 5, rect2.center().y()),
-                          Qt.LeftButton, Qt.LeftButton, Qt.NoModifier)
-        combo.itemDelegate().editorEvent(ev2, combo.model(),
-                                         type("O", (), {"rect": rect2})(), idx2)
+        narrow = w.app_name_edit.width()
+        w.app_name_edit.setCurrentText("非常长的应用名称用于测试自适应宽度")
         qapp.processEvents()
-        assert combo.currentText() == "", "删掉的正是当前值 → 应清空输入"
+        wide = w.app_name_edit.width()
+        assert wide > narrow, f"长内容应变宽: {narrow} → {wide}"
+        assert wide <= 420, "有上限(420)防止极端长名撑破布局"
+        # 内容必须放得下: combo 宽 ≥ 文本 + 内边距(16) + 箭头区(36)
+        c = w.app_name_edit
+        need = c.lineEdit().fontMetrics().horizontalAdvance(c.currentText()) + 52
+        assert c.width() >= need, f"输入框宽度不足: {c.width()} < {need}"
+        # 设备名称同样自适应
+        w.device_name_edit.setCurrentText("VERY_LONG_DEVICE_NAME_001")
+        qapp.processEvents()
+        assert w.device_name_edit.width() > 100
+    finally:
+        w.close()
+
+
+def test_name_history_push_dedup_and_cap(monkeypatch, fake_settings):
+    """历史记录: 去重、最近在前、最多 10 条"""
+    import gui.main_window as mw
+    for i in range(12):
+        mw.MainWindow._push_name_history("hist/app_name", f"app{i}")
+    hist = fake_settings.store["hist/app_name"]
+    assert len(hist) == 10, f"上限 10 条: {len(hist)}"
+    assert hist[0] == "app11", "最近填写的排最前"
+    # 重复值 → 提到最前且不重复
+    mw.MainWindow._push_name_history("hist/app_name", "app5")
+    hist = fake_settings.store["hist/app_name"]
+    assert hist[0] == "app5" and hist.count("app5") == 1
+    assert len(hist) == 10
+    # 空值不记
+    mw.MainWindow._push_name_history("hist/app_name", "")
+    assert len(fake_settings.store["hist/app_name"]) == 10
+
+
+def test_name_save_writes_config_and_history(qapp, monkeypatch, tmp_path, fake_settings):
+    """编辑名称 → 写 config + 记入历史 + 下拉刷新"""
+    import gui.main_window as mw
+    import core.driver as driver
+    saved = {}
+    monkeypatch.setattr(mw, "update_config", lambda d: saved.update(d), raising=False)
+    monkeypatch.setattr(mw, "CASES_DIR", str(tmp_path / "Test_cases"), raising=False)
+    monkeypatch.setattr(mw, "CONFIG_PATH", str(tmp_path / "config.yaml"), raising=False)
+    w = mw.MainWindow()
+    try:
+        w.app_name_edit.setCurrentText("新APP名")
+        w._save_env_field_of(w.app_name_edit)
+        assert saved.get("app.name") == "新APP名", f"应写回配置: {saved}"
+        assert fake_settings.store["hist/app_name"][0] == "新APP名", "应记入历史"
+        items = [w.app_name_edit.itemText(i) for i in range(w.app_name_edit.count())]
+        assert "新APP名" in items, "下拉应刷新含新值"
+        assert w.app_name_edit.currentText() == "新APP名", "不应丢失当前输入"
+    finally:
+        w.close()
+
+
+
+def test_detect_app_restores_cursor_and_button(qapp, monkeypatch, tmp_path):
+    """★ APP 未安装时点检测: 不能残留转圈光标(用户实测), 按钮须恢复可用。
+
+    各种退出路径(未匹配到→弹窗取消/异常/正常)都要走 finally 清理。
+    """
+    from PySide6.QtGui import QGuiApplication
+    import gui.main_window as mw
+    monkeypatch.setattr(mw, "CASES_DIR", str(tmp_path / "Test_cases"), raising=False)
+    monkeypatch.setattr(mw, "CONFIG_PATH", str(tmp_path / "config.yaml"), raising=False)
+    w = mw.MainWindow()
+    try:
+        # 清空可能存在的光标覆盖(Qt 全局状态)
+        while QGuiApplication.overrideCursor() is not None:
+            QGuiApplication.restoreOverrideCursor()
+        w.app_name_edit.setCurrentText("不存在的APP")
+        monkeypatch.setattr(mw.app_detect, "list_packages", lambda dev: [], raising=False)
+        monkeypatch.setattr(w, "_current_device_id", lambda: "127.0.0.1:7555")
+        # 未匹配 → _pick_app 无候选 → 弹告警(mock 掉, 离屏无人点击)
+        monkeypatch.setattr(mw.QMessageBox, "warning",
+                            staticmethod(lambda *a, **k: None))
+        w.on_detect_app()
+        qapp.processEvents()
+        assert QGuiApplication.overrideCursor() is None, "不能残留转圈光标"
+        assert w.detect_btn.isEnabled(), "检测按钮须恢复可用"
+        assert w.detect_btn.text() == "🔍 检测", "按钮文字须复原"
+        # 异常路径同样清理
+        def _boom(dev):
+            raise RuntimeError("adb 挂了")
+        monkeypatch.setattr(mw.app_detect, "list_packages", _boom, raising=False)
+        monkeypatch.setattr(mw.QMessageBox, "critical",
+                            staticmethod(lambda *a, **k: None))
+        w.on_detect_app()
+        qapp.processEvents()
+        assert QGuiApplication.overrideCursor() is None, "异常路径也不能残留光标"
+        assert w.detect_btn.isEnabled()
     finally:
         w.close()

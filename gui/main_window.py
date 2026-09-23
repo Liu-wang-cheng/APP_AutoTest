@@ -902,9 +902,7 @@ class NewCaseDialog(QDialog):
 class _HistComboDelegate(QStyledItemDelegate):
     """历史下拉项 delegate: 每项右侧绘制 ✕, 点击即删除该条历史(用户要求)。"""
 
-    removed = Signal(int)      # 被删项的行号
-
-    _W = 20                    # ✕ 命中区宽度
+    _W = 20                    # ✕ 命中区宽度(与 _HistCombo 共用命中判定)
 
     def paint(self, painter, option, index):
         super().paint(painter, option, index)   # 先画原生文本
@@ -920,15 +918,30 @@ class _HistComboDelegate(QStyledItemDelegate):
                          Qt.AlignCenter, "\u2715")
         painter.restore()
 
-    def editorEvent(self, event, model, option, index):
-        """点击项右侧 ✕ 区域 → 删除该条历史"""
-        if event.type() == QEvent.MouseButtonRelease:
-            rect = option.rect
-            pos = event.pos()
-            if pos.x() >= rect.right() - self._W:
-                self.removed.emit(index.row())
-                return True
-        return super().editorEvent(event, model, option, index)
+class _HistCombo(QComboBox):
+    """历史下拉框: 点击项右侧 ✕ 删除该条历史。
+
+    ★ 必须用事件过滤器而非 delegate.editorEvent —— QAbstractItemView 处理
+    普通点击时**不调用** editorEvent(那只在编辑场景触发), 所以点击会走
+    Qt 默认行为把该项填进输入框(用户实测: 点 ✕ 反而填入该记录)。
+    在 viewport 上消费 MouseButtonRelease 才能既删除又阻止选中。
+    """
+
+    removed = Signal(int)      # 被删项行号
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.view().viewport().installEventFilter(self)
+
+    def eventFilter(self, obj, ev):
+        if obj is self.view().viewport() and ev.type() == QEvent.MouseButtonRelease:
+            idx = self.view().indexAt(ev.pos())
+            if idx.isValid():
+                rect = self.view().visualRect(idx)
+                if ev.pos().x() >= rect.right() - _HistComboDelegate._W:
+                    self.removed.emit(idx.row())
+                    return True            # 消费事件: 不选中该项
+        return super().eventFilter(obj, ev)
 
 
 class CaseListWidget(QListWidget):
@@ -1139,9 +1152,9 @@ class MainWindow(QMainWindow):
 
     def _make_name_combo(self, tip, cfg_key, hist_key):
         """名称输入框: 宽度随内容自适应, 历史值可下拉选择, 带 × 清除按钮"""
-        combo = QComboBox()
+        combo = _HistCombo()
         combo.setEditable(True)
-        combo.setToolTip(tip + " · 可从历史记录下拉选择, × 清除")
+        combo.setToolTip(tip + " · 可从历史记录下拉选择, 点条目右侧 ✕ 删除该条")
         combo.setProperty("cfg_key", cfg_key)
         combo.setProperty("hist_key", hist_key)
         combo.setProperty("base_tip", tip)
@@ -1149,9 +1162,8 @@ class MainWindow(QMainWindow):
         combo.setMinimumContentsLength(6)
         combo.addItems(self._load_name_history(hist_key))
         # ★ 下拉每项右侧 ✕ 删除该条历史(用户要求: 删的是历史记忆, 不是输入框)
-        dlg = _HistComboDelegate(combo.view())
-        combo.setItemDelegate(dlg)
-        dlg.removed.connect(lambda row, c=combo: self._remove_name_history(c, row))
+        combo.setItemDelegate(_HistComboDelegate(combo.view()))
+        combo.removed.connect(lambda row, c=combo: self._remove_name_history(c, row))
         # ★ 宽度随内容自适应(editable combo 的 AdjustToContents 不随输入变化)
         combo.currentTextChanged.connect(lambda _t, c=combo: self._fit_combo_width(c))
         self._fit_combo_width(combo)
@@ -1730,8 +1742,11 @@ class MainWindow(QMainWindow):
         if not device_id:
             QMessageBox.warning(self, "提示", "未检测到在线设备,无法检测包名")
             return
+        # ★ 不用全局转圈光标: 模态弹窗(选择/告警)叠加 override 栈不平衡时
+        #   会残留转圈(用户实测: APP 未安装时鼠标一直转); 改为按钮禁用+状态提示
         self.env_status.setText("检测中...")
-        QApplication.setOverrideCursor(Qt.WaitCursor)
+        self.detect_btn.setEnabled(False)
+        self.detect_btn.setText("检测中…")
         try:
             packages = app_detect.list_packages(device_id)
             matched = app_detect.match_packages(app_name, packages)
@@ -1759,7 +1774,11 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "检测失败", f"{type(e).__name__}: {e}")
             self.env_status.setText("")
         finally:
-            QApplication.restoreOverrideCursor()
+            self.detect_btn.setEnabled(True)
+            self.detect_btn.setText("🔍 检测")
+            # 兜底: 清空可能残留的全局光标覆盖栈(任何路径都不留转圈)
+            while QApplication.overrideCursor() is not None:
+                QApplication.restoreOverrideCursor()
 
     def _pick_app(self, prompt, options):
         """弹选择框,返回选中的包名;取消或无候选返回 None"""
