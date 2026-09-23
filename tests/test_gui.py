@@ -2157,9 +2157,8 @@ def test_name_save_writes_config_and_history(qapp, monkeypatch, tmp_path, fake_s
         w.app_name_edit.setCurrentText("新APP名")
         w._save_env_field_of(w.app_name_edit)
         assert saved.get("app.name") == "新APP名", f"应写回配置: {saved}"
-        assert fake_settings.store["hist/app_name"][0] == "新APP名", "应记入历史"
-        items = [w.app_name_edit.itemText(i) for i in range(w.app_name_edit.count())]
-        assert "新APP名" in items, "下拉应刷新含新值"
+        # ★ 新语义: APP 名称编辑不记历史(仅检测成功才记)
+        assert "新APP名" not in (fake_settings.store.get("hist/app_name") or []),             "APP 名称编辑不应记历史"
         assert w.app_name_edit.currentText() == "新APP名", "不应丢失当前输入"
     finally:
         w.close()
@@ -2223,16 +2222,15 @@ def test_name_save_writes_config_and_history(qapp, monkeypatch, tmp_path, fake_s
         w.app_name_edit.setCurrentText("新APP名")
         w._save_env_field_of(w.app_name_edit)
         assert saved.get("app.name") == "新APP名", f"应写回配置: {saved}"
-        assert fake_settings.store["hist/app_name"][0] == "新APP名", "应记入历史"
-        items = [w.app_name_edit.itemText(i) for i in range(w.app_name_edit.count())]
-        assert "新APP名" in items, "下拉应刷新含新值"
+        # ★ 新语义: APP 名称编辑不记历史(仅检测成功才记)
+        assert "新APP名" not in (fake_settings.store.get("hist/app_name") or []),             "APP 名称编辑不应记历史"
         assert w.app_name_edit.currentText() == "新APP名", "不应丢失当前输入"
     finally:
         w.close()
 
 
 
-def test_detect_app_restores_cursor_and_button(qapp, monkeypatch, tmp_path):
+def test_detect_app_restores_cursor_and_button(qapp, monkeypatch, tmp_path, fake_settings):
     """★ APP 未安装时点检测: 不能残留转圈光标(用户实测), 按钮须恢复可用。
 
     各种退出路径(未匹配到→弹窗取消/异常/正常)都要走 finally 清理。
@@ -2408,13 +2406,14 @@ def test_history_add_keeps_popup_full_height(qapp, monkeypatch, tmp_path, fake_s
     monkeypatch.setattr(mw, "CONFIG_PATH", str(tmp_path / "config.yaml"), raising=False)
     monkeypatch.setattr(mw, "load_config", lambda: {"app": {}, "device": {}}, raising=False)
     fake_settings.store["hist/app_name"] = ["甲", "乙", "丙"]
+    fake_settings.store["hist/device_name"] = ["甲", "乙", "丙"]   # 设备名称框读这个键
     w = mw.MainWindow()
     w.resize(1000, 400)
     w.show()
     try:
         qapp.processEvents()
-        combo = w.app_name_edit
-        # 场景: popup 从未打开过 → 输入新长名并保存 → 再打开
+        # 用设备名称框(它保持「编辑即记历史」; APP 名称已改为仅检测成功才记)
+        combo = w.device_name_edit
         combo.setCurrentText("超级无敌长的应用名称测试用例ABCDEF")
         w._save_env_field_of(combo)
         qapp.processEvents()
@@ -2495,5 +2494,41 @@ def test_all_fit_combos_adapt_width(qapp, monkeypatch, tmp_path, fake_settings):
         gcombo.addItems(["涂鸦智能T4", "一个非常长的APP组名称用于测试"])
         gcombo.fit_width()
         assert gcombo.width() > 100
+    finally:
+        w.close()
+
+
+def test_app_history_only_on_detect_success(qapp, monkeypatch, tmp_path, fake_settings):
+    """★ APP 名称: 编辑不记历史; 只有「检测成功」才写入(用户要求)"""
+    import gui.main_window as mw
+    monkeypatch.setattr(mw, "CASES_DIR", str(tmp_path / "Test_cases"), raising=False)
+    monkeypatch.setattr(mw, "CONFIG_PATH", str(tmp_path / "config.yaml"), raising=False)
+    monkeypatch.setattr(mw, "load_config", lambda: {"app": {}, "device": {}}, raising=False)
+    monkeypatch.setattr(mw, "update_config", lambda d: None, raising=False)
+    fake_settings.store["hist/app_name"] = ["涂鸦智能"]
+    w = mw.MainWindow()
+    try:
+        monkeypatch.setattr(w, "_current_device_id", lambda: "127.0.0.1:7555")
+        # ① 编辑(触发保存) → 不记历史
+        w.app_name_edit.setCurrentText("随便写的名字")
+        w._save_env_field_of(w.app_name_edit)
+        qapp.processEvents()
+        assert "随便写的名字" not in fake_settings.store["hist/app_name"],             "编辑不应记历史(只有检测成功才记)"
+        # ② 检测成功 → 记历史 + 下拉刷新
+        monkeypatch.setattr(mw.app_detect, "list_packages",
+                            lambda dev: ["com.tuya.smartiot"], raising=False)
+        monkeypatch.setattr(mw.app_detect, "detect_main_activity",
+                            lambda dev, pkg: "com.smart.ThingSplashActivity", raising=False)
+        w.app_name_edit.setCurrentText("涂鸦智能")
+        w.on_detect_app()
+        qapp.processEvents()
+        assert fake_settings.store["hist/app_name"][0] == "涂鸦智能"
+        items = [w.app_name_edit.itemText(i) for i in range(w.app_name_edit.count())]
+        assert "涂鸦智能" in items, "检测成功后下拉应含该名称"
+        # ③ 设备名称保持「编辑即记」(它没有检测动作)
+        w.device_name_edit.setCurrentText("SE3L")
+        w._save_env_field_of(w.device_name_edit)
+        qapp.processEvents()
+        assert "SE3L" in (fake_settings.store.get("hist/device_name") or []),             "设备名称仍应编辑即记历史"
     finally:
         w.close()

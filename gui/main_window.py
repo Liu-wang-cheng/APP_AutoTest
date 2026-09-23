@@ -1264,14 +1264,19 @@ class MainWindow(QMainWindow):
 
     # ── 名称输入(自适应 + 历史下拉 + ×清除) ──
 
-    def _make_name_combo(self, tip, cfg_key, hist_key):
-        """名称输入框: 宽度随内容自适应, 历史值可下拉选择, 带 × 清除按钮"""
+    def _make_name_combo(self, tip, cfg_key, hist_key, record_on_save=True):
+        """名称输入框: 宽度随内容自适应, 历史值可下拉选择, 条目右侧 ✕ 删除。
+
+        record_on_save=False(测试APP): 编辑不记历史, 只有「检测成功」才记
+        (用户要求: 检测不到的 APP 不该进历史)
+        """
         combo = _HistCombo()
         combo.setEditable(True)
         combo.setToolTip(tip + " · 可从历史记录下拉选择, 点条目右侧 ✕ 删除该条")
         combo.setProperty("cfg_key", cfg_key)
         combo.setProperty("hist_key", hist_key)
         combo.setProperty("base_tip", tip)
+        combo.setProperty("record_on_save", record_on_save)
         combo.setSizeAdjustPolicy(QComboBox.AdjustToContents)
         combo.setMinimumContentsLength(6)
         combo.addItems(self._load_name_history(hist_key))
@@ -1317,6 +1322,20 @@ class MainWindow(QMainWindow):
         if hasattr(combo, "fit_popup_now"):
             combo.fit_popup_now()
         self.env_status.setText(f"已删除历史记录: {removed_text}")
+
+    def _reload_name_combo(self, combo):
+        """按最新历史重载下拉项(保留当前输入), 并同步宽度"""
+        hist_key = combo.property("hist_key")
+        if not hist_key:
+            return
+        keep = combo.currentText()
+        combo.blockSignals(True)
+        combo.clear()
+        combo.addItems(self._load_name_history(hist_key))
+        combo.setCurrentText(keep)
+        combo.blockSignals(False)
+        if hasattr(combo, "fit_popup_now"):
+            combo.fit_popup_now()
 
     def _purge_name_history(self, hist_key, value):
         """把某个值从历史中移除(用于「检测不到的 APP 不该记历史」, 用户要求)"""
@@ -1375,16 +1394,9 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "保存配置失败", str(e))
             return
         hist_key = w.property("hist_key")
-        if hist_key:
+        if hist_key and w.property("record_on_save") is not False:
             self._push_name_history(hist_key, value)
-            w.blockSignals(True)
-            txt = w.currentText()
-            w.clear()
-            w.addItems(self._load_name_history(hist_key))
-            w.setCurrentText(txt)
-            w.blockSignals(False)
-            if hasattr(w, "fit_popup_now"):     # 新增项后同步尺寸(与删除对称)
-                w.fit_popup_now()
+            self._reload_name_combo(w)
 
     def _build_env_strip(self):
         """环境配置条(流式布局,窗口窄时自动换行): 设备优先,其次测试APP"""
@@ -1416,7 +1428,8 @@ class MainWindow(QMainWindow):
         # ── 测试APP ──
         lay.addWidget(QLabel("测试APP"))
         self.app_name_edit = self._make_name_combo(
-            "测试APP名称(中文/英文均可),作为包名自动检测依据", "app.name", "hist/app_name")
+            "测试APP名称(中文/英文均可),作为包名自动检测依据", "app.name",
+            "hist/app_name", record_on_save=False)   # 仅检测成功才记历史
         lay.addWidget(self.app_name_edit)
 
         self.detect_btn = QPushButton("🔍 检测")
@@ -1903,6 +1916,9 @@ class MainWindow(QMainWindow):
                 return
             activity = app_detect.detect_main_activity(device_id, package) or ""
             update_config({"app.package": package, "app.main_activity": activity})
+            # ★ 检测成功才记历史(用户要求), 并刷新下拉
+            self._push_name_history("hist/app_name", app_name)
+            self._reload_name_combo(self.app_name_edit)
             self.env_status.setText(
                 f"检测结果: {package} → {activity or '启动页未识别'}(已写入配置)")
         except Exception as e:
