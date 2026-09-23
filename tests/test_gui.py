@@ -2054,7 +2054,7 @@ def test_name_combo_history_and_clear_button(qapp, monkeypatch, tmp_path, fake_s
         assert isinstance(w.device_name_edit, QComboBox)
         items = [w.app_name_edit.itemText(i) for i in range(w.app_name_edit.count())]
         assert items == ["涂鸦智能", "SmartThings"], f"历史项应加载: {items}"
-        assert w.app_name_edit.lineEdit().isClearButtonEnabled(), "应有 × 清除按钮"
+        assert isinstance(w.app_name_edit.itemDelegate(), mw._HistComboDelegate),             "下拉项应用自定义 delegate(每项带 ✕ 删除历史)"
         assert [w.device_name_edit.itemText(i)
                 for i in range(w.device_name_edit.count())] == ["SE3L"]
     finally:
@@ -2075,7 +2075,11 @@ def test_name_combo_width_adapts_to_content(qapp, monkeypatch, tmp_path, fake_se
         qapp.processEvents()
         wide = w.app_name_edit.width()
         assert wide > narrow, f"长内容应变宽: {narrow} → {wide}"
-        assert wide <= 260, "有上限避免撑破布局"
+        assert wide <= 420, "有上限(420)防止极端长名撑破布局"
+        # 内容必须放得下: combo 宽 ≥ 文本 + 内边距(16) + 箭头区(36)
+        c = w.app_name_edit
+        need = c.lineEdit().fontMetrics().horizontalAdvance(c.currentText()) + 52
+        assert c.width() >= need, f"输入框宽度不足: {c.width()} < {need}"
         # 设备名称同样自适应
         w.device_name_edit.setCurrentText("VERY_LONG_DEVICE_NAME_001")
         qapp.processEvents()
@@ -2119,5 +2123,47 @@ def test_name_save_writes_config_and_history(qapp, monkeypatch, tmp_path, fake_s
         items = [w.app_name_edit.itemText(i) for i in range(w.app_name_edit.count())]
         assert "新APP名" in items, "下拉应刷新含新值"
         assert w.app_name_edit.currentText() == "新APP名", "不应丢失当前输入"
+    finally:
+        w.close()
+
+
+def test_history_item_delete_via_delegate(qapp, monkeypatch, tmp_path, fake_settings):
+    """下拉项右侧 ✕ 删除该条历史(同步 QSettings, 当前值被删则清空)"""
+    import gui.main_window as mw
+    from PySide6.QtCore import QEvent, QPoint, Qt
+    from PySide6.QtGui import QMouseEvent
+    monkeypatch.setattr(mw, "CASES_DIR", str(tmp_path / "Test_cases"), raising=False)
+    monkeypatch.setattr(mw, "CONFIG_PATH", str(tmp_path / "config.yaml"), raising=False)
+    fake_settings.store["hist/app_name"] = ["涂鸦智能", "SmartThings", "米家"]
+    w = mw.MainWindow()
+    try:
+        combo = w.app_name_edit
+        assert [combo.itemText(i) for i in range(combo.count())] == \
+            ["涂鸦智能", "SmartThings", "米家"]
+        # 模拟点击第 2 项(SmartThings)右侧 ✕
+        view = combo.view()
+        idx = combo.model().index(1, 0)
+        rect = view.visualRect(idx)
+        pos = QPoint(rect.right() - 5, rect.center().y())
+        ev = QMouseEvent(QEvent.MouseButtonRelease, pos, pos,
+                         Qt.LeftButton, Qt.LeftButton, Qt.NoModifier)
+        combo.itemDelegate().editorEvent(ev, combo.model(),
+                                         type("O", (), {"rect": rect})(), idx)
+        qapp.processEvents()
+        assert fake_settings.store["hist/app_name"] == ["涂鸦智能", "米家"], \
+            f"历史应删掉 SmartThings: {fake_settings.store['hist/app_name']}"
+        assert [combo.itemText(i) for i in range(combo.count())] == ["涂鸦智能", "米家"]
+        # 删除当前值 → 输入框清空
+        combo.setCurrentText("米家")
+        idx2 = combo.model().index(1, 0)
+        rect2 = view.visualRect(idx2)
+        ev2 = QMouseEvent(QEvent.MouseButtonRelease,
+                          QPoint(rect2.right() - 5, rect2.center().y()),
+                          QPoint(rect2.right() - 5, rect2.center().y()),
+                          Qt.LeftButton, Qt.LeftButton, Qt.NoModifier)
+        combo.itemDelegate().editorEvent(ev2, combo.model(),
+                                         type("O", (), {"rect": rect2})(), idx2)
+        qapp.processEvents()
+        assert combo.currentText() == "", "删掉的正是当前值 → 应清空输入"
     finally:
         w.close()

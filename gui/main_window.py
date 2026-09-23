@@ -899,6 +899,38 @@ class NewCaseDialog(QDialog):
                 self.group_combo.currentText().strip())
 
 
+class _HistComboDelegate(QStyledItemDelegate):
+    """历史下拉项 delegate: 每项右侧绘制 ✕, 点击即删除该条历史(用户要求)。"""
+
+    removed = Signal(int)      # 被删项的行号
+
+    _W = 20                    # ✕ 命中区宽度
+
+    def paint(self, painter, option, index):
+        super().paint(painter, option, index)   # 先画原生文本
+        rect = option.rect
+        painter.save()
+        f = painter.font()
+        f.setPixelSize(12)
+        painter.setFont(f)
+        hovered = bool(option.state & QStyle.State_MouseOver)
+        painter.setPen(QColor("#dc2626" if hovered else "#b6c0cc"))
+        painter.drawText(QRect(rect.right() - self._W, rect.top(),
+                               self._W - 4, rect.height()),
+                         Qt.AlignCenter, "\u2715")
+        painter.restore()
+
+    def editorEvent(self, event, model, option, index):
+        """点击项右侧 ✕ 区域 → 删除该条历史"""
+        if event.type() == QEvent.MouseButtonRelease:
+            rect = option.rect
+            pos = event.pos()
+            if pos.x() >= rect.right() - self._W:
+                self.removed.emit(index.row())
+                return True
+        return super().editorEvent(event, model, option, index)
+
+
 class CaseListWidget(QListWidget):
     """用例列表:行内 ↑↓ 箭头 = delegate 绘制 + 命中计算。
 
@@ -1112,10 +1144,14 @@ class MainWindow(QMainWindow):
         combo.setToolTip(tip + " · 可从历史记录下拉选择, × 清除")
         combo.setProperty("cfg_key", cfg_key)
         combo.setProperty("hist_key", hist_key)
+        combo.setProperty("base_tip", tip)
         combo.setSizeAdjustPolicy(QComboBox.AdjustToContents)
         combo.setMinimumContentsLength(6)
-        combo.lineEdit().setClearButtonEnabled(True)   # × 一键清除(用户要求)
         combo.addItems(self._load_name_history(hist_key))
+        # ★ 下拉每项右侧 ✕ 删除该条历史(用户要求: 删的是历史记忆, 不是输入框)
+        dlg = _HistComboDelegate(combo.view())
+        combo.setItemDelegate(dlg)
+        dlg.removed.connect(lambda row, c=combo: self._remove_name_history(c, row))
         # ★ 宽度随内容自适应(editable combo 的 AdjustToContents 不随输入变化)
         combo.currentTextChanged.connect(lambda _t, c=combo: self._fit_combo_width(c))
         self._fit_combo_width(combo)
@@ -1125,10 +1161,37 @@ class MainWindow(QMainWindow):
 
     @staticmethod
     def _fit_combo_width(combo):
-        """输入框宽度随内容自适应(60~260px)"""
-        fm = combo.fontMetrics()
-        w = fm.horizontalAdvance(combo.currentText()) + 56  # 箭头+清除按钮+内边距
-        combo.setFixedWidth(max(70, min(w, 260)))
+        """输入框宽度完全随内容自适应(不设小上限, 否则长名称被截断);
+        上限放宽到 420px 防止极端值撑破布局, 同时悬停显示完整值"""
+        fm = combo.lineEdit().fontMetrics()
+        txt = combo.currentText()
+        # combo 的 lineEdit 区 = 总宽 - 36(箭头/边框); lineEdit 内边距 16
+        # 实测: +50 时 lineEdit 比所需窄 2px(中文会截断) → 用 +60 留足余量
+        w = fm.horizontalAdvance(txt) + 60
+        combo.setFixedWidth(max(70, min(w, 420)))
+        combo.setToolTip((combo.property("base_tip") or "") +
+                         (("\n当前值: " + txt) if txt else ""))
+
+    def _remove_name_history(self, combo, row):
+        """删除下拉中第 row 条历史(同步 QSettings + 刷新列表, 当前值被删则清空)"""
+        hist_key = combo.property("hist_key")
+        if not hist_key or row < 0 or row >= combo.count():
+            return
+        removed_text = combo.itemText(row)
+        hist = self._load_name_history(hist_key)
+        hist = [v for v in hist if v != removed_text]
+        st = QSettings("vacuum_test", "case_studio")
+        st.setValue(hist_key, hist)
+        keep = combo.currentText()
+        combo.blockSignals(True)
+        combo.clear()
+        combo.addItems(hist)
+        if keep and keep != removed_text:
+            combo.setCurrentText(keep)
+        elif keep == removed_text:
+            combo.setCurrentText("")     # 删掉的正是当前值 → 清空
+        combo.blockSignals(False)
+        self.env_status.setText(f"已删除历史记录: {removed_text}")
 
     @staticmethod
     def _load_name_history(hist_key):
