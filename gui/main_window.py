@@ -983,15 +983,22 @@ class _FitCombo(QComboBox):
         """
         view = self.view()
         model = view.model()
-        if model is not None and model.rowCount() > 0:
-            opt = QStyleOptionViewItem()
-            opt.font = view.font()
-            opt.fontMetrics = QFontMetrics(opt.font)
-            size = view.itemDelegate().sizeHint(opt, model.index(0, 0))
-            if size.height() > 0:
-                return size.height()
+        if model is None or model.rowCount() == 0:
+            return view.fontMetrics().height() + 8
+        # ① 首选「已布局后的真实行高」—— 含 QSS 内边距/DPI 缩放, 最准
+        rect = view.visualRect(model.index(0, 0))
+        if rect.height() > 0:
+            return rect.height()
+        # ② 退而求其次: Qt 按实际渲染算的行高
         h = view.sizeHintForRow(0)
-        return h if h > 0 else view.fontMetrics().height() + 8
+        if h > 0:
+            return h
+        # ③ 最后: delegate.sizeHint(可能不含 QSS padding, 故只是兜底)
+        opt = QStyleOptionViewItem()
+        opt.font = view.font()
+        opt.fontMetrics = QFontMetrics(opt.font)
+        size = view.itemDelegate().sizeHint(opt, model.index(0, 0))
+        return size.height() if size.height() > 0 else view.fontMetrics().height() + 8
 
     def fit_popup_now(self):
         """按内容调整 popup 宽度(仅当它正打开时)。
@@ -1018,7 +1025,8 @@ class _FitCombo(QComboBox):
         # 诊断日志(真机排查用): 项数 / 实际尺寸 / 行高
         log.info(f"[下拉] 项数={self.count()} popup={popup.width()}x{popup.height()} "
                  f"view={self.view().width()}x{self.view().height()} "
-                 f"行高={self._row_height()}")
+                 f"行高={self._row_height()} "
+                 f"滚动条={self.view().verticalScrollBar().maximum()}")
 
     def showPopup(self):
         super().showPopup()
