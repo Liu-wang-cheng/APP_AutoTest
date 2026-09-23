@@ -258,6 +258,11 @@ PRECONDITION_TYPES = {
     "battery": {"label": "电量门槛", "params": [
         {"key": "min_level", "label": "最低电量(%)", "default": 50, "type": "int"},
         {"key": "timeout", "label": "超时(秒)", "default": 1800, "type": "int"}]},
+    "steps": {"label": "自定义步骤(像用例一样写步骤)", "params": [
+        {"key": "name", "label": "前置条件名称", "default": "自定义步骤", "type": "text",
+         "hint": "显示在执行结果/报告里"},
+        {"key": "steps_yaml", "label": "步骤(YAML)", "default": "", "type": "text_area",
+         "hint": "格式与用例步骤相同, 每行一条, 例如:\n- desc: 点击开始清扫\n  click: 开始清扫.png\n- desc: 等待充电\n  assert: 充电中\n  timeout: 0"}]},
     "text_check": {"label": "自定义(检测文本→执行操作)", "params": [
         {"key": "name", "label": "前置条件名称", "default": "", "type": "text",
          "hint": "如: 等待首页加载完成(报告里显示这个名字)"},
@@ -300,6 +305,19 @@ def _run_one(d, cfg, item, on_progress, should_cancel):
         return ensure_battery(d, min_level=int(item.get("min_level", 50)),
                               timeout=int(item.get("timeout", 1800)),
                               on_progress=on_progress, should_cancel=should_cancel)
+    if t == "steps":
+        # 前置条件也可以是「一串用例步骤」(用户要求: 像用例一样写步骤)
+        steps = item.get("steps") or []
+        if not steps:
+            log.info(f"[前置] {item.get('name') or '自定义步骤'}: 未配置步骤,跳过")
+            return True
+        from core.runner import ActionRunner
+        runner = ActionRunner(d, (cfg.get("runner") or {}),
+                              case_name=item.get("name") or "前置步骤")
+        ok = runner.run_steps(steps)
+        log.info(f"[前置] {item.get('name') or '自定义步骤'}: "
+                 f"{'通过' if ok else '有步骤失败'}")
+        return ok
     if t == "text_check":
         return ensure_text_check(
             d, wait_text=item.get("wait_text") or "",
@@ -334,6 +352,10 @@ def prepare_items(d, cfg, items, on_progress=None, should_cancel=None):
 def _item_label(item):
     """前置项展示名(带关键参数, 便于报告里区分同类型多实例)"""
     t = item.get("type")
+    if t == "steps":
+        base = item.get("name") or "自定义步骤"
+        n = len(item.get("steps") or [])
+        return f"{base}({n}步)"
     if t == "text_check":
         base = item.get("name") or "文本检查"
         conds = []

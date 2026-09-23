@@ -2647,6 +2647,7 @@ def test_menu_and_checkbox_styles(qapp):
     import gui.main_window as mw
     assert "QMenu::item { padding: 6px 24px 6px 26px;" in mw.STYLESHEET, \
         "菜单项左侧须留够勾选标记空间(原来 12px 太小会发虚)"
-    assert "QMenu::indicator { width: 14px; height: 14px; }" in mw.STYLESHEET
+    # ★ 不能给 QMenu::indicator 指定尺寸(无 image 时会缩放原生勾标 → 模糊)
+    assert "QMenu::indicator { width" not in mw.STYLESHEET,         "不应给菜单勾选标记指定尺寸(会缩放原生图标致模糊)"
     assert "QCheckBox { background: transparent; }" in mw.STYLESHEET, \
         "勾选框必须透明背景, 否则点击时闪动"

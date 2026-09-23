@@ -209,8 +209,8 @@ QMenu { background: #ffffff; border: 1px solid #e4e8ee; border-radius: 8px; padd
 QMenu::item { padding: 6px 24px 6px 26px; border-radius: 5px; }
 QMenu::item:selected { background: #eef4ff; color: #2563eb; }
 QMenu::item:checked { font-weight: bold; }
-/* 勾选标记尺寸(不设 image, 保留原生绘制) */
-QMenu::indicator { width: 14px; height: 14px; }
+/* ⚠ 不要给 QMenu::indicator 写 width/height: 未指定 image 时 Qt 会把原生勾选
+   标记缩放到该尺寸 → 发虚(用户实测)。完全交给 Qt 原生绘制。 */
 QMenu::separator { height: 1px; background: #eef1f5; margin: 4px 8px; }
 
 /* 滚动条:细圆角悬浮式,与浅色主题协调 */
@@ -928,8 +928,12 @@ class PreconditionEditDialog(QDialog):
         self._build_form()
 
     def accept(self):
-        """校验后关闭: 自定义类型必须填名称(报告与结果表用它区分各项)"""
-        v = self.values()
+        """校验后关闭: 名称必填 / 步骤 YAML 必须能解析"""
+        try:
+            v = self.values()
+        except ValueError as e:
+            QMessageBox.warning(self, "格式错误", str(e))
+            return
         if v.get("type") == "text_check":
             if not v.get("name"):
                 QMessageBox.warning(self, "提示", "请填写前置条件名称")
@@ -949,8 +953,23 @@ class PreconditionEditDialog(QDialog):
         spec = self._types.get(self.type_combo.currentData()) or {}
         self._edits = {}
         for prm in spec.get("params", []):
-            e = QLineEdit()
             cur = (self._item or {}).get(prm["key"], prm.get("default"))
+            if prm["type"] == "text_area":
+                # 多行编辑(前置条件的「自定义步骤」用: 直接写用例步骤 YAML)
+                e = QPlainTextEdit()
+                e.setPlaceholderText(prm.get("hint") or "")
+                e.setMinimumHeight(140)
+                text = cur if isinstance(cur, str) else ""
+                if not text and self._item and self._item.get("steps"):
+                    # 编辑已有项: 把步骤列表 dump 成 YAML 文本回填
+                    import yaml as _y
+                    text = _y.safe_dump(self._item["steps"], allow_unicode=True,
+                                        sort_keys=False)
+                e.setPlainText(text)
+                self.form.addRow(prm["label"], e)
+                self._edits[prm["key"]] = (e, prm)
+                continue
+            e = QLineEdit()
             e.setText("" if cur is None else str(cur))
             if prm.get("hint"):
                 e.setPlaceholderText(prm["hint"])
@@ -963,6 +982,20 @@ class PreconditionEditDialog(QDialog):
         if self._item:
             item["enabled"] = bool(self._item.get("enabled", True))
         for k, (e, prm) in self._edits.items():
+            if prm["type"] == "text_area":
+                raw = e.toPlainText().strip()
+                if not raw:
+                    continue
+                import yaml as _y
+                try:
+                    parsed = _y.safe_load(raw)
+                except Exception as ex:
+                    raise ValueError(f"步骤 YAML 解析失败: {ex}") from None
+                if not isinstance(parsed, list):
+                    raise ValueError("步骤必须是列表(每行以 - 开头)")
+                item["steps"] = parsed
+                item["steps_yaml"] = raw          # 留一份原文, 再次编辑不丢排版
+                continue
             txt = e.text().strip()
             if prm["type"] == "int":
                 try:
@@ -999,6 +1032,7 @@ class PreconditionsDialog(QDialog):
         self.table.setSelectionMode(QAbstractItemView.NoSelection)
         self.table.setFocusPolicy(Qt.NoFocus)
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.table.itemChanged.connect(self._on_item_changed)
         self.table.verticalHeader().setDefaultSectionSize(30)   # 与控件高度匹配
         v.addWidget(self.table)
 
@@ -1024,14 +1058,16 @@ class PreconditionsDialog(QDialog):
         self._render()
 
     def _render(self):
+        # ★ 第一列用「表格原生 checkState」而非 setCellWidget(QCheckBox):
+        #   cellWidget 会随单元格重绘被反复绘制 → 勾选时闪烁(用户实测多次)。
+        self.table.blockSignals(True)
         self.table.setRowCount(0)
         for i, item in enumerate(self.items):
             self.table.insertRow(i)
-            cb = QCheckBox(self._label(item))
-            cb.setFixedHeight(24)          # 固定尺寸: 被单元格拉伸会让勾标发虚
-            cb.setChecked(bool(item.get("enabled", True)))
-            cb.toggled.connect(lambda on, k=i: self._toggle(k, on))
-            self.table.setCellWidget(i, 0, cb)
+            it = QTableWidgetItem(self._label(item))
+            it.setFlags(Qt.ItemIsEnabled | Qt.ItemIsUserCheckable)
+            it.setCheckState(Qt.Checked if item.get("enabled", True) else Qt.Unchecked)
+            self.table.setItem(i, 0, it)
             eb = QPushButton("编辑")
             eb.setAutoDefault(False)      # ★ 否则回车/焦点变化会误触发
             eb.clicked.connect(lambda _=False, k=i: self._edit(k))
@@ -1040,10 +1076,25 @@ class PreconditionsDialog(QDialog):
             db.setAutoDefault(False)
             db.clicked.connect(lambda _=False, k=i: self._del(k))
             self.table.setCellWidget(i, 2, db)
+        self.table.blockSignals(False)
+
+    def _on_item_changed(self, item):
+        """原生勾选变化 → 同步到 items"""
+        if item is None or item.column() != 0:
+            return
+        r = item.row()
+        if 0 <= r < len(self.items):
+            self.items[r]["enabled"] = (item.checkState() == Qt.Checked)
 
     def _toggle(self, idx, on):
+        """(兼容入口)设置某项启用状态, 并同步表格原生勾选"""
         if 0 <= idx < len(self.items):
             self.items[idx]["enabled"] = bool(on)
+            it = self.table.item(idx, 0)
+            if it is not None:
+                self.table.blockSignals(True)
+                it.setCheckState(Qt.Checked if on else Qt.Unchecked)
+                self.table.blockSignals(False)
 
     def _edit(self, idx):
         dlg = PreconditionEditDialog(self.items[idx], self)

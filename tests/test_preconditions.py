@@ -210,13 +210,17 @@ def test_precondition_dialogs_do_not_auto_close(qapp, monkeypatch, tmp_path):
             b = dlg.table.cellWidget(0, col)
             assert not b.autoDefault() and not b.isDefault(), \
                 f"表格第{col}列按钮不应是默认按钮"
-        # 点击勾选框 → 对话框必须保持打开
-        cb = dlg.table.cellWidget(0, 0)
-        QTest.mouseClick(cb, Qt.LeftButton)
+        # ★ 第一列是表格原生 checkState(不用 cellWidget —— 后者会闪烁)
+        assert dlg.table.cellWidget(0, 0) is None, "第一列不应嵌控件"
+        it = dlg.table.item(0, 0)
+        assert it is not None and (it.flags() & Qt.ItemIsUserCheckable), "应为原生勾选"
+        it.setCheckState(Qt.Unchecked)          # 模拟取消勾选
         qapp.processEvents()
-        assert dlg.isVisible(), "点击勾选框不应关闭对话框"
-        # 数据随勾选同步
-        assert dlg.items[0]["enabled"] == cb.isChecked()
+        assert dlg.isVisible(), "改动勾选不应关闭对话框"
+        assert dlg.items[0]["enabled"] is False, "勾选变化应同步到 items"
+        it.setCheckState(Qt.Checked)
+        qapp.processEvents()
+        assert dlg.items[0]["enabled"] is True
     finally:
         dlg.close()
     # 编辑对话框同样不能自动关闭
@@ -250,5 +254,97 @@ def test_add_precondition_menu_lists_all_types(qapp, monkeypatch, tmp_path):
         assert any("自定义" in x for x in labels), "应含自定义类型"
         # 菜单项各自绑定到 _add_of_type(不在此调用 —— 它会弹出模态对话框,
         # 离屏下 exec() 会阻塞; 对话框行为由 PreconditionEditDialog 的测试覆盖)
+    finally:
+        dlg.close()
+
+
+# ── 前置条件可以写「用例步骤」(用户要求: 和添加测试步骤一样) ──
+
+def test_precondition_steps_type_runs_steps(monkeypatch):
+    """type=steps 的前置项 → 用 ActionRunner 顺序执行这些步骤"""
+    calls = []
+
+    class FakeRunner:
+        def __init__(self, d, cfg, case_name="", **kw):
+            calls.append(("init", case_name))
+
+        def run_steps(self, steps):
+            calls.append(("run", steps))
+            return True
+
+    monkeypatch.setattr("core.runner.ActionRunner", FakeRunner)
+    steps = [{"desc": "点击开始清扫", "click": "开始清扫.png"},
+             {"desc": "等待充电", "assert": "充电中", "timeout": 0}]
+    items = [{"type": "steps", "enabled": True, "name": "前置准备", "steps": steps}]
+    res = session.prepare_items(FakeDev(), {"runner": {"step_interval": 0}}, items)
+    assert res[0]["ok"] is True
+    assert ("init", "前置准备") in calls, "应用前置条件名创建 runner"
+    assert ("run", steps) in calls, "应把步骤交给 runner 执行"
+    assert res[0]["desc"] == "前置准备(2步)", f"展示名: {res[0]['desc']}"
+
+
+def test_precondition_steps_type_reports_failure(monkeypatch):
+    """步骤执行失败 → 该前置项判失败(供阻断逻辑使用)"""
+    class FailRunner:
+        def __init__(self, *a, **kw):
+            pass
+
+        def run_steps(self, steps):
+            return False
+
+    monkeypatch.setattr("core.runner.ActionRunner", FailRunner)
+    items = [{"type": "steps", "enabled": True, "name": "坏的步骤",
+              "steps": [{"desc": "x", "click": "y"}]}]
+    res = session.prepare_items(FakeDev(), {}, items)
+    assert res[0]["ok"] is False
+
+
+def test_precondition_steps_empty_is_skipped(monkeypatch):
+    """没写步骤 → 视为通过(不阻塞), 且不建 runner"""
+    def _boom(*a, **kw):
+        raise AssertionError("空步骤不应创建 runner")
+
+    monkeypatch.setattr("core.runner.ActionRunner", _boom)
+    items = [{"type": "steps", "enabled": True, "name": "空", "steps": []}]
+    res = session.prepare_items(FakeDev(), {}, items)
+    assert res[0]["ok"] is True
+
+
+def test_steps_field_yaml_roundtrip_in_dialog(qapp):
+    """对话框里写步骤 YAML → 解析成 steps 列表; 再编辑能回填不丢"""
+    from gui import main_window as mw
+    dlg = mw.PreconditionEditDialog({"type": "steps", "enabled": True,
+                                     "name": "前置准备"}, None)
+    try:
+        assert dlg.type_combo.currentData() == "steps"
+        ed = dlg._edits["steps_yaml"][0]
+        ed.setPlainText("- desc: 点击开始清扫\n  click: 开始清扫.png\n"
+                        "- desc: 等待充电\n  assert: 充电中\n  timeout: 0")
+        v = dlg.values()
+        assert v["type"] == "steps" and len(v["steps"]) == 2
+        assert v["steps"][1]["assert"] == "充电中" and v["steps"][1]["timeout"] == 0
+    finally:
+        dlg.close()
+    # 编辑已有项 → YAML 文本自动回填
+    dlg2 = mw.PreconditionEditDialog(
+        {"type": "steps", "enabled": True, "name": "x",
+         "steps": [{"desc": "a", "click": "b"}]}, None)
+    try:
+        assert "click: b" in dlg2._edits["steps_yaml"][0].toPlainText()
+    finally:
+        dlg2.close()
+
+
+def test_steps_field_rejects_bad_yaml(qapp):
+    """步骤 YAML 写错 → values() 抛 ValueError(对话框会提示而不是崩溃)"""
+    from gui import main_window as mw
+    dlg = mw.PreconditionEditDialog({"type": "steps", "enabled": True}, None)
+    try:
+        dlg._edits["steps_yaml"][0].setPlainText("这不是: [合法")
+        with pytest.raises(ValueError):
+            dlg.values()
+        dlg._edits["steps_yaml"][0].setPlainText("desc: 不是列表")
+        with pytest.raises(ValueError):
+            dlg.values()
     finally:
         dlg.close()
