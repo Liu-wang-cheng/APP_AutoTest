@@ -2517,7 +2517,7 @@ class MainWindow(QMainWindow):
         try:
             from core.driver import save_preconditions
             save_preconditions(self.preconditions)
-            self.status_label.setText("前置条件已保存")
+            self._set_status("前置条件已保存", self.status_label)
         except Exception as e:
             QMessageBox.critical(self, "保存失败", str(e))
         self._build_pre_menu()
@@ -3134,7 +3134,7 @@ class MainWindow(QMainWindow):
 
     def on_stop(self):
         if self.worker:
-            self.status_label.setText("停止中(当前步骤结束后退出)...")
+            self._set_status("停止中(当前步骤结束后退出)...", self.status_label)
             self.worker.request_stop()
 
     def on_step_done(self, result):

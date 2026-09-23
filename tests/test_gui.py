@@ -2726,3 +2726,64 @@ def test_ui_hints_also_go_to_run_log(qapp, monkeypatch, tmp_path):
         assert "配置已保存" in w.log_view.toPlainText(), "保存配置应进日志"
     finally:
         w.close()
+
+
+def test_preconditions_save_and_stop_hints_go_to_run_log(qapp, monkeypatch, tmp_path):
+    """★ 前置条件保存 / 停止执行 的提示也必须进运行日志(用户反馈日志不完整,
+    这两处此前是直接 status_label.setText, 只有界面有、日志里查不到)"""
+    import core.driver as driver
+    import gui.main_window as mw
+    monkeypatch.setattr(mw, "CASES_DIR", str(tmp_path / "Test_cases"), raising=False)
+    monkeypatch.setattr(mw, "CONFIG_PATH", str(tmp_path / "config.yaml"), raising=False)
+    monkeypatch.setattr(mw, "load_config", lambda: {"app": {}, "device": {}}, raising=False)
+    monkeypatch.setattr(mw, "update_config", lambda d: None, raising=False)
+    # ★ 必须隔离: save_preconditions 默认写真实 config.yaml(不能碰用户数据)
+    saved = {}
+    monkeypatch.setattr(driver, "save_preconditions",
+                        lambda items: saved.update(items=items), raising=False)
+
+    class _Dlg:
+        """替身对话框: 直接返回 Accepted, 不弹模态框"""
+
+        def __init__(self, *a, **k):
+            pass
+
+        def exec(self):
+            return mw.QDialog.Accepted
+
+        def values(self):
+            return [{"type": "restart_app", "enabled": True}]
+
+    monkeypatch.setattr(mw, "PreconditionsDialog", _Dlg, raising=False)
+
+    class _FakeWorker:
+        def __init__(self):
+            self.stop_called = False
+
+        def request_stop(self):
+            self.stop_called = True
+
+        def wait(self, _ms):
+            return True
+
+    w = mw.MainWindow()
+    fake = _FakeWorker()
+    try:
+        # 走真实入口 on_edit_preconditions(不是直接调 _set_status, 防假绿)
+        w.log_view.clear()
+        w.on_edit_preconditions()
+        qapp.processEvents()
+        assert saved.get("items"), "真实入口要保存前置条件"
+        assert w.status_label.text() == "前置条件已保存", "界面提示要更新"
+        assert "前置条件已保存" in w.log_view.toPlainText(), "前置条件保存也要进运行日志"
+
+        w.log_view.clear()
+        w.worker = fake          # on_stop 需要 worker 才进入分支
+        w.on_stop()
+        qapp.processEvents()
+        assert w.status_label.text() == "停止中(当前步骤结束后退出)..."
+        assert "停止中" in w.log_view.toPlainText(), "停止执行也要进运行日志"
+        assert fake.stop_called, "停止请求要真的发给 worker"
+    finally:
+        w.worker = None          # 避免 closeEvent 弹模态框阻塞离屏测试
+        w.close()
