@@ -878,6 +878,7 @@ class PreconditionEditDialog(QDialog):
         self._types = PRECONDITION_TYPES
         self._item = dict(item) if item else None
         self.setWindowTitle("编辑前置条件" if item else "添加前置条件")
+        self.setStyleSheet(STYLESHEET)
         v = QVBoxLayout(self)
 
         v.addWidget(QLabel("类型"))
@@ -973,6 +974,8 @@ class PreconditionsDialog(QDialog):
         from core.session import _item_label
         self.setWindowTitle("前置条件设置")
         self.resize(560, 380)
+        # ★ 对话框不会自动继承主窗口样式表 → 字体/字号不一致, 勾选框发虚
+        self.setStyleSheet(STYLESHEET)
         self._label = _item_label
         self.items = [dict(x) for x in items]
         v = QVBoxLayout(self)
@@ -988,6 +991,7 @@ class PreconditionsDialog(QDialog):
         self.table.setSelectionMode(QAbstractItemView.NoSelection)
         self.table.setFocusPolicy(Qt.NoFocus)
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.table.verticalHeader().setDefaultSectionSize(30)   # 与控件高度匹配
         v.addWidget(self.table)
 
         row = QHBoxLayout()
@@ -1016,6 +1020,7 @@ class PreconditionsDialog(QDialog):
         for i, item in enumerate(self.items):
             self.table.insertRow(i)
             cb = QCheckBox(self._label(item))
+            cb.setFixedHeight(24)          # 固定尺寸: 被单元格拉伸会让勾标发虚
             cb.setChecked(bool(item.get("enabled", True)))
             cb.toggled.connect(lambda on, k=i: self._toggle(k, on))
             self.table.setCellWidget(i, 0, cb)
