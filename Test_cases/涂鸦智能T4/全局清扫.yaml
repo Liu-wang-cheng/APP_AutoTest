@@ -3,7 +3,7 @@ module: 全局清扫
 cases:
 - name: 全局清扫完整流程
   priority: P0
-  wait: null
+  wait: 5
   steps:
   - desc: 点击开始清扫按钮
     click_template: 开始清扫.png
@@ -29,7 +29,7 @@ cases:
     screenshot: screenshots/全局清扫_06_暂停状态.png
   - desc: 点击继续清扫按钮
     click_template: 继续清扫.png
-    screenshot: screenshots/全局清扫_07_继续清扫.png
+    screenshot: true
   - desc: 确认设备继续清扫中
     assert: 清扫中
     screenshot: screenshots/全局清扫_08_继续清扫状态.png

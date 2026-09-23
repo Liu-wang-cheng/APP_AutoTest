@@ -2011,3 +2011,113 @@ def test_click_and_click_template_split(qapp, monkeypatch, tmp_path):
         assert w.steps[1]["click_template"] == "开始清扫.png"
     finally:
         w.close()
+
+
+# ── 环境行名称输入:自适应 + 历史下拉 + ×清除(2026-09-23) ──
+
+@pytest.fixture
+def fake_settings(monkeypatch):
+    """用内存 QSettings 替代真实注册表,避免污染用户配置"""
+    import gui.main_window as mw
+
+    class _Fake:
+        store = {}
+
+        def __init__(self, *a, **k):
+            pass
+
+        def value(self, k, default=None):
+            return _Fake.store.get(k, default)
+
+        def setValue(self, k, v):
+            _Fake.store[k] = v
+
+        def sync(self):
+            pass
+
+    _Fake.store = {}
+    monkeypatch.setattr(mw, "QSettings", _Fake)
+    return _Fake
+
+
+def test_name_combo_history_and_clear_button(qapp, monkeypatch, tmp_path, fake_settings):
+    """测试APP/设备名称: 历史值可下拉选择 + 输入框带 × 清除按钮"""
+    import gui.main_window as mw
+    fake_settings.store["hist/app_name"] = ["涂鸦智能", "SmartThings"]
+    fake_settings.store["hist/device_name"] = ["SE3L"]
+    monkeypatch.setattr(mw, "CASES_DIR", str(tmp_path / "Test_cases"), raising=False)
+    monkeypatch.setattr(mw, "CONFIG_PATH", str(tmp_path / "config.yaml"), raising=False)
+    w = mw.MainWindow()
+    try:
+        from PySide6.QtWidgets import QComboBox
+        assert isinstance(w.app_name_edit, QComboBox) and w.app_name_edit.isEditable()
+        assert isinstance(w.device_name_edit, QComboBox)
+        items = [w.app_name_edit.itemText(i) for i in range(w.app_name_edit.count())]
+        assert items == ["涂鸦智能", "SmartThings"], f"历史项应加载: {items}"
+        assert w.app_name_edit.lineEdit().isClearButtonEnabled(), "应有 × 清除按钮"
+        assert [w.device_name_edit.itemText(i)
+                for i in range(w.device_name_edit.count())] == ["SE3L"]
+    finally:
+        w.close()
+
+
+def test_name_combo_width_adapts_to_content(qapp, monkeypatch, tmp_path, fake_settings):
+    """输入框宽度随内容自适应(长名称不被截断)"""
+    import gui.main_window as mw
+    monkeypatch.setattr(mw, "CASES_DIR", str(tmp_path / "Test_cases"), raising=False)
+    monkeypatch.setattr(mw, "CONFIG_PATH", str(tmp_path / "config.yaml"), raising=False)
+    w = mw.MainWindow()
+    try:
+        w.app_name_edit.setCurrentText("短")
+        qapp.processEvents()
+        narrow = w.app_name_edit.width()
+        w.app_name_edit.setCurrentText("非常长的应用名称用于测试自适应宽度")
+        qapp.processEvents()
+        wide = w.app_name_edit.width()
+        assert wide > narrow, f"长内容应变宽: {narrow} → {wide}"
+        assert wide <= 260, "有上限避免撑破布局"
+        # 设备名称同样自适应
+        w.device_name_edit.setCurrentText("VERY_LONG_DEVICE_NAME_001")
+        qapp.processEvents()
+        assert w.device_name_edit.width() > 100
+    finally:
+        w.close()
+
+
+def test_name_history_push_dedup_and_cap(monkeypatch, fake_settings):
+    """历史记录: 去重、最近在前、最多 10 条"""
+    import gui.main_window as mw
+    for i in range(12):
+        mw.MainWindow._push_name_history("hist/app_name", f"app{i}")
+    hist = fake_settings.store["hist/app_name"]
+    assert len(hist) == 10, f"上限 10 条: {len(hist)}"
+    assert hist[0] == "app11", "最近填写的排最前"
+    # 重复值 → 提到最前且不重复
+    mw.MainWindow._push_name_history("hist/app_name", "app5")
+    hist = fake_settings.store["hist/app_name"]
+    assert hist[0] == "app5" and hist.count("app5") == 1
+    assert len(hist) == 10
+    # 空值不记
+    mw.MainWindow._push_name_history("hist/app_name", "")
+    assert len(fake_settings.store["hist/app_name"]) == 10
+
+
+def test_name_save_writes_config_and_history(qapp, monkeypatch, tmp_path, fake_settings):
+    """编辑名称 → 写 config + 记入历史 + 下拉刷新"""
+    import gui.main_window as mw
+    import core.driver as driver
+    saved = {}
+    monkeypatch.setattr(mw, "update_config", lambda d: saved.update(d), raising=False)
+    monkeypatch.setattr(mw, "CASES_DIR", str(tmp_path / "Test_cases"), raising=False)
+    monkeypatch.setattr(mw, "CONFIG_PATH", str(tmp_path / "config.yaml"), raising=False)
+    w = mw.MainWindow()
+    try:
+        w.app_name_edit.setCurrentText("新APP名")
+        w._save_env_field_of(w.app_name_edit)
+        assert saved.get("app.name") == "新APP名", f"应写回配置: {saved}"
+        assert fake_settings.store["hist/app_name"][0] == "新APP名", "应记入历史"
+        items = [w.app_name_edit.itemText(i) for i in range(w.app_name_edit.count())]
+        assert "新APP名" in items, "下拉应刷新含新值"
+        assert w.app_name_edit.currentText() == "新APP名", "不应丢失当前输入"
+    finally:
+        w.close()

@@ -12,7 +12,8 @@ import re
 import time
 
 import yaml
-from PySide6.QtCore import QEvent, QPoint, QRect, QSize, Qt, QThread, QTimer, Signal
+from PySide6.QtCore import (QEvent, QPoint, QRect, QSettings, QSize, Qt, QThread,
+                            QTimer, Signal)
 from PySide6.QtGui import (QAction, QColor, QDoubleValidator, QIcon, QIntValidator,
                            QPainter, QPixmap)
 from PySide6.QtWidgets import (
@@ -1102,6 +1103,80 @@ class MainWindow(QMainWindow):
         lay.addWidget(self.status_label)
         return bar
 
+    # ── 名称输入(自适应 + 历史下拉 + ×清除) ──
+
+    def _make_name_combo(self, tip, cfg_key, hist_key):
+        """名称输入框: 宽度随内容自适应, 历史值可下拉选择, 带 × 清除按钮"""
+        combo = QComboBox()
+        combo.setEditable(True)
+        combo.setToolTip(tip + " · 可从历史记录下拉选择, × 清除")
+        combo.setProperty("cfg_key", cfg_key)
+        combo.setProperty("hist_key", hist_key)
+        combo.setSizeAdjustPolicy(QComboBox.AdjustToContents)
+        combo.setMinimumContentsLength(6)
+        combo.lineEdit().setClearButtonEnabled(True)   # × 一键清除(用户要求)
+        combo.addItems(self._load_name_history(hist_key))
+        # ★ 宽度随内容自适应(editable combo 的 AdjustToContents 不随输入变化)
+        combo.currentTextChanged.connect(lambda _t, c=combo: self._fit_combo_width(c))
+        self._fit_combo_width(combo)
+        combo.activated.connect(lambda _i, c=combo: self._save_env_field_of(c))
+        combo.lineEdit().editingFinished.connect(lambda c=combo: self._save_env_field_of(c))
+        return combo
+
+    @staticmethod
+    def _fit_combo_width(combo):
+        """输入框宽度随内容自适应(60~260px)"""
+        fm = combo.fontMetrics()
+        w = fm.horizontalAdvance(combo.currentText()) + 56  # 箭头+清除按钮+内边距
+        combo.setFixedWidth(max(70, min(w, 260)))
+
+    @staticmethod
+    def _load_name_history(hist_key):
+        st = QSettings("vacuum_test", "case_studio")
+        val = st.value(hist_key, [])
+        if isinstance(val, str):
+            val = [val] if val else []
+        return list(val or [])[:10]
+
+    @staticmethod
+    def _push_name_history(hist_key, value):
+        """把值记入历史(去重, 最近在前, 最多 10 条)"""
+        if not value:
+            return
+        st = QSettings("vacuum_test", "case_studio")
+        cur = st.value(hist_key, [])
+        if isinstance(cur, str):
+            cur = [cur] if cur else []
+        cur = [v for v in (cur or []) if v != value]
+        cur.insert(0, value)
+        st.setValue(hist_key, cur[:10])
+
+    def _save_env_field_of(self, combo):
+        """combo 版环境字段保存: 写 config + 记历史 + 刷新下拉项"""
+        from PySide6.QtWidgets import QComboBox as _C
+        w = combo if isinstance(combo, _C) else self.sender()
+        if w is None:
+            return
+        key = w.property("cfg_key")
+        value = w.currentText().strip()
+        if not key or not value:
+            return
+        try:
+            update_config({key: value})
+            self.env_status.setText(f"配置已保存: {key} = {value}")
+        except Exception as e:
+            QMessageBox.critical(self, "保存配置失败", str(e))
+            return
+        hist_key = w.property("hist_key")
+        if hist_key:
+            self._push_name_history(hist_key, value)
+            w.blockSignals(True)
+            txt = w.currentText()
+            w.clear()
+            w.addItems(self._load_name_history(hist_key))
+            w.setCurrentText(txt)
+            w.blockSignals(False)
+
     def _build_env_strip(self):
         """环境配置条(流式布局,窗口窄时自动换行): 设备优先,其次测试APP"""
         strip = QFrame()
@@ -1131,11 +1206,8 @@ class MainWindow(QMainWindow):
 
         # ── 测试APP ──
         lay.addWidget(QLabel("测试APP"))
-        self.app_name_edit = QLineEdit()
-        self.app_name_edit.setFixedWidth(88)
-        self.app_name_edit.setToolTip("测试APP名称(中文/英文均可),作为包名自动检测依据")
-        self.app_name_edit.setProperty("cfg_key", "app.name")
-        self.app_name_edit.editingFinished.connect(self._save_env_field)
+        self.app_name_edit = self._make_name_combo(
+            "测试APP名称(中文/英文均可),作为包名自动检测依据", "app.name", "hist/app_name")
         lay.addWidget(self.app_name_edit)
 
         self.detect_btn = QPushButton("🔍 检测")
@@ -1146,11 +1218,9 @@ class MainWindow(QMainWindow):
         # 包名/启动页不常驻界面: 点「检测」后结果直接显示在右侧状态文字,并写入配置
 
         lay.addWidget(QLabel("设备名称"))
-        self.device_name_edit = QLineEdit()
-        self.device_name_edit.setFixedWidth(60)
-        self.device_name_edit.setToolTip("APP 内的扫地机设备名称(如 SE3L),前置阶段自动点击进入该设备页")
-        self.device_name_edit.setProperty("cfg_key", "target_device")
-        self.device_name_edit.editingFinished.connect(self._save_env_field)
+        self.device_name_edit = self._make_name_combo(
+            "APP 内的扫地机设备名称(如 SE3L),前置阶段自动点击进入该设备页",
+            "target_device", "hist/device_name")
         lay.addWidget(self.device_name_edit)
 
         self.env_status = QLabel("")
@@ -1165,8 +1235,8 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
         app = cfg.get("app", {})
-        self.app_name_edit.setText(app.get("name", ""))
-        self.device_name_edit.setText(cfg.get("target_device", ""))
+        self.app_name_edit.setCurrentText(app.get("name", ""))
+        self.device_name_edit.setCurrentText(cfg.get("target_device", ""))
         self._refresh_devices()
 
     # ── 设备检测 ──
@@ -1589,7 +1659,7 @@ class MainWindow(QMainWindow):
 
     def on_detect_app(self):
         """按 APP 名称在设备已装应用中匹配包名,并解析启动页"""
-        app_name = self.app_name_edit.text().strip()
+        app_name = self.app_name_edit.currentText().strip()
         if not app_name:
             QMessageBox.warning(self, "提示", "请先填写被测APP名称")
             return
