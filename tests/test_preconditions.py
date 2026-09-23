@@ -187,10 +187,12 @@ def test_precondition_types_cover_defaults():
     """默认前置项的每个 type 都要在可选类型表里(对话框才能编辑)"""
     for item in session.DEFAULT_PRECONDITIONS:
         assert item["type"] in session.PRECONDITION_TYPES, item["type"]
-    # 自定义类型必须有「名称」与操作内容字段(用户要求)
-    tc = session.PRECONDITION_TYPES["text_check"]
-    keys = [p["key"] for p in tc["params"]]
-    assert "name" in keys and "wait_text" in keys and "absent_text" in keys
+    # 「自定义步骤」类型必须有名称 + 步骤字段(用户要求: 像用例一样写步骤)
+    st = session.PRECONDITION_TYPES["steps"]
+    keys = [p["key"] for p in st["params"]]
+    assert "name" in keys and "steps_yaml" in keys, f"字段: {keys}"
+    # 原「检测文本」类型已按用户要求移除(自定义步骤已覆盖)
+    assert "text_check" not in session.PRECONDITION_TYPES
 
 
 # ── GUI: 前置条件设置对话框(2026-09-23) ──

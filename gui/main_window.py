@@ -208,7 +208,7 @@ QMenu { background: #ffffff; border: 1px solid #e4e8ee; border-radius: 8px; padd
    26px 是「勾选标记 + 间距」的常规宽度; 不自定义 indicator, 交给 Qt 原生绘制 */
 QMenu::item { padding: 6px 24px 6px 12px; border-radius: 5px; }
 QMenu::item:selected { background: #eef4ff; color: #2563eb; }
-/* 勾选标记交给 Qt 原生绘制 —— 不要自定义 QMenu::indicator(尺寸/图片)
+/* 勾选标记交给 Qt 原生绘制 —— 不要自定义指示器样式(尺寸/图片),
    也不要改 item 的左侧 padding, 否则会让原生勾标变形或发虚 */
 QMenu::separator { height: 1px; background: #eef1f5; margin: 4px 8px; }
 
