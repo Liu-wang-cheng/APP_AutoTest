@@ -380,3 +380,27 @@ def test_add_precondition_opens_edit_dialog(qapp, monkeypatch):
     dlg._add_of_type("battery")
     assert opened == ["battery"], "应弹出编辑框且预选该类型"
     assert len(dlg.items) == before, "取消后不应加入列表"
+
+
+def test_steps_dialog_fits_cards(qapp):
+    """★ 步骤编辑对话框要够大: 卡片不能比对话框还宽(用户实测被压/溢出)"""
+    from gui import main_window as mw
+    dlg = mw.PreconditionEditDialog({"type": "steps", "enabled": True,
+                                     "name": "前置准备", "steps": []}, None)
+    dlg.show()
+    try:
+        qapp.processEvents()
+        assert dlg.width() >= 700, f"步骤对话框应更大: {dlg.width()}"
+        ed = dlg._edits["steps_yaml"][0]
+        ed.add_step("click")
+        ed.add_step("assert")
+        qapp.processEvents()
+        cards = [ed.cards_lay.itemAt(i).widget() for i in range(ed.cards_lay.count())]
+        cards = [c for c in cards if isinstance(c, mw.StepCard)]
+        assert cards, "应渲染卡片"
+        assert cards[0].width() <= dlg.width(), \
+            f"卡片({cards[0].width()})不应超出对话框({dlg.width()})"
+        # 字段表单列要能拉伸(否则步骤区被标签列挤窄)
+        assert dlg.form.fieldGrowthPolicy() == dlg.form.AllNonFixedFieldsGrow
+    finally:
+        dlg.close()

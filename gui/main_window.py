@@ -1049,6 +1049,9 @@ class PreconditionEditDialog(QDialog):
 
         self.form_host = QWidget()
         self.form = QFormLayout(self.form_host)
+        # ★ 字段列要能拉伸: 否则步骤编辑区被标签列挤窄, 卡片比对话框还宽
+        self.form.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
+        self.form.setRowWrapPolicy(QFormLayout.DontWrapRows)
         v.addWidget(self.form_host)
         self._edits = {}
 
@@ -1078,6 +1081,11 @@ class PreconditionEditDialog(QDialog):
                 self.type_combo.setCurrentIndex(k)
         self.type_combo.currentIndexChanged.connect(self._build_form)
         self._build_form()
+
+    def _fit_dialog_size(self):
+        """按内容调整对话框大小: 步骤编辑需要更大的编辑区(用户实测: 卡片被压)"""
+        big = self.type_combo.currentData() == "steps"
+        self.resize(760 if big else 520, 660 if big else 420)
 
     def accept(self):
         """校验后关闭: 名称必填 / 步骤 YAML 必须能解析"""
@@ -1121,6 +1129,7 @@ class PreconditionEditDialog(QDialog):
                 e.setPlaceholderText(prm["hint"])
             self.form.addRow(prm["label"], e)
             self._edits[prm["key"]] = (e, prm)
+        self._fit_dialog_size()      # 步骤编辑需要更大的编辑区(卡片不被压)
 
     def values(self):
         t = self.type_combo.currentData()
