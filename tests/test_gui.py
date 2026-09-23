@@ -1684,3 +1684,77 @@ def test_delete_current_case_unloads_editor(qapp, monkeypatch, tmp_path):
         assert w.file_label.text() == "未选中用例"
     finally:
         w.close()
+
+
+# ── 点击模板勾选组合控件(2026-09-23) ──
+
+def test_template_field_toggle_and_value(qapp, monkeypatch, tmp_path):
+    """点击目标组合控件: 勾选「模板」→ 下拉选当前组模板;不勾 → 手填按钮名/坐标;
+    旧模板名值加载时自动勾选;值经 changed/getter 正确写回"""
+    from PySide6.QtCore import Qt
+    from PySide6.QtWidgets import QLineEdit
+    import gui.main_window as mw
+    d = tmp_path / "Test_cases" / "涂鸦智能T4"
+    d.mkdir(parents=True)
+    (d / "a.yaml").write_text(
+        "module: a\ncases: [{name: x, steps: []}]\n", encoding="utf-8")
+    monkeypatch.setattr(mw, "CASES_DIR", str(d), raising=False)
+    monkeypatch.setattr(mw, "CONFIG_PATH", str(tmp_path / "config.yaml"), raising=False)
+    w = mw.MainWindow()
+    w.resize(900, 700)
+    w.show()
+    try:
+        qapp.processEvents()
+        w.add_step("click")
+        card = _card_widgets(w)[0]
+        tf = card.widgets.get("click")
+        assert tf is not None and hasattr(tf, "changed"), "点击目标应为组合控件"
+        # 新步骤空值 → 默认手填模式(用户尚未选模板)
+        assert not tf.chk.isChecked()
+        # 手填按钮名 → getter 返回
+        tf.edit.setText("开始清扫")
+        assert tf.current_value() == "开始清扫"
+        # 勾选 → 模板下拉(自动列出当前组模板)且隐藏文本输入
+        tf.chk.setChecked(True)
+        qapp.processEvents()
+        assert tf.combo.isVisible() and not tf.edit.isVisible(), "勾选时应显示模板下拉"
+        # 从下拉选模板 → getter 返回模板名
+        tf.combo.setEditText("开始清扫")
+        assert tf.current_value() == "开始清扫"
+        # 不勾 → 手填坐标
+        tf.chk.setChecked(False)
+        tf.edit.setText("540,1700")
+        assert tf.current_value() == "540,1700"
+    finally:
+        w.close()
+
+
+def test_template_field_writeback(qapp, monkeypatch, tmp_path):
+    """组合控件 changed → _write_back: 模板选择/手填坐标都写回 step 字典并自动保存"""
+    import yaml as _y
+    from PySide6.QtCore import Qt
+    import gui.main_window as mw
+    d = tmp_path / "Test_cases" / "涂鸦智能T4"
+    d.mkdir(parents=True)
+    (d / "a.yaml").write_text(
+        "module: a\ncases: [{name: x, steps: []}]\n", encoding="utf-8")
+    monkeypatch.setattr(mw, "CASES_DIR", str(d), raising=False)
+    monkeypatch.setattr(mw, "CONFIG_PATH", str(tmp_path / "config.yaml"), raising=False)
+    w = mw.MainWindow()
+    try:
+        w.create_case("测试组", group="涂鸦智能T4")
+        w.add_step("click")
+        card = _card_widgets(w)[0]
+        tf = card.widgets["click"]
+        # 手填模式填坐标 → 触发 changed → 写回 step + 自动保存
+        tf.edit.setText("100,200")
+        tf.edit.editingFinished.emit()
+        assert w.steps[0]["click"] == "100,200"
+        back = _y.safe_load(open(w.case_path, encoding="utf-8").read())
+        assert back["cases"][0]["steps"][0]["click"] == "100,200", "应自动保存"
+        # 切到模板选择
+        tf.chk.setChecked(True)
+        tf.combo.setCurrentText("开始清扫")
+        assert w.steps[0]["click"] == "开始清扫"
+    finally:
+        w.close()

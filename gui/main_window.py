@@ -472,11 +472,59 @@ def make_action_menu(parent, on_pick):
     return menu
 
 
+class _TemplateField(QWidget):
+    """点击目标组合控件: 勾选「模板」→ 下拉选当前 APP 组模板;
+    不勾 → 手填按钮名称或坐标(用户要求)。值变化发 changed 信号。"""
+
+    changed = Signal()
+
+    def __init__(self, templates, value, parent=None):
+        super().__init__(parent)
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(4)
+        self.chk = QCheckBox("模板")
+        self.chk.setToolTip("勾选=从当前 APP 组模板中选择;不勾=填按钮名称或坐标")
+        self.combo = QComboBox()
+        self.combo.setEditable(True)
+        self.combo.addItems(templates)
+        self.edit = QLineEdit()
+        self.edit.setPlaceholderText("按钮名 / x,y 坐标")
+        lay.addWidget(self.chk)
+        lay.addWidget(self.combo, 1)
+        lay.addWidget(self.edit, 1)
+        self.chk.toggled.connect(self._sync_mode)
+        self.combo.currentTextChanged.connect(lambda _: self.changed.emit())
+        self.edit.editingFinished.connect(self.changed.emit)
+        # 初始态: 值是已知模板名 → 勾选走模板;否则手填
+        is_tpl = bool(value) and value in templates
+        self.chk.setChecked(is_tpl)
+        self._sync_mode(is_tpl)
+        if is_tpl:
+            self.combo.setCurrentText(value)
+        else:
+            self.edit.setText(value or "")
+
+    def _sync_mode(self, checked):
+        self.combo.setVisible(checked)
+        self.edit.setVisible(not checked)
+        self.changed.emit()
+
+    def current_value(self):
+        if self.chk.isChecked():
+            return self.combo.currentText().strip()
+        return self.edit.text().strip()
+
+
 def _make_field_widget(field, value, steps=None, exclude_index=None):
     """按 schema 字段类型建控件,返回 (widget, 取值getter)。
     steps/exclude_index: stepshot 类型(基准图选步骤下拉)用的上下文"""
     t = field["type"]
     hint = field.get("hint", "")
+    if t == "template":
+        from core import vision
+        w = _TemplateField(vision.list_templates(), str(value) if value else "")
+        return w, w.current_value
     if t == "stepshot":
         # 基准图下拉: 选项 = 当前用例中开启了自动截图的其他步骤(用户要求)
         combo = QComboBox()
@@ -752,7 +800,9 @@ class StepCard(QFrame):
         grid.addWidget(w, row, 1)
         self.widgets[field["key"]] = w
         self.getters[field["key"]] = getter
-        if isinstance(w, QComboBox):          # stepshot 下拉: 选中即写回
+        if hasattr(w, "changed"):             # 组合控件(点击模板勾选): 自带 changed 信号
+            w.changed.connect(self._write_back)
+        elif isinstance(w, QComboBox):        # stepshot 下拉: 选中即写回
             w.currentIndexChanged.connect(self._write_back)
         else:
             signal = w.toggled if isinstance(w, QCheckBox) else w.editingFinished
@@ -783,7 +833,9 @@ class StepCard(QFrame):
             row_h.addWidget(w)
             hv.addLayout(row_h)
             sub_getters[sub["key"]] = getter
-            if isinstance(w, QComboBox):
+            if hasattr(w, "changed"):         # 组合控件(点击模板勾选)
+                w.changed.connect(self._write_back)
+            elif isinstance(w, QComboBox):
                 w.currentIndexChanged.connect(self._write_back)
             else:
                 signal = w.toggled if isinstance(w, QCheckBox) else w.editingFinished
