@@ -2396,3 +2396,107 @@ def test_history_delete_resizes_open_popup(qapp, monkeypatch, tmp_path, fake_set
         assert combo.view().window().size() == after, "重开后尺寸应与即时重算一致"
     finally:
         w.close()
+
+
+def test_history_add_keeps_popup_full_height(qapp, monkeypatch, tmp_path, fake_settings):
+    """★ 新增历史项后下拉不能变成「只够一行+滚动条」的小框(用户实测 bug)。
+
+    根因: 列表 clear+addItems 后 sizeHintForRow 返回 -1, 逐行累加得负高度。
+    """
+    import gui.main_window as mw
+    monkeypatch.setattr(mw, "CASES_DIR", str(tmp_path / "Test_cases"), raising=False)
+    monkeypatch.setattr(mw, "CONFIG_PATH", str(tmp_path / "config.yaml"), raising=False)
+    monkeypatch.setattr(mw, "load_config", lambda: {"app": {}, "device": {}}, raising=False)
+    fake_settings.store["hist/app_name"] = ["甲", "乙", "丙"]
+    w = mw.MainWindow()
+    w.resize(1000, 400)
+    w.show()
+    try:
+        qapp.processEvents()
+        combo = w.app_name_edit
+        # 场景: popup 从未打开过 → 输入新长名并保存 → 再打开
+        combo.setCurrentText("超级无敌长的应用名称测试用例ABCDEF")
+        w._save_env_field_of(combo)
+        qapp.processEvents()
+        assert combo.count() == 4
+        combo.showPopup()
+        qapp.processEvents()
+        popup = combo.view().window()
+        view = combo.view()
+        row_h = view.sizeHintForRow(0) if view.sizeHintForRow(0) > 0 \
+            else view.fontMetrics().height() + 8
+        assert popup.height() >= row_h * 3, \
+            f"4 项列表不能只显示一行: 高 {popup.height()} < {row_h * 3}"
+        assert popup.width() >= combo.lineEdit().fontMetrics().horizontalAdvance(
+            "超级无敌长的应用名称测试用例ABCDEF") + 40, "宽度应容纳最长项"
+        # 打开状态下再新增 → 高度即时增加
+        h_before = popup.height()
+        combo.setCurrentText("又一个新的名字")
+        w._save_env_field_of(combo)
+        qapp.processEvents()
+        assert combo.count() == 5
+        assert combo.view().window().height() > h_before, \
+            "新增一项后下拉应即时变高(不必重开)"
+    finally:
+        w.close()
+
+
+def test_all_fit_combos_adapt_width(qapp, monkeypatch, tmp_path, fake_settings):
+    """★ 三个长内容下拉(模板/基准图/新建组)统一走 _FitCombo: 宽度容纳最长项;
+    只读下拉(基准图)也不能因无 lineEdit 而崩"""
+    from PySide6.QtWidgets import QComboBox
+    import gui.main_window as mw
+    root = tmp_path / "Test_cases"
+    gdir = root / "涂鸦智能T4"
+    tdir = gdir / "templates"
+    tdir.mkdir(parents=True)
+    # 一个很长的模板名, 验证宽度能容纳
+    LONG_TPL = "涂鸦_超级长的模板名称用于测试宽度自适应ABCDEF.png"
+    (tdir / LONG_TPL).write_bytes(b"fake")
+    (tdir / "涂鸦_开始清扫.png").write_bytes(b"fake")
+    monkeypatch.setattr(mw, "CASES_DIR", str(root), raising=False)
+    monkeypatch.setattr(mw, "CONFIG_PATH", str(tmp_path / "config.yaml"), raising=False)
+    monkeypatch.setattr(mw, "load_config", lambda: {"app": {}, "device": {}}, raising=False)
+    w = mw.MainWindow()
+    w.resize(1200, 700)
+    w.show()
+    try:
+        qapp.processEvents()
+        w.create_case("a", group="涂鸦智能T4")
+        # 步骤1 开截图(供基准图下拉引用), 步骤2 用模板点击
+        w.add_step("click")
+        w.steps[0]["screenshot"] = True
+        w.add_step("click_template")
+        w.render_cards()
+        w.expand_card((1,))
+        qapp.processEvents()
+        card = _card_widgets(w)[1]
+        tpl_combo = card.widgets["click_template"]
+        assert isinstance(tpl_combo, mw._FitCombo), "模板下拉应用 _FitCombo"
+        fm = tpl_combo._font_metrics()
+        longest = max(fm.horizontalAdvance(tpl_combo.itemText(i))
+                      for i in range(tpl_combo.count()))
+        assert tpl_combo.width() >= longest + 40, \
+            f"模板下拉应容纳最长模板名: {tpl_combo.width()} < {longest + 40}"
+        # 基准图下拉(只读)也不能崩, 且宽度合理
+        w.steps[0]["desc"] = "点击开始清扫按钮然后等待完成" * 2
+        w.add_step("compare")
+        w.render_cards()
+        w.expand_card((2,))
+        qapp.processEvents()
+        card2 = _card_widgets(w)[2]
+        shot_combo = card2.widgets["compare"]
+        assert isinstance(shot_combo, mw._FitCombo)
+        assert shot_combo.width() >= 100, "只读下拉也要有合理宽度"
+        shot_combo.fit_width()      # 不抛异常(无 lineEdit 路径)
+        shot_combo.showPopup()
+        qapp.processEvents()
+        assert shot_combo.view().window().width() >= shot_combo.width() - 60
+        # 新建对话框组下拉
+        gcombo = mw._FitCombo()
+        gcombo.setEditable(True)
+        gcombo.addItems(["涂鸦智能T4", "一个非常长的APP组名称用于测试"])
+        gcombo.fit_width()
+        assert gcombo.width() > 100
+    finally:
+        w.close()

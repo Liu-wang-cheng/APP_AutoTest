@@ -485,16 +485,18 @@ def _make_field_widget(field, value, steps=None, exclude_index=None):
     hint = field.get("hint", "")
     if t == "template":
         from core import vision
-        combo = QComboBox()
+        combo = _FitCombo()                 # 宽度自适应 + popup 尺寸按最长模板名
         combo.setEditable(True)
         combo.addItems(vision.list_templates())
         if value:
             combo.setCurrentText(str(value))
         combo.lineEdit().setPlaceholderText(hint or "选择模板")
+        combo.currentTextChanged.connect(lambda _t, c=combo: c.fit_width_to_items())
+        combo.fit_width_to_items()
         return combo, combo.currentText
     if t == "stepshot":
         # 基准图下拉: 选项 = 当前用例中开启了自动截图的其他步骤(用户要求)
-        combo = QComboBox()
+        combo = _FitCombo()                 # 宽度自适应: "步骤N: 描述" 可能较长
         options = []
         for i, st in enumerate(steps or []):
             if i == exclude_index or not st.get("screenshot"):
@@ -512,6 +514,8 @@ def _make_field_widget(field, value, steps=None, exclude_index=None):
             k = combo.findData(value)
             if k >= 0:
                 combo.setCurrentIndex(k)
+        combo.currentTextChanged.connect(lambda _t, c=combo: c.fit_width_to_items())
+        combo.fit_width_to_items()
         return combo, combo.currentData
     if t == "bool":
         w = QCheckBox()
@@ -765,8 +769,11 @@ class StepCard(QFrame):
         w, getter = _make_field_widget(field, self.step.get(field["key"]),
                                        steps=self.main.steps,
                                        exclude_index=self.index)
-        w.setMinimumWidth(200)
-        w.setMaximumWidth(300)   # 收紧(原 430 右侧大片留白)
+        if isinstance(w, _FitCombo):
+            w.fit_width_to_items()   # 选择型下拉: 按最长项(内容驱动, 上限 420)
+        else:
+            w.setMinimumWidth(200)
+            w.setMaximumWidth(300)   # 收紧(原 430 右侧大片留白)
         grid.addWidget(w, row, 1, Qt.AlignLeft)   # 靠左紧贴标签(拉伸列内不居中)
         self.widgets[field["key"]] = w
         self.getters[field["key"]] = getter
@@ -870,12 +877,15 @@ class NewCaseDialog(QDialog):
         self.name_edit.setPlaceholderText("输入新用例的名称")
         v.addWidget(self.name_edit)
         v.addWidget(QLabel("APP 用例组"))
-        self.group_combo = QComboBox()
+        self.group_combo = _FitCombo()      # 组名长时也能看全
         self.group_combo.setEditable(True)
         self.group_combo.addItems(groups or [])
         self.group_combo.lineEdit().setPlaceholderText("选择现有组或输入新组名")
         if groups:
             self.group_combo.addItems(groups)
+            self.group_combo.currentTextChanged.connect(
+                lambda _t, c=self.group_combo: c.fit_width_to_items())
+            self.group_combo.fit_width_to_items()
             # 默认组: 有指定则选中它(用户反馈: 别默认进错组), 否则第一项
             if default_group and default_group in groups:
                 self.group_combo.setCurrentIndex(groups.index(default_group))
@@ -918,8 +928,65 @@ class _HistComboDelegate(QStyledItemDelegate):
                          Qt.AlignCenter, "\u2715")
         painter.restore()
 
-class _HistListView(QListView):
-    """历史下拉的弹出列表: sizeHint 宽度按「最长项」计算。
+class _FitCombo(QComboBox):
+    """内容自适应的下拉框基类(带/不带历史删除功能的下拉都用它)。
+
+    ★ 解决三个 Qt 坑(2026-09-23 逐个实测):
+      1. editable combo 的 AdjustToContents 不随输入变化 → fit_width() 自算
+      2. popup 宽度不采用 view.sizeHint/maxWidth → showPopup 后 setFixedSize
+      3. sizeHintForRow 在 clear+addItems 后返回 -1 → 高度用首行高×行数
+    """
+
+    _POPUP_PAD = 48        # ✕/内边距/安全余量
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setView(_FitListView(self))
+
+    def _font_metrics(self):
+        """取用于测量的字体: 可输入下拉用 lineEdit, 只读下拉用自身"""
+        le = self.lineEdit()
+        return (le or self).fontMetrics()
+
+    def longest_item_width(self):
+        fm = self._font_metrics()
+        return max([fm.horizontalAdvance(self.itemText(i))
+                    for i in range(self.count())] or [0])
+
+    def fit_width(self):
+        """宽度随「当前值」自适应(输入型下拉: 测试APP/设备名称)"""
+        fm = self._font_metrics()
+        w = fm.horizontalAdvance(self.currentText()) + 60
+        self.setFixedWidth(max(70, min(w, 420)))
+
+    def fit_width_to_items(self):
+        """宽度按「最长项」自适应(选择型下拉: 模板/基准图/APP组)"""
+        w = self.longest_item_width() + 60
+        self.setFixedWidth(max(70, min(w, 420)))
+
+    def fit_popup_now(self):
+        """按下拉当前内容重算 popup 的宽与高(仅当它正打开时)"""
+        popup = self.view().window()
+        if popup is None or not popup.isVisible():
+            return
+        view = self.view()
+        want_w = max(self.width(), self.longest_item_width() + self._POPUP_PAD)
+        rows = self.count()
+        row_h = view.sizeHintForRow(0) if rows else 0
+        if row_h <= 0:
+            row_h = view.fontMetrics().height() + 8
+        want_h = (row_h * rows + 2 * view.frameWidth()) if rows else 30
+        want_h = min(want_h, 420)
+        if popup.width() != want_w or popup.height() != want_h:
+            popup.setFixedSize(want_w, want_h)
+
+    def showPopup(self):
+        super().showPopup()
+        self.fit_popup_now()
+
+
+class _FitListView(QListView):
+    """弹出列表: sizeHint 宽度按「最长项」计算。
 
     ★ combo 显示 popup 时是按 `view.sizeHint()` 决定宽度的, 设 minimumWidth
     无效(所以删除项后宽度不会缩) —— 必须重写 sizeHint 才真正跟随内容。
@@ -940,8 +1007,8 @@ class _HistListView(QListView):
         return QSize(max(s.width(), longest + self._PAD), s.height())
 
 
-class _HistCombo(QComboBox):
-    """历史下拉框: 点击项右侧 ✕ 删除该条历史。
+class _HistCombo(_FitCombo):
+    """历史下拉框: 点击项右侧 ✕ 删除该条历史(继承 _FitCombo 的自适应尺寸)。
 
     ★ 必须用事件过滤器而非 delegate.editorEvent —— QAbstractItemView 处理
     普通点击时**不调用** editorEvent(那只在编辑场景触发), 所以点击会走
@@ -953,43 +1020,7 @@ class _HistCombo(QComboBox):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setView(_HistListView(self))
         self.view().viewport().installEventFilter(self)
-
-    def _longest_item_width(self):
-        fm = self.lineEdit().fontMetrics()
-        return max([fm.horizontalAdvance(self.itemText(i))
-                    for i in range(self.count())] or [0])
-
-    def fit_popup_now(self):
-        """按下拉当前内容重算 popup 的宽与高(仅当它正打开时)。
-
-        ★ 用途: 删除某条历史后列表仍开着, 必须立即改尺寸 —— 否则还按删除前
-        的大小显示, 要重新打开才更新(用户实测)。宽按最长项, 高按行数。
-        """
-        popup = self.view().window()
-        if popup is None or not popup.isVisible():
-            return
-        view = self.view()
-        want_w = max(self.width(), self._longest_item_width() + _HistListView._PAD)
-        rows = self.count()
-        if rows:
-            want_h = sum(view.sizeHintForRow(i) for i in range(rows)) \
-                + 2 * view.frameWidth()
-        else:
-            want_h = 30
-        want_h = min(want_h, 420)          # 上限: 历史最多 10 条也不超出屏幕
-        if popup.width() != want_w or popup.height() != want_h:
-            popup.setFixedSize(want_w, want_h)
-
-    def showPopup(self):
-        """显示后按最长项设定 popup 宽度。
-
-        ★ Qt 的 popup 容器不采用 view.sizeHint() 定宽(实测仍等于 combo 宽),
-        必须显示后直接 setFixedSize。
-        """
-        super().showPopup()
-        self.fit_popup_now()
 
     def eventFilter(self, obj, ev):
         if obj is self.view().viewport() and ev.type() == QEvent.MouseButtonRelease:
@@ -1223,24 +1254,20 @@ class MainWindow(QMainWindow):
         combo.setItemDelegate(_HistComboDelegate(combo.view()))
         combo.removed.connect(lambda row, c=combo: self._remove_name_history(c, row))
         # ★ 宽度随内容自适应(editable combo 的 AdjustToContents 不随输入变化)
-        combo.currentTextChanged.connect(lambda _t, c=combo: self._fit_combo_width(c))
-        self._fit_combo_width(combo)
+        combo.currentTextChanged.connect(lambda _t, c=combo: self._refresh_name_tip(c))
+        self._refresh_name_tip(combo)
         combo.activated.connect(lambda _i, c=combo: self._save_env_field_of(c))
         combo.lineEdit().editingFinished.connect(lambda c=combo: self._save_env_field_of(c))
         return combo
 
     @staticmethod
-    def _fit_combo_width(combo):
-        """输入框宽度完全随内容自适应(不设小上限, 否则长名称被截断);
-        上限放宽到 420px 防止极端值撑破布局, 同时悬停显示完整值"""
-        fm = combo.lineEdit().fontMetrics()
+    def _refresh_name_tip(combo):
+        """名称框: 宽度自适应(基类 fit_width) + 悬停显示完整值 + popup 尺寸同步"""
+        combo.fit_width()
         txt = combo.currentText()
-        # combo 的 lineEdit 区 = 总宽 - 36(箭头/边框); lineEdit 内边距 16
-        # 实测: +50 时 lineEdit 比所需窄 2px(中文会截断) → 用 +60 留足余量
-        w = fm.horizontalAdvance(txt) + 60
-        combo.setFixedWidth(max(70, min(w, 420)))
         combo.setToolTip((combo.property("base_tip") or "") +
-                         (("\n当前值: " + txt) if txt else ""))
+                         (("当前值: " + txt) if txt else ""))
+        combo.fit_popup_now()
 
     def _remove_name_history(self, combo, row):
         """删除下拉中第 row 条历史(同步 QSettings + 刷新列表, 当前值被删则清空)"""
