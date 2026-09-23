@@ -28,6 +28,9 @@ from PySide6.QtWidgets import (
 
 from core import app_detect
 from core.driver import BASE_DIR, load_config, update_config
+from core.logger import get_logger
+
+log = get_logger()
 from gui import schema
 from gui.runner_thread import RunWorker
 
@@ -985,17 +988,22 @@ class _FitCombo(QComboBox):
         return h if h > 0 else view.fontMetrics().height() + 8
 
     def fit_popup_now(self):
-        """按下拉当前内容重算 popup 的宽与高(仅当它正打开时)"""
+        """按内容调整 popup 宽度(仅当它正打开时)。
+
+        ★ 只干预**宽度**, 高度交给 Qt —— QComboBoxPrivateContainer 自己会按
+        view 内容算高度; 之前用 setFixedSize 连高度一起硬设, 因数不准导致
+        「内容多了不变大 / 底部多一行空白」(用户真机实测)。最小干预更稳。
+        """
         popup = self.view().window()
         if popup is None or not popup.isVisible():
             return
-        view = self.view()
         want_w = max(self.width(), self.longest_item_width() + self._POPUP_PAD)
-        rows = self.count()
-        want_h = (self._row_height() * rows + 2 * view.frameWidth()) if rows else 30
-        want_h = min(want_h, 420)
-        if popup.width() != want_w or popup.height() != want_h:
-            popup.setFixedSize(want_w, want_h)
+        if popup.width() != want_w:
+            popup.setFixedWidth(want_w)
+        # 诊断日志(真机排查用): 项数 / 实际尺寸 / 行高
+        log.info(f"[下拉] 项数={self.count()} popup={popup.width()}x{popup.height()} "
+                 f"view={self.view().width()}x{self.view().height()} "
+                 f"行高={self._row_height()}")
 
     def showPopup(self):
         super().showPopup()
