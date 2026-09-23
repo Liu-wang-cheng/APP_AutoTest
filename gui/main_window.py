@@ -169,7 +169,8 @@ QLabel#badges { color: #94a3b8; font-size: 11px; }
 QFrame#chipStrip { background: #ffffff; border: 1px solid #e4e8ee; border-radius: 8px; }
 /* 步骤卡片内勾选框: 固定透明背景, 防止写盘重绘时闪烁 */
 QFrame#stepCard QCheckBox, QFrame#stepCardOpen QCheckBox,
-QFrame#subStepCard QCheckBox, QFrame#subStepCardOpen QCheckBox { background: transparent; }
+QFrame#subStepCard QCheckBox, QFrame#subStepCardOpen QCheckBox { background: transparent; border: none; }
+QCheckBox::indicator { background: transparent; }
 QPushButton#chipBtn {
     background: #f1f5f9; border: 1px solid transparent; border-radius: 12px;
     padding: 3px 12px; color: #475569;
@@ -185,7 +186,8 @@ QListWidget#caseList::item:hover { background: #f0f4fa; }
 QListWidget#caseList::item:selected { background: #dbe7fb; color: #1e293b; }
 /* ★ 勾选框统一透明背景: 全局 QWidget 背景规则会让点击时"高亮层 ↔ 控件自绘背景"
    交替重绘 → 勾选时闪动(用例列表踩过一次, 前置条件对话框同样中招) */
-QCheckBox { background: transparent; }
+QCheckBox { background: transparent; border: none; }
+QCheckBox::indicator { background: transparent; }
 /* 勾选框用 Qt 原生样式(用户要求;闪动根源是此前的行内控件叠层,已移除) */
 
 QTabWidget::pane { border: 1px solid #e4e8ee; border-radius: 6px; background: #ffffff; top: -1px; }

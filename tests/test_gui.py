@@ -2650,5 +2650,7 @@ def test_menu_and_checkbox_styles(qapp):
     assert "QMenu::indicator" not in mw.STYLESHEET, "不要自定义菜单勾选标记"
     assert "QMenu::item { padding: 6px 24px 6px 12px;" in mw.STYLESHEET, \
         "菜单项 padding 保持原值(改动会影响原生勾标)"
-    assert "QCheckBox { background: transparent; }" in mw.STYLESHEET, \
+    assert "QCheckBox { background: transparent;" in mw.STYLESHEET, \
         "勾选框必须透明背景, 否则点击时闪动"
+    assert "QCheckBox::indicator { background: transparent; }" in mw.STYLESHEET, \
+        "勾选标记本身也要透明背景"

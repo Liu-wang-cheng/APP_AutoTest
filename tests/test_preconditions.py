@@ -401,6 +401,7 @@ def test_steps_dialog_fits_cards(qapp):
         assert cards[0].width() <= dlg.width(), \
             f"卡片({cards[0].width()})不应超出对话框({dlg.width()})"
         # 字段表单列要能拉伸(否则步骤区被标签列挤窄)
-        assert dlg.form.fieldGrowthPolicy() == dlg.form.AllNonFixedFieldsGrow
+        from PySide6.QtWidgets import QFormLayout
+        assert dlg.form.fieldGrowthPolicy() == QFormLayout.AllNonFixedFieldsGrow
     finally:
         dlg.close()
