@@ -2353,3 +2353,46 @@ def test_detect_failure_purges_history(qapp, monkeypatch, tmp_path, fake_setting
         assert "涂鸦智能" in fake_settings.store["hist/app_name"]
     finally:
         w.close()
+
+
+def test_history_delete_resizes_open_popup(qapp, monkeypatch, tmp_path, fake_settings):
+    """★ 删除历史项后, 正打开的 popup 必须立即缩小(用户实测: 之前要重开才变)"""
+    from PySide6.QtCore import Qt, QPoint
+    from PySide6.QtTest import QTest
+    import gui.main_window as mw
+    monkeypatch.setattr(mw, "CASES_DIR", str(tmp_path / "Test_cases"), raising=False)
+    monkeypatch.setattr(mw, "CONFIG_PATH", str(tmp_path / "config.yaml"), raising=False)
+    monkeypatch.setattr(mw, "load_config", lambda: {"app": {}, "device": {}}, raising=False)
+    fake_settings.store["hist/app_name"] = ["甲", "乙", "丙",
+                                           "超级无敌长的应用名称测试用例ABCDEF"]
+    w = mw.MainWindow()
+    w.resize(1000, 400)
+    w.show()
+    try:
+        qapp.processEvents()
+        combo = w.app_name_edit
+        combo.setCurrentText("甲")
+        combo.showPopup()
+        qapp.processEvents()
+        before = combo.view().window().size()
+        assert before.width() > 200, f"4 项含长名应较宽: {before}"
+        # 删掉最长项(第 4 项) —— popup 保持打开
+        view = combo.view()
+        rect = view.visualRect(combo.model().index(3, 0))
+        QTest.mouseClick(view.viewport(), Qt.LeftButton,
+                         pos=QPoint(rect.right() - 6, rect.center().y()))
+        qapp.processEvents()
+        assert combo.count() == 3
+        after = combo.view().window().size()
+        assert after != before, f"删除后 popup 应即时改尺寸: {before} → {after}"
+        assert after.width() < before.width(), \
+            f"删掉长项后应变窄: {after.width()} vs {before.width()}"
+        assert after.height() < before.height(), \
+            f"少一行应变矮: {after.height()} vs {before.height()}"
+        # 与重新打开后的尺寸一致(说明是正确重算而非凑数)
+        combo.hidePopup()
+        combo.showPopup()
+        qapp.processEvents()
+        assert combo.view().window().size() == after, "重开后尺寸应与即时重算一致"
+    finally:
+        w.close()

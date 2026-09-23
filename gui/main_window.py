@@ -961,17 +961,35 @@ class _HistCombo(QComboBox):
         return max([fm.horizontalAdvance(self.itemText(i))
                     for i in range(self.count())] or [0])
 
+    def fit_popup_now(self):
+        """按下拉当前内容重算 popup 的宽与高(仅当它正打开时)。
+
+        ★ 用途: 删除某条历史后列表仍开着, 必须立即改尺寸 —— 否则还按删除前
+        的大小显示, 要重新打开才更新(用户实测)。宽按最长项, 高按行数。
+        """
+        popup = self.view().window()
+        if popup is None or not popup.isVisible():
+            return
+        view = self.view()
+        want_w = max(self.width(), self._longest_item_width() + _HistListView._PAD)
+        rows = self.count()
+        if rows:
+            want_h = sum(view.sizeHintForRow(i) for i in range(rows)) \
+                + 2 * view.frameWidth()
+        else:
+            want_h = 30
+        want_h = min(want_h, 420)          # 上限: 历史最多 10 条也不超出屏幕
+        if popup.width() != want_w or popup.height() != want_h:
+            popup.setFixedSize(want_w, want_h)
+
     def showPopup(self):
         """显示后按最长项设定 popup 宽度。
 
         ★ Qt 的 popup 容器不采用 view.sizeHint() 定宽(实测仍等于 combo 宽),
-        必须显示后直接 setFixedWidth; 每次弹出重算 ⇒ 删除项后自动缩窄。
+        必须显示后直接 setFixedSize。
         """
         super().showPopup()
-        popup = self.view().window()
-        want = max(self.width(), self._longest_item_width() + _HistListView._PAD)
-        if popup is not None and popup.width() != want:
-            popup.setFixedWidth(want)
+        self.fit_popup_now()
 
     def eventFilter(self, obj, ev):
         if obj is self.view().viewport() and ev.type() == QEvent.MouseButtonRelease:
@@ -1243,6 +1261,9 @@ class MainWindow(QMainWindow):
         elif keep == removed_text:
             combo.setCurrentText("")     # 删掉的正是当前值 → 清空
         combo.blockSignals(False)
+        # 下拉正打开 → 立即按剩余项重算尺寸(否则仍显示删除前的大小)
+        if hasattr(combo, "fit_popup_now"):
+            combo.fit_popup_now()
         self.env_status.setText(f"已删除历史记录: {removed_text}")
 
     def _purge_name_history(self, hist_key, value):
