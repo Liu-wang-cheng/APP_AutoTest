@@ -263,16 +263,9 @@ PRECONDITION_TYPES = {
          "hint": "显示在执行结果/报告里"},
         {"key": "steps_yaml", "label": "步骤(YAML)", "default": "", "type": "text_area",
          "hint": "格式与用例步骤相同, 每行一条, 例如:\n- desc: 点击开始清扫\n  click: 开始清扫.png\n- desc: 等待充电\n  assert: 充电中\n  timeout: 0"}]},
-    "text_check": {"label": "自定义(检测文本→执行操作)", "params": [
-        {"key": "name", "label": "前置条件名称", "default": "", "type": "text",
-         "hint": "如: 等待首页加载完成(报告里显示这个名字)"},
-        {"key": "wait_text", "label": "操作: 等待文本出现", "default": "", "type": "text",
-         "hint": "填要等待出现的文字, 如 地图编辑(可留空)"},
-        {"key": "absent_text", "label": "操作: 等待文本消失", "default": "", "type": "text",
-         "hint": "填要等待消失的文字, 如 地图正在加载(可留空)"},
-        {"key": "timeout", "label": "超时(秒)", "default": 60, "type": "int"},
-        {"key": "on_timeout", "label": "超时后操作", "default": "none", "type": "text",
-         "hint": "none=仅报告失败 / back=按返回键 / click:文本=点击该文本"}]},
+    # 注: 原「自定义(检测文本→执行操作)」类型已按用户要求移除 ——
+    # 有「自定义步骤」即可覆盖(等待文本可用 assert/wait_for 步骤表达)。
+    # ensure_text_check 函数保留, 仅用于兼容既有配置。
 }
 
 # 默认前置项(首次使用/未配置时)

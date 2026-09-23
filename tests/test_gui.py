@@ -2643,11 +2643,12 @@ def test_numeric_config_values_do_not_crash(qapp, monkeypatch, tmp_path, fake_se
 
 
 def test_menu_and_checkbox_styles(qapp):
-    """菜单勾选标记要有足够空间(否则被挤压发虚); 勾选框统一透明背景(防闪动)"""
+    """菜单勾选标记交给 Qt 原生绘制; 勾选框统一透明背景(防闪动)"""
     import gui.main_window as mw
-    assert "QMenu::item { padding: 6px 24px 6px 26px;" in mw.STYLESHEET, \
-        "菜单项左侧须留够勾选标记空间(原来 12px 太小会发虚)"
-    # ★ 不能给 QMenu::indicator 指定尺寸(无 image 时会缩放原生勾标 → 模糊)
-    assert "QMenu::indicator { width" not in mw.STYLESHEET,         "不应给菜单勾选标记指定尺寸(会缩放原生图标致模糊)"
+    # ★ 不自定义 QMenu::indicator, 也不改 item 左侧 padding ——
+    #   自定义过反而让原生勾标变形/发虚(用户实测:"用原生的就好")
+    assert "QMenu::indicator" not in mw.STYLESHEET, "不要自定义菜单勾选标记"
+    assert "QMenu::item { padding: 6px 24px 6px 12px;" in mw.STYLESHEET, \
+        "菜单项 padding 保持原值(改动会影响原生勾标)"
     assert "QCheckBox { background: transparent; }" in mw.STYLESHEET, \
         "勾选框必须透明背景, 否则点击时闪动"

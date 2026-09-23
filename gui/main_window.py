@@ -206,11 +206,10 @@ QScrollArea { border: none; background: transparent; }
 QMenu { background: #ffffff; border: 1px solid #e4e8ee; border-radius: 8px; padding: 4px; }
 /* ★ 左侧必须留够勾选标记的空间: 原来只有 12px, 勾被挤压变形发虚(用户实测).
    26px 是「勾选标记 + 间距」的常规宽度; 不自定义 indicator, 交给 Qt 原生绘制 */
-QMenu::item { padding: 6px 24px 6px 26px; border-radius: 5px; }
+QMenu::item { padding: 6px 24px 6px 12px; border-radius: 5px; }
 QMenu::item:selected { background: #eef4ff; color: #2563eb; }
-QMenu::item:checked { font-weight: bold; }
-/* ⚠ 不要给 QMenu::indicator 写 width/height: 未指定 image 时 Qt 会把原生勾选
-   标记缩放到该尺寸 → 发虚(用户实测)。完全交给 Qt 原生绘制。 */
+/* 勾选标记交给 Qt 原生绘制 —— 不要自定义 QMenu::indicator(尺寸/图片)
+   也不要改 item 的左侧 padding, 否则会让原生勾标变形或发虚 */
 QMenu::separator { height: 1px; background: #eef1f5; margin: 4px 8px; }
 
 /* 滚动条:细圆角悬浮式,与浅色主题协调 */
