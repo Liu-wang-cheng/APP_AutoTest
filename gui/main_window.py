@@ -895,6 +895,9 @@ class PreconditionEditDialog(QDialog):
         cancel = QPushButton("取消")
         ok = QPushButton("确定")
         ok.setObjectName("runBtn")
+        for b in (cancel, ok):        # 同上: 防回车/焦点变化误关窗
+            b.setAutoDefault(False)
+            b.setDefault(False)
         cancel.clicked.connect(self.reject)
         ok.clicked.connect(self.accept)
         btns.addStretch(1)
@@ -980,17 +983,26 @@ class PreconditionsDialog(QDialog):
         self.table.setColumnWidth(1, 60)
         self.table.setColumnWidth(2, 60)
         self.table.verticalHeader().setVisible(False)
+        # ★ 禁止选中: 点表格空白/行会高亮成蓝框(用户实测), 这里只用行内控件交互
+        self.table.setSelectionMode(QAbstractItemView.NoSelection)
+        self.table.setFocusPolicy(Qt.NoFocus)
+        self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         v.addWidget(self.table)
 
         row = QHBoxLayout()
-        add_btn = QPushButton("+ 添加前置条件")
+        add_btn = QPushButton("＋ 添加前置条件")
         add_btn.setObjectName("chipBtn")
-        add_btn.clicked.connect(self._add)
+        add_btn.setMenu(self._make_add_menu(add_btn))
         row.addWidget(add_btn)
         row.addStretch(1)
         cancel = QPushButton("取消")
         ok = QPushButton("确定")
         ok.setObjectName("runBtn")
+        # ★ 关掉 autoDefault: 否则对话框里任何回车/焦点变化都会触发确定或取消,
+        #   表现为"点了某项窗口就关了"(用户实测)
+        for b in (cancel, ok):
+            b.setAutoDefault(False)
+            b.setDefault(False)
         cancel.clicked.connect(self.reject)
         ok.clicked.connect(self.accept)
         row.addWidget(cancel)
@@ -1007,9 +1019,11 @@ class PreconditionsDialog(QDialog):
             cb.toggled.connect(lambda on, k=i: self._toggle(k, on))
             self.table.setCellWidget(i, 0, cb)
             eb = QPushButton("编辑")
+            eb.setAutoDefault(False)      # ★ 否则回车/焦点变化会误触发
             eb.clicked.connect(lambda _=False, k=i: self._edit(k))
             self.table.setCellWidget(i, 1, eb)
             db = QPushButton("删除")
+            db.setAutoDefault(False)
             db.clicked.connect(lambda _=False, k=i: self._del(k))
             self.table.setCellWidget(i, 2, db)
 
@@ -1028,8 +1042,28 @@ class PreconditionsDialog(QDialog):
             self.items.pop(idx)
             self._render()
 
-    def _add(self):
-        dlg = PreconditionEditDialog(None, self)
+    def _make_add_menu(self, parent):
+        """添加菜单: 按类型分组列出(与「添加步骤」同风格), 选中即加入列表"""
+        from core.session import PRECONDITION_TYPES
+        menu = QMenu(parent)
+        for t, spec in PRECONDITION_TYPES.items():
+            a = QAction(spec["label"], menu)
+            a.triggered.connect(lambda _=False, k=t: self._add_of_type(k))
+            menu.addAction(a)
+        return menu
+
+    def _add_of_type(self, type_key):
+        """按类型添加: 无参数类型直接加入; 有参数则先弹参数对话框(预选该类型)"""
+        from core.session import PRECONDITION_TYPES
+        spec = PRECONDITION_TYPES.get(type_key) or {}
+        if not spec.get("params"):
+            item = {"type": type_key, "enabled": True}
+            dlg = PreconditionEditDialog(item, self)
+            if dlg.exec() == QDialog.Accepted:
+                self.items.append(dlg.values())
+                self._render()
+            return
+        dlg = PreconditionEditDialog({"type": type_key, "enabled": True}, self)
         if dlg.exec() == QDialog.Accepted:
             self.items.append(dlg.values())
             self._render()
@@ -1340,6 +1374,7 @@ class CaseItemDelegate(QStyledItemDelegate):
 
 
 class MainWindow(QMainWindow):
+    log_signal = Signal(str)      # 后台线程/核心模块的日志 → 运行日志页签
 
     def __init__(self):
         super().__init__()
@@ -1400,8 +1435,36 @@ class MainWindow(QMainWindow):
         self._load_case_into_ui()
         self.render_cards()
         self._fill_env_from_config()
+        self._attach_log_handler()      # core 日志 → 运行日志页签
 
     # ── 顶部工具栏 ──
+    def _attach_log_handler(self):
+        """把 core.logger 的日志转到 GUI「运行日志」页签。
+
+        用户要求: GUI 的运行(设备检测/前置等待)与保存配置等动作也要在界面可见,
+        不能只写进 reports/test.log。
+        """
+        import logging
+        if getattr(self, "_log_handler", None) is not None:
+            return
+        outer = self
+
+        class _GuiLogHandler(logging.Handler):
+            def __init__(self):
+                super().__init__(logging.INFO)
+                self.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s",
+                                                     "%H:%M:%S"))
+
+            def emit(self, record):
+                try:
+                    outer.log_signal.emit(self.format(record))
+                except Exception:
+                    pass
+
+        self._log_handler = _GuiLogHandler()
+        logging.getLogger("vacuum_test").addHandler(self._log_handler)
+        self.log_signal.connect(self.log_view.appendPlainText)
+
     def _build_toolbar(self):
         bar = QWidget()
         lay = QHBoxLayout(bar)

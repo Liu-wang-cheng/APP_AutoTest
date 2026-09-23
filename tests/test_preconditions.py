@@ -14,6 +14,16 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from core import session  # noqa: E402
 
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
+
+@pytest.fixture(scope="module")
+def qapp():
+    pytest.importorskip("PySide6")
+    from PySide6.QtWidgets import QApplication
+    app = QApplication.instance() or QApplication([])
+    yield app
+
 
 class FakeDev:
     """可控设备桩: present 里的文本视为"存在", click/press 记录调用"""
@@ -181,3 +191,64 @@ def test_precondition_types_cover_defaults():
     tc = session.PRECONDITION_TYPES["text_check"]
     keys = [p["key"] for p in tc["params"]]
     assert "name" in keys and "wait_text" in keys and "absent_text" in keys
+
+
+# ── GUI: 前置条件设置对话框(2026-09-23) ──
+
+def test_precondition_dialogs_do_not_auto_close(qapp, monkeypatch, tmp_path):
+    """★ 对话框按钮不得响应回车/焦点变化(autoDefault), 否则点某个勾选框就会关窗"""
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+    from gui import main_window as mw
+    items = [{"type": "restart", "enabled": True},
+             {"type": "battery", "enabled": True, "min_level": 50}]
+    dlg = mw.PreconditionsDialog(items, None)
+    dlg.show()
+    try:
+        qapp.processEvents()
+        for col in (1, 2):            # 编辑/删除按钮
+            b = dlg.table.cellWidget(0, col)
+            assert not b.autoDefault() and not b.isDefault(), \
+                f"表格第{col}列按钮不应是默认按钮"
+        # 点击勾选框 → 对话框必须保持打开
+        cb = dlg.table.cellWidget(0, 0)
+        QTest.mouseClick(cb, Qt.LeftButton)
+        qapp.processEvents()
+        assert dlg.isVisible(), "点击勾选框不应关闭对话框"
+        # 数据随勾选同步
+        assert dlg.items[0]["enabled"] == cb.isChecked()
+    finally:
+        dlg.close()
+    # 编辑对话框同样不能自动关闭
+    from PySide6.QtWidgets import QPushButton
+    ed = mw.PreconditionEditDialog({"type": "battery", "enabled": True,
+                                    "min_level": 50}, None)
+    ed.show()
+    try:
+        qapp.processEvents()
+        btns = [b for b in ed.findChildren(QPushButton) if b.text() in ("确定", "取消")]
+        assert btns, "编辑对话框应有确定/取消按钮"
+        assert all(not b.autoDefault() for b in btns), "编辑对话框按钮不应是默认按钮"
+    finally:
+        ed.close()
+
+
+def test_add_precondition_menu_lists_all_types(qapp, monkeypatch, tmp_path):
+    """「添加前置条件」是下拉菜单, 列出全部可选类型(与添加步骤同风格)"""
+    from PySide6.QtWidgets import QPushButton
+    from gui import main_window as mw
+    items = [{"type": "restart", "enabled": True}]
+    dlg = mw.PreconditionsDialog(items, None)
+    try:
+        btn = next(b for b in dlg.findChildren(QPushButton)
+                   if "添加前置条件" in b.text())
+        menu = btn.menu()
+        assert menu is not None, "添加按钮应带下拉菜单"
+        labels = [a.text() for a in menu.actions()]
+        assert len(labels) == len(session.PRECONDITION_TYPES), \
+            f"菜单应列出全部类型: {labels}"
+        assert any("自定义" in x for x in labels), "应含自定义类型"
+        # 菜单项各自绑定到 _add_of_type(不在此调用 —— 它会弹出模态对话框,
+        # 离屏下 exec() 会阻塞; 对话框行为由 PreconditionEditDialog 的测试覆盖)
+    finally:
+        dlg.close()
