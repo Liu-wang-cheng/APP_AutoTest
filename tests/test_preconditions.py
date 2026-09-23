@@ -369,7 +369,7 @@ def test_add_precondition_opens_edit_dialog(qapp, monkeypatch):
     opened = []
 
     class _FakeEdit:
-        def __init__(self, item=None, parent=None):
+        def __init__(self, item=None, parent=None, app_group=""):
             opened.append(item.get("type") if item else None)
 
         def exec(self):
@@ -403,5 +403,34 @@ def test_steps_dialog_fits_cards(qapp):
         # 字段表单列要能拉伸(否则步骤区被标签列挤窄)
         from PySide6.QtWidgets import QFormLayout
         assert dlg.form.fieldGrowthPolicy() == QFormLayout.AllNonFixedFieldsGrow
+    finally:
+        dlg.close()
+
+
+def test_steps_editor_has_app_group_picker(qapp, monkeypatch, tmp_path):
+    """★ 步骤编辑器要有「APP 组」选择 —— 模板/基准图下拉据此取对应组的模板"""
+    import gui.main_window as mw
+    # 造两个组目录, 各放一张模板
+    root = tmp_path / "Test_cases"
+    for g, tpl in (("组A", "涂鸦_模板A.png"), ("组B", "涂鸦_模板B.png")):
+        tdir = root / g / "templates"
+        tdir.mkdir(parents=True)
+        (tdir / tpl).write_bytes(b"fake")
+    monkeypatch.setattr(mw, "BASE_DIR", str(tmp_path), raising=False)
+
+    dlg = mw.PreconditionEditDialog({"type": "steps", "enabled": True,
+                                     "name": "x", "steps": []}, None,
+                                    app_group="组A")
+    try:
+        ed = dlg._edits["steps_yaml"][0]
+        items = [ed.group_combo.itemText(i) for i in range(ed.group_combo.count())]
+        assert items == ["组A", "组B"], f"组下拉应列出全部组: {items}"
+        assert ed.group_combo.currentText() == "组A"
+        from core import vision
+        assert "模板A.png" in vision.list_templates(), "应取到组A的模板"
+        # 切到组B → 模板上下文跟着换
+        ed.group_combo.setCurrentText("组B")
+        qapp.processEvents()
+        assert "模板B.png" in vision.list_templates(), "切换组后应取组B的模板"
     finally:
         dlg.close()

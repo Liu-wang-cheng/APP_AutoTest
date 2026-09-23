@@ -170,7 +170,8 @@ QFrame#chipStrip { background: #ffffff; border: 1px solid #e4e8ee; border-radius
 /* 步骤卡片内勾选框: 固定透明背景, 防止写盘重绘时闪烁 */
 QFrame#stepCard QCheckBox, QFrame#stepCardOpen QCheckBox,
 QFrame#subStepCard QCheckBox, QFrame#subStepCardOpen QCheckBox { background: transparent; border: none; }
-QCheckBox::indicator { background: transparent; }
+/* ⚠ 不要自定义勾选标记(指示器)的样式 —— 一旦自定义, Qt 就不再绘制原生勾,
+   勾会直接看不见(实测踩过两次)。只让容器透明, 勾完全交给 Qt 原生绘制。 */
 QPushButton#chipBtn {
     background: #f1f5f9; border: 1px solid transparent; border-radius: 12px;
     padding: 3px 12px; color: #475569;
@@ -187,7 +188,8 @@ QListWidget#caseList::item:selected { background: #dbe7fb; color: #1e293b; }
 /* ★ 勾选框统一透明背景: 全局 QWidget 背景规则会让点击时"高亮层 ↔ 控件自绘背景"
    交替重绘 → 勾选时闪动(用例列表踩过一次, 前置条件对话框同样中招) */
 QCheckBox { background: transparent; border: none; }
-QCheckBox::indicator { background: transparent; }
+/* ⚠ 不要自定义勾选标记(指示器)的样式 —— 一旦自定义, Qt 就不再绘制原生勾,
+   勾会直接看不见(实测踩过两次)。只让容器透明, 勾完全交给 Qt 原生绘制。 */
 /* 勾选框用 Qt 原生样式(用户要求;闪动根源是此前的行内控件叠层,已移除) */
 
 QTabWidget::pane { border: 1px solid #e4e8ee; border-radius: 6px; background: #ffffff; top: -1px; }
@@ -970,13 +972,33 @@ class _StepsEditor(QWidget):
     因此动作、参数、else 子步骤等行为完全一致。
     """
 
-    def __init__(self, steps=None, parent=None):
+    def __init__(self, steps=None, parent=None, app_group=""):
         super().__init__(parent)
+        # ★ 设置模板上下文: 否则模板/基准图下拉取不到当前 APP 组的模板
+        if app_group:
+            from core import vision
+            vision.set_template_app_group(app_group)
+        else:
+            from core import vision
+            app_group = vision.current_app_group()
         self.host = _StepsHost(steps)
         self.host.changed.connect(self.render_cards)
         v = QVBoxLayout(self)
         v.setContentsMargins(0, 0, 0, 0)
         v.setSpacing(4)
+
+        # ★ APP 组选择: 模板/基准图下拉按所选组取模板(用户要求)
+        grow = QHBoxLayout()
+        grow.addWidget(QLabel("APP 组"))
+        self.group_combo = QComboBox()
+        self.group_combo.addItems(self._list_groups())
+        if app_group and self.group_combo.findText(app_group) >= 0:
+            self.group_combo.setCurrentText(app_group)
+        self.group_combo.setToolTip("选择 APP 组后, 模板下拉会列出该组的模板")
+        self.group_combo.currentTextChanged.connect(self._on_group_changed)
+        grow.addWidget(self.group_combo)
+        grow.addStretch(1)
+        v.addLayout(grow)
 
         bar = QHBoxLayout()
         add_btn = QPushButton("＋ 添加步骤")
@@ -998,6 +1020,23 @@ class _StepsEditor(QWidget):
         self.cards_lay.addStretch(1)
         scroll.setWidget(inner)
         v.addWidget(scroll, 1)
+        self.render_cards()
+
+    @staticmethod
+    def _list_groups():
+        """Test_cases/ 下的 APP 组目录列表"""
+        try:
+            root = os.path.join(BASE_DIR, "Test_cases")
+            return sorted(d for d in os.listdir(root)
+                          if os.path.isdir(os.path.join(root, d))
+                          and not d.startswith((".", "_")))
+        except Exception:
+            return []
+
+    def _on_group_changed(self, group):
+        """切换 APP 组 → 重设模板上下文并重建卡片(模板下拉随之刷新)"""
+        from core import vision
+        vision.set_template_app_group(group or "")
         self.render_cards()
 
     def add_step(self, key):
@@ -1034,10 +1073,11 @@ class _StepsEditor(QWidget):
 class PreconditionEditDialog(QDialog):
     """新增/编辑单个前置条件: 选类型 + 填参数(按类型动态生成表单)"""
 
-    def __init__(self, item=None, parent=None):
+    def __init__(self, item=None, parent=None, app_group=""):
         super().__init__(parent)
         from core.session import PRECONDITION_TYPES
         self._types = PRECONDITION_TYPES
+        self._app_group = app_group
         self._item = dict(item) if item else None
         self.setWindowTitle("编辑前置条件" if item else "添加前置条件")
         self.setStyleSheet(STYLESHEET)
@@ -1120,7 +1160,7 @@ class PreconditionEditDialog(QDialog):
                 # ★ 卡片式步骤编辑(与用例编辑区同一套组件: 动作菜单/卡片/
                 #   参数表单/else 子步骤), 不再是 YAML 文本框(用户要求)
                 steps = (self._item or {}).get("steps") or []
-                e = _StepsEditor(steps)
+                e = _StepsEditor(steps, app_group=self._app_group)
                 e.setMinimumHeight(260)
                 self.form.addRow(prm["label"], e)
                 self._edits[prm["key"]] = (e, prm)
@@ -1158,9 +1198,10 @@ class PreconditionEditDialog(QDialog):
 class PreconditionsDialog(QDialog):
     """前置条件设置: 勾选启用 / 编辑 / 删除 / 新增(用户要求可编辑可新增)"""
 
-    def __init__(self, items, parent=None):
+    def __init__(self, items, parent=None, app_group=""):
         super().__init__(parent)
         from core.session import _item_label
+        self._app_group = app_group
         self.setWindowTitle("前置条件设置")
         self.resize(560, 380)
         # ★ 对话框不会自动继承主窗口样式表 → 字体/字号不一致, 勾选框发虚
@@ -1245,7 +1286,8 @@ class PreconditionsDialog(QDialog):
                 self.table.blockSignals(False)
 
     def _edit(self, idx):
-        dlg = PreconditionEditDialog(self.items[idx], self)
+        dlg = PreconditionEditDialog(self.items[idx], self,
+                                     app_group=self._app_group)
         if dlg.exec() == QDialog.Accepted:
             self.items[idx] = dlg.values()
             self._render()
@@ -1267,7 +1309,8 @@ class PreconditionsDialog(QDialog):
 
     def _add_of_type(self, type_key):
         """新增前置条件: 弹出编辑框填写名称与参数(用户要求, 不直接默认增加)"""
-        dlg = PreconditionEditDialog({"type": type_key, "enabled": True}, self)
+        dlg = PreconditionEditDialog({"type": type_key, "enabled": True}, self,
+                                     app_group=getattr(self, "_app_group", ""))
         if dlg.exec() == QDialog.Accepted:
             self.items.append(dlg.values())
             self._render()
@@ -2418,6 +2461,12 @@ class MainWindow(QMainWindow):
                 pass
         return items
 
+    def _current_app_group(self):
+        """当前 APP 组 = 正在编辑的用例所在目录名(供模板下拉用)"""
+        if not self.case_path:
+            return ""
+        return os.path.basename(os.path.dirname(os.path.abspath(self.case_path)))
+
     def _pre_label(self, item):
         from core.session import _item_label
         return _item_label(item)
@@ -2443,7 +2492,8 @@ class MainWindow(QMainWindow):
 
     def on_edit_preconditions(self):
         """打开设置对话框: 增删改前置条件并写回 config"""
-        dlg = PreconditionsDialog(self.preconditions, self)
+        dlg = PreconditionsDialog(self.preconditions, self,
+                                  app_group=self._current_app_group())
         if dlg.exec() != QDialog.Accepted:
             return
         self.preconditions = dlg.values()

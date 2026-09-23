@@ -2652,5 +2652,6 @@ def test_menu_and_checkbox_styles(qapp):
         "菜单项 padding 保持原值(改动会影响原生勾标)"
     assert "QCheckBox { background: transparent;" in mw.STYLESHEET, \
         "勾选框必须透明背景, 否则点击时闪动"
-    assert "QCheckBox::indicator { background: transparent; }" in mw.STYLESHEET, \
-        "勾选标记本身也要透明背景"
+    # ★ 绝不能给 QCheckBox::indicator 设样式: 会让 Qt 不再绘制原生勾(勾会消失)
+    assert "QCheckBox::indicator" not in mw.STYLESHEET, \
+        "不要自定义勾选标记(indicator), 否则勾不显示"
