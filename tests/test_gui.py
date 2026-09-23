@@ -2702,3 +2702,27 @@ def test_log_view_wraps_and_no_duplicate_handler(qapp, monkeypatch, tmp_path):
         assert "addHandler" not in src, "RunWorker 不应挂日志 handler(会重复)"
     finally:
         w.close()
+
+
+def test_ui_hints_also_go_to_run_log(qapp, monkeypatch, tmp_path):
+    """★ 界面提示(保存配置/APP检测/删除等)必须同时进运行日志(用户反馈看不到)"""
+    import gui.main_window as mw
+    monkeypatch.setattr(mw, "CASES_DIR", str(tmp_path / "Test_cases"), raising=False)
+    monkeypatch.setattr(mw, "CONFIG_PATH", str(tmp_path / "config.yaml"), raising=False)
+    monkeypatch.setattr(mw, "load_config", lambda: {"app": {}, "device": {}}, raising=False)
+    monkeypatch.setattr(mw, "update_config", lambda d: None, raising=False)
+    w = mw.MainWindow()
+    try:
+        w.log_view.clear()
+        w._set_status("配置已保存: app.name = 涂鸦智能")
+        qapp.processEvents()
+        assert w.env_status.text() == "配置已保存: app.name = 涂鸦智能", "界面提示要更新"
+        assert "配置已保存: app.name = 涂鸦智能" in w.log_view.toPlainText(), \
+            "同一句提示也要出现在运行日志"
+        # 保存配置的真实入口 → 走 _set_status
+        w.app_name_edit.setCurrentText("新名字")
+        w._save_env_field_of(w.app_name_edit)
+        qapp.processEvents()
+        assert "配置已保存" in w.log_view.toPlainText(), "保存配置应进日志"
+    finally:
+        w.close()

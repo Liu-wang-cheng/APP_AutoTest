@@ -1691,6 +1691,16 @@ class MainWindow(QMainWindow):
         self._attach_log_handler()      # core 日志 → 运行日志页签
 
     # ── 顶部工具栏 ──
+    def _set_status(self, msg, label=None):
+        """同时更新界面提示并写运行日志。
+
+        ★ 用户反馈: 保存配置 / APP 检测这类提示原来只 setText 到界面, 不走
+        logging → 运行日志里看不到。统一走这里, 界面与日志都有。
+        """
+        (label or self.env_status).setText(msg)
+        if msg:
+            log.info(msg)
+
     def _attach_log_handler(self):
         """把 core.logger 的日志转到 GUI「运行日志」页签。
 
@@ -1825,7 +1835,7 @@ class MainWindow(QMainWindow):
         combo.blockSignals(False)
         # ★ 信号屏蔽期间宽度不重算, 这里补一次(删除后内容可能变化)
         self._refresh_name_tip(combo)
-        self.env_status.setText(f"已删除历史记录: {removed_text}")
+        self._set_status(f"已删除历史记录: {removed_text}")
 
     def _reload_name_combo(self, combo):
         """按最新历史重载下拉项(保留当前输入), 并同步宽度"""
@@ -1893,7 +1903,7 @@ class MainWindow(QMainWindow):
             return
         try:
             update_config({key: value})
-            self.env_status.setText(f"配置已保存: {key} = {value}")
+            self._set_status(f"配置已保存: {key} = {value}")
         except Exception as e:
             QMessageBox.critical(self, "保存配置失败", str(e))
             return
@@ -1976,7 +1986,7 @@ class MainWindow(QMainWindow):
         self.device_combo.clear()
         self.device_combo.addItem("正在检测设备...", None)
         self.device_combo.blockSignals(False)
-        self.env_status.setText("正在检测设备...")
+        self._set_status("正在检测设备...")
         try:
             cfg = load_config()
         except Exception:
@@ -1990,7 +2000,7 @@ class MainWindow(QMainWindow):
         self.device_combo.blockSignals(True)
         self.device_combo.clear()
         if err:
-            self.env_status.setText(f"adb 检测失败: {err}")
+            self._set_status(f"adb 检测失败: {err}")
         elif devices:
             self.env_status.setText("")
         if not devices:
@@ -2223,7 +2233,7 @@ class MainWindow(QMainWindow):
                     os.path.abspath(self.case_path))) == group):
                 self._unload_case()
             self._fill_case_list()
-            self.status_label.setText(f"已删除组: {group}")
+            self._set_status(f"已删除组: {group}")
             return
         # ── 删除单个用例 ──
         if not os.path.isfile(path):
@@ -2238,7 +2248,7 @@ class MainWindow(QMainWindow):
         if self.case_path == path:
             self._unload_case()
         self._fill_case_list()
-        self.status_label.setText(f"已删除用例: {name}")
+        self._set_status(f"已删除用例: {name}")
 
     def set_case_state(self, path, state):
         """设置用例执行状态灯:未执行置灰,执行中黄,通过绿,失败红。
@@ -2283,7 +2293,7 @@ class MainWindow(QMainWindow):
         try:
             for n, p in enumerate(paths, 1):
                 self._write_case_order(p, n)
-            self.status_label.setText("已保存执行顺序到用例文件(case_order)")
+            self._set_status("已保存执行顺序到用例文件(case_order)")
             self.log_view.appendPlainText(
                 "[排序] " + " → ".join(os.path.splitext(os.path.basename(p))[0]
                                        for p in paths))
@@ -2383,7 +2393,7 @@ class MainWindow(QMainWindow):
             return
         try:
             update_config({key: value})
-            self.env_status.setText(f"配置已保存: {key} = {value}")
+            self._set_status(f"配置已保存: {key} = {value}")
         except Exception as e:
             QMessageBox.critical(self, "保存配置失败", str(e))
 
@@ -2399,7 +2409,7 @@ class MainWindow(QMainWindow):
             return
         # ★ 不用全局转圈光标: 模态弹窗(选择/告警)叠加 override 栈不平衡时
         #   会残留转圈(用户实测: APP 未安装时鼠标一直转); 改为按钮禁用+状态提示
-        self.env_status.setText("检测中...")
+        self._set_status("检测中...")
         self.detect_btn.setEnabled(False)
         self.detect_btn.setText("检测中…")
         try:
@@ -2427,7 +2437,7 @@ class MainWindow(QMainWindow):
             # ★ 检测成功才记历史(用户要求), 并刷新下拉
             self._push_name_history("hist/app_name", app_name)
             self._reload_name_combo(self.app_name_edit)
-            self.env_status.setText(
+            self._set_status(
                 f"检测结果: {package} → {activity or '启动页未识别'}(已写入配置)")
         except Exception as e:
             QMessageBox.critical(self, "检测失败", f"{type(e).__name__}: {e}")
