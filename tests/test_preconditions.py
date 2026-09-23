@@ -312,41 +312,71 @@ def test_precondition_steps_empty_is_skipped(monkeypatch):
     assert res[0]["ok"] is True
 
 
-def test_steps_field_yaml_roundtrip_in_dialog(qapp):
-    """对话框里写步骤 YAML → 解析成 steps 列表; 再编辑能回填不丢"""
+def test_steps_editor_is_card_based(qapp):
+    """★ steps 类型用「卡片式步骤编辑器」(与用例编辑同一套组件), 不是 YAML 文本框"""
     from gui import main_window as mw
-    dlg = mw.PreconditionEditDialog({"type": "steps", "enabled": True,
-                                     "name": "前置准备"}, None)
+    dlg = mw.PreconditionEditDialog(
+        {"type": "steps", "enabled": True, "name": "前置准备",
+         "steps": [{"desc": "点击开始清扫", "click": "开始清扫.png"}]}, None)
     try:
-        assert dlg.type_combo.currentData() == "steps"
         ed = dlg._edits["steps_yaml"][0]
-        ed.setPlainText("- desc: 点击开始清扫\n  click: 开始清扫.png\n"
-                        "- desc: 等待充电\n  assert: 充电中\n  timeout: 0")
+        assert isinstance(ed, mw._StepsEditor), "应为卡片式编辑器"
+        assert len(ed.steps()) == 1, "已有步骤应回填"
+        # 添加步骤(与用例编辑相同的入口)
+        ed.add_step("back")
+        ed.add_step("__wait")
+        assert len(ed.steps()) == 3
+        # 卡片已渲染(StepCard), 且末步自动展开
+        cards = [ed.cards_lay.itemAt(i).widget() for i in range(ed.cards_lay.count())]
+        cards = [c for c in cards if isinstance(c, mw.StepCard)]
+        assert len(cards) == 3, f"应渲染 3 张卡片, 实际 {len(cards)}"
+        # 移动/删除(与用例编辑同名同义)
+        ed.host.move_step(0, 1)
+        assert ed.steps()[1]["desc"] == "点击开始清扫"
+        ed.host.del_step(0)
+        assert len(ed.steps()) == 2
+        # 取值写回
         v = dlg.values()
         assert v["type"] == "steps" and len(v["steps"]) == 2
-        assert v["steps"][1]["assert"] == "充电中" and v["steps"][1]["timeout"] == 0
     finally:
         dlg.close()
-    # 编辑已有项 → YAML 文本自动回填
-    dlg2 = mw.PreconditionEditDialog(
-        {"type": "steps", "enabled": True, "name": "x",
-         "steps": [{"desc": "a", "click": "b"}]}, None)
-    try:
-        assert "click: b" in dlg2._edits["steps_yaml"][0].toPlainText()
-    finally:
-        dlg2.close()
 
 
-def test_steps_field_rejects_bad_yaml(qapp):
-    """步骤 YAML 写错 → values() 抛 ValueError(对话框会提示而不是崩溃)"""
+def test_steps_editor_supports_else_substeps(qapp):
+    """★ 前置条件的步骤编辑也要支持 else 子步骤(与用例编辑一致, 用户要求)"""
     from gui import main_window as mw
     dlg = mw.PreconditionEditDialog({"type": "steps", "enabled": True}, None)
     try:
-        dlg._edits["steps_yaml"][0].setPlainText("这不是: [合法")
-        with pytest.raises(ValueError):
-            dlg.values()
-        dlg._edits["steps_yaml"][0].setPlainText("desc: 不是列表")
-        with pytest.raises(ValueError):
-            dlg.values()
+        ed = dlg._edits["steps_yaml"][0]
+        ed.add_step("if")                      # 条件动作
+        ed.host.steps[0]["if"] = "充电中"
+        ed.host.add_sub(0, "click")            # 添加子步骤
+        ed.host.steps[0]["else"][0]["click"] = "确认"
+        cards = [ed.cards_lay.itemAt(i).widget() for i in range(ed.cards_lay.count())]
+        cards = [c for c in cards if isinstance(c, mw.StepCard)]
+        assert len(cards) == 2, "父卡片 + else 子卡片"
+        v = dlg.values()
+        assert v["steps"][0]["if"] == "充电中"
+        assert v["steps"][0]["else"][0]["click"] == "确认", "else 子步骤应保留"
     finally:
         dlg.close()
+
+
+def test_add_precondition_opens_edit_dialog(qapp, monkeypatch):
+    """新增前置条件应弹出编辑框(用户要求), 而不是直接用默认值加进列表"""
+    from gui import main_window as mw
+    dlg = mw.PreconditionsDialog([{"type": "restart", "enabled": True}], None)
+    opened = []
+
+    class _FakeEdit:
+        def __init__(self, item=None, parent=None):
+            opened.append(item.get("type") if item else None)
+
+        def exec(self):
+            return 0            # 取消 → 不应加入列表
+
+    monkeypatch.setattr(mw, "PreconditionEditDialog", _FakeEdit)
+    before = len(dlg.items)
+    dlg._add_of_type("battery")
+    assert opened == ["battery"], "应弹出编辑框且预选该类型"
+    assert len(dlg.items) == before, "取消后不应加入列表"

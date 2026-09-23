@@ -12,8 +12,8 @@ import re
 import time
 
 import yaml
-from PySide6.QtCore import (QEvent, QPoint, QRect, QSettings, QSize, Qt, QThread,
-                            QTimer, Signal)
+from PySide6.QtCore import (QEvent, QObject, QPoint, QRect, QSettings, QSize, Qt,
+                            QThread, QTimer, Signal)
 from PySide6.QtGui import (QAction, QColor, QDoubleValidator, QFontMetrics,
                            QIcon, QIntValidator, QPainter, QPixmap)
 from PySide6.QtWidgets import (
@@ -876,6 +876,159 @@ class DeviceScanThread(QThread):
         self.done.emit(devices, "")
 
 
+class _StepsHost(QObject):
+    """前置条件里「步骤编辑」的迷你宿主 —— 让 StepCard 等用例编辑组件原样复用。
+
+    StepCard 只依赖宿主这组接口(steps / expanded_key / _find_action /
+    expand_card / move_* / dup_* / del_* / add_sub / on_card_edited),
+    这里全部实现; 渲染由 _StepsEditor 负责(逻辑与 MainWindow.render_cards 一致,
+    含 else 子步骤), 所以前置条件的步骤编辑与用例编辑功能完全相同。
+    """
+
+    changed = Signal()
+
+    def __init__(self, steps=None):
+        super().__init__()
+        self.steps = [dict(x) for x in (steps or [])]
+        self.expanded_key = None
+
+    @staticmethod
+    def _find_action(step):
+        for key in step:
+            if key in schema.ACTION_BY_KEY:
+                return schema.ACTION_BY_KEY[key]
+        return None
+
+    def expand_card(self, key):
+        self.expanded_key = key
+        self.changed.emit()
+
+    def on_card_edited(self):
+        self.changed.emit()
+
+    # ── 与 MainWindow 同名同义的操作 ──
+    def move_step(self, index, delta):
+        j = index + delta
+        if 0 <= index < len(self.steps) and 0 <= j < len(self.steps):
+            self.steps[index], self.steps[j] = self.steps[j], self.steps[index]
+            self.expanded_key = (j,)
+            self.changed.emit()
+
+    def dup_step(self, index):
+        if 0 <= index < len(self.steps):
+            self.steps.insert(index + 1, copy.deepcopy(self.steps[index]))
+            self.expanded_key = (index + 1,)
+            self.changed.emit()
+
+    def del_step(self, index):
+        if 0 <= index < len(self.steps):
+            self.steps.pop(index)
+            self.expanded_key = None
+            self.changed.emit()
+
+    def add_sub(self, parent_index, action_key):
+        if not (0 <= parent_index < len(self.steps)):
+            return
+        if action_key == "__wait":
+            sub = {"desc": "延时等待", "wait": 10}
+        else:
+            sub = schema.new_step(action_key)
+        subs = self.steps[parent_index].setdefault("else", [])
+        subs.append(sub)
+        self.expanded_key = (parent_index, len(subs) - 1)
+        self.changed.emit()
+
+    def move_sub(self, parent_index, sub_index, delta):
+        subs = self.steps[parent_index].get("else") or []
+        j = sub_index + delta
+        if 0 <= sub_index < len(subs) and 0 <= j < len(subs):
+            subs[sub_index], subs[j] = subs[j], subs[sub_index]
+            self.expanded_key = (parent_index, j)
+            self.changed.emit()
+
+    def dup_sub(self, parent_index, sub_index):
+        subs = self.steps[parent_index].get("else") or []
+        if 0 <= sub_index < len(subs):
+            subs.insert(sub_index + 1, copy.deepcopy(subs[sub_index]))
+            self.expanded_key = (parent_index, sub_index + 1)
+            self.changed.emit()
+
+    def del_sub(self, parent_index, sub_index):
+        subs = self.steps[parent_index].get("else") or []
+        if 0 <= sub_index < len(subs):
+            subs.pop(sub_index)
+            self.expanded_key = ((parent_index,) if subs else None)
+            self.changed.emit()
+
+
+class _StepsEditor(QWidget):
+    """卡片式步骤编辑(前置条件用): 「＋添加步骤」分类菜单 + 步骤卡片(可展开改参数)。
+
+    与用例编辑区共用 StepCard / make_action_menu / _make_field_widget,
+    因此动作、参数、else 子步骤等行为完全一致。
+    """
+
+    def __init__(self, steps=None, parent=None):
+        super().__init__(parent)
+        self.host = _StepsHost(steps)
+        self.host.changed.connect(self.render_cards)
+        v = QVBoxLayout(self)
+        v.setContentsMargins(0, 0, 0, 0)
+        v.setSpacing(4)
+
+        bar = QHBoxLayout()
+        add_btn = QPushButton("＋ 添加步骤")
+        add_btn.setObjectName("chipBtn")
+        add_btn.setMenu(make_action_menu(add_btn, self.add_step))
+        bar.addWidget(add_btn)
+        bar.addStretch(1)
+        self.count_label = QLabel("")
+        self.count_label.setStyleSheet("color:#94a3b8;")
+        bar.addWidget(self.count_label)
+        v.addLayout(bar)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        inner = QWidget()
+        self.cards_lay = QVBoxLayout(inner)
+        self.cards_lay.setContentsMargins(2, 2, 2, 2)
+        self.cards_lay.setSpacing(4)
+        self.cards_lay.addStretch(1)
+        scroll.setWidget(inner)
+        v.addWidget(scroll, 1)
+        self.render_cards()
+
+    def add_step(self, key):
+        if key == "__wait":
+            self.host.steps.append({"desc": "延时等待", "wait": 10})
+        else:
+            self.host.steps.append(schema.new_step(key))
+        self.host.expanded_key = (len(self.host.steps) - 1,)
+        self.render_cards()
+
+    def steps(self):
+        return self.host.steps
+
+    def render_cards(self):
+        """与 MainWindow.render_cards 同逻辑(含 else 子步骤缩进卡片)"""
+        while self.cards_lay.count() > 1:      # 末尾 stretch 保留
+            item = self.cards_lay.takeAt(0)
+            if item.widget():
+                item.widget().hide()
+                item.widget().deleteLater()
+        for i in range(len(self.host.steps)):
+            self.cards_lay.insertWidget(self.cards_lay.count() - 1,
+                                        StepCard(self.host, i))
+            ek = self.host.expanded_key
+            step = self.host.steps[i]
+            if ek and ek[0] == i and isinstance(step.get("else"), list):
+                for j in range(len(step["else"])):
+                    self.cards_lay.insertWidget(
+                        self.cards_lay.count() - 1,
+                        StepCard(self.host, i, parent_index=i, sub_index=j))
+        self.count_label.setText(f"共 {len(self.host.steps)} 步")
+
+
 class PreconditionEditDialog(QDialog):
     """新增/编辑单个前置条件: 选类型 + 填参数(按类型动态生成表单)"""
 
@@ -954,17 +1107,11 @@ class PreconditionEditDialog(QDialog):
         for prm in spec.get("params", []):
             cur = (self._item or {}).get(prm["key"], prm.get("default"))
             if prm["type"] == "text_area":
-                # 多行编辑(前置条件的「自定义步骤」用: 直接写用例步骤 YAML)
-                e = QPlainTextEdit()
-                e.setPlaceholderText(prm.get("hint") or "")
-                e.setMinimumHeight(140)
-                text = cur if isinstance(cur, str) else ""
-                if not text and self._item and self._item.get("steps"):
-                    # 编辑已有项: 把步骤列表 dump 成 YAML 文本回填
-                    import yaml as _y
-                    text = _y.safe_dump(self._item["steps"], allow_unicode=True,
-                                        sort_keys=False)
-                e.setPlainText(text)
+                # ★ 卡片式步骤编辑(与用例编辑区同一套组件: 动作菜单/卡片/
+                #   参数表单/else 子步骤), 不再是 YAML 文本框(用户要求)
+                steps = (self._item or {}).get("steps") or []
+                e = _StepsEditor(steps)
+                e.setMinimumHeight(260)
                 self.form.addRow(prm["label"], e)
                 self._edits[prm["key"]] = (e, prm)
                 continue
@@ -982,18 +1129,9 @@ class PreconditionEditDialog(QDialog):
             item["enabled"] = bool(self._item.get("enabled", True))
         for k, (e, prm) in self._edits.items():
             if prm["type"] == "text_area":
-                raw = e.toPlainText().strip()
-                if not raw:
-                    continue
-                import yaml as _y
-                try:
-                    parsed = _y.safe_load(raw)
-                except Exception as ex:
-                    raise ValueError(f"步骤 YAML 解析失败: {ex}") from None
-                if not isinstance(parsed, list):
-                    raise ValueError("步骤必须是列表(每行以 - 开头)")
-                item["steps"] = parsed
-                item["steps_yaml"] = raw          # 留一份原文, 再次编辑不丢排版
+                parsed = e.steps() if hasattr(e, "steps") else []
+                if parsed:
+                    item["steps"] = [dict(x) for x in parsed]
                 continue
             txt = e.text().strip()
             if prm["type"] == "int":
@@ -1117,21 +1255,12 @@ class PreconditionsDialog(QDialog):
         return menu
 
     def _add_of_type(self, type_key):
-        """点菜单即添加(与「添加步骤」一致): 用该类型的默认参数直接入列表,
-        之后在列表里点「编辑」改参数 —— 不做"每次都要填表"的拦路对话框。"""
-        from core.session import PRECONDITION_TYPES
-        spec = PRECONDITION_TYPES.get(type_key) or {}
-        item = {"type": type_key, "enabled": True}
-        for prm in spec.get("params", []):
-            d = prm.get("default")
-            if d not in (None, ""):
-                item[prm["key"]] = d
-        self.items.append(item)
-        self._render()
-        # 新增行滚动可见, 并提示下一步(自定义类型需要填参数)
-        self.table.scrollToBottom()
-        if type_key == "text_check":
-            self._hint_label.setText("已添加自定义前置条件 —— 点「编辑」填写名称与操作内容")
+        """新增前置条件: 弹出编辑框填写名称与参数(用户要求, 不直接默认增加)"""
+        dlg = PreconditionEditDialog({"type": type_key, "enabled": True}, self)
+        if dlg.exec() == QDialog.Accepted:
+            self.items.append(dlg.values())
+            self._render()
+            self.table.scrollToBottom()
 
     def values(self):
         return self.items
