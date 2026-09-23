@@ -7,3 +7,4 @@ Test_img/screenshots/
 .pytest_cache/
 *.bak*
 .DS_Store
+  - tools/_dbg_combo.py
