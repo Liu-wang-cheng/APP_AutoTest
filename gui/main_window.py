@@ -1334,9 +1334,9 @@ class NewCaseDialog(QDialog):
         v.addWidget(QLabel("APP 用例组"))
         self.group_combo = _FitCombo()      # 组名长时也能看全
         self.group_combo.setEditable(True)
-        self.group_combo.addItems(groups or [])
         self.group_combo.lineEdit().setPlaceholderText("选择现有组或输入新组名")
         if groups:
+            # ⚠ 只在此处 addItems 一次 —— 上面再来一次会导致下拉里组名重复
             self.group_combo.addItems(groups)
             self.group_combo.currentTextChanged.connect(
                 lambda _t, c=self.group_combo: c.fit_width_to_items())

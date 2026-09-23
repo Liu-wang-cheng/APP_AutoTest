@@ -417,6 +417,10 @@ def test_steps_editor_has_app_group_picker(qapp, monkeypatch, tmp_path):
         tdir.mkdir(parents=True)
         (tdir / tpl).write_bytes(b"fake")
     monkeypatch.setattr(mw, "BASE_DIR", str(tmp_path), raising=False)
+    from core import vision as _vision
+    monkeypatch.setattr(_vision, "BASE_DIR", str(tmp_path), raising=False)
+    # 前缀从 config 读; 这里直接固定, 否则读不到(测试目录没有 config)
+    monkeypatch.setattr(_vision, "_template_prefix", lambda: "涂鸦", raising=False)
 
     dlg = mw.PreconditionEditDialog({"type": "steps", "enabled": True,
                                      "name": "x", "steps": []}, None,
