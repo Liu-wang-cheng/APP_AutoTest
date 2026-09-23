@@ -1331,6 +1331,8 @@ class MainWindow(QMainWindow):
             w.addItems(self._load_name_history(hist_key))
             w.setCurrentText(txt)
             w.blockSignals(False)
+            if hasattr(w, "fit_popup_now"):     # 新增项后同步尺寸(与删除对称)
+                w.fit_popup_now()
 
     def _build_env_strip(self):
         """环境配置条(流式布局,窗口窄时自动换行): 设备优先,其次测试APP"""
