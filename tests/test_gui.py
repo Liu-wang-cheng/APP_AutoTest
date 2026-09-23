@@ -2297,7 +2297,8 @@ def test_history_popup_width_adapts_and_recomputes(qapp, monkeypatch, tmp_path, 
         # ★ 断言 popup 实际宽度(Qt 不采用 view.sizeHint, 靠 showPopup 后强制设定)
         assert popup.width() >= longest + 40, \
             f"popup 宽应容纳最长项: {popup.width()} < {longest + 40}"
-        assert popup.width() > combo.width(), "popup 可比输入框宽(内容驱动)"
+        # ★ 新语义: popup 与输入框**等宽**(用户要求两者长度一致)
+        assert popup.width() == combo.width(),             f"popup 应与输入框等宽: {popup.width()} vs {combo.width()}"
         # 删掉最长项 → 重弹应变窄(用户反馈的核心)
         wide = popup.width()
         rect = view.visualRect(combo.model().index(2, 0))
@@ -2530,5 +2531,43 @@ def test_app_history_only_on_detect_success(qapp, monkeypatch, tmp_path, fake_se
         w._save_env_field_of(w.device_name_edit)
         qapp.processEvents()
         assert "SE3L" in (fake_settings.store.get("hist/device_name") or []),             "设备名称仍应编辑即记历史"
+    finally:
+        w.close()
+
+
+def test_both_name_combos_popup_equal_width(qapp, monkeypatch, tmp_path, fake_settings):
+    """★ 测试APP 与 设备名称两个框: 历史下拉与输入框**等宽**(用户要求);
+    删除一条后仍等宽(此前删除后输入框缩短而列表仍宽 → 一长一短)"""
+    from PySide6.QtCore import Qt, QPoint
+    from PySide6.QtTest import QTest
+    import gui.main_window as mw
+    monkeypatch.setattr(mw, "CASES_DIR", str(tmp_path / "Test_cases"), raising=False)
+    monkeypatch.setattr(mw, "CONFIG_PATH", str(tmp_path / "config.yaml"), raising=False)
+    monkeypatch.setattr(mw, "load_config", lambda: {"app": {}, "device": {}}, raising=False)
+    monkeypatch.setattr(mw, "update_config", lambda d: None, raising=False)
+    fake_settings.store["hist/app_name"] = ["涂鸦智能", "SmartThings"]
+    fake_settings.store["hist/device_name"] = ["SE3L", "L10"]
+    w = mw.MainWindow()
+    w.resize(1100, 400)
+    w.show()
+    try:
+        qapp.processEvents()
+        for label, combo in (("测试APP", w.app_name_edit), ("设备名称", w.device_name_edit)):
+            combo.showPopup()
+            qapp.processEvents()
+            popup = combo.view().window()
+            assert popup.width() == combo.width(), \
+                f"{label}: popup 应与输入框等宽 {popup.width()} vs {combo.width()}"
+            # 删除一条后仍等宽
+            view = combo.view()
+            rect = view.visualRect(combo.model().index(1, 0))
+            QTest.mouseClick(view.viewport(), Qt.LeftButton,
+                             pos=QPoint(rect.right() - 6, rect.center().y()))
+            qapp.processEvents()
+            assert combo.count() == 1, f"{label}: 应删掉一条"
+            assert combo.view().window().width() == combo.width(), \
+                f"{label}: 删除后仍应等宽 {combo.view().window().width()} vs {combo.width()}"
+            combo.hidePopup()
+            qapp.processEvents()
     finally:
         w.close()

@@ -958,9 +958,15 @@ class _FitCombo(QComboBox):
                     for i in range(self.count())] or [0])
 
     def fit_width(self):
-        """宽度随「当前值」自适应(输入型下拉: 测试APP/设备名称)"""
+        """宽度 = max(当前值, 最长项) —— 输入型下拉(测试APP/设备名称)。
+
+        ★ 取最长项: 这样输入框与弹出的历史列表**等宽**, 且长条目也能显示完整
+        (用户要求: 两者长度一致; 之前按当前值算, 删除后输入框缩短而列表仍宽,
+        出现"一个长一个短")
+        """
         fm = self._font_metrics()
-        w = fm.horizontalAdvance(self.currentText()) + 60
+        w = max(fm.horizontalAdvance(self.currentText()),
+                self.longest_item_width()) + 60
         self.setFixedWidth(max(70, min(w, 420)))
 
     def fit_width_to_items(self):
@@ -997,7 +1003,7 @@ class _FitCombo(QComboBox):
         popup = self.view().window()
         if popup is None or not popup.isVisible():
             return
-        want_w = max(self.width(), self.longest_item_width() + self._POPUP_PAD)
+        want_w = self.width()      # ★ 与输入框等宽(用户要求两者长度一致)
         # 高度也要重设: popup 打开期间 Qt 不会按新项数重算 → 删除后底部多一行空白
         rows = self.count()
         want_h = (self._row_height() * rows + 2 * self.view().frameWidth()) if rows else 30
