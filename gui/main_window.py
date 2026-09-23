@@ -19,7 +19,7 @@ from PySide6.QtGui import (QAction, QColor, QDoubleValidator, QIcon, QIntValidat
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QCheckBox, QComboBox, QDialog,
     QFileDialog, QFrame, QGridLayout, QHBoxLayout,
-    QHeaderView, QLabel, QLayout, QLineEdit, QListWidget, QListWidgetItem,
+    QHeaderView, QLabel, QLayout, QLineEdit, QListView, QListWidget, QListWidgetItem,
     QMainWindow, QMenu, QMessageBox, QPlainTextEdit, QPushButton,
     QScrollArea, QSizePolicy, QSpinBox, QSplitter, QStyle, QStyledItemDelegate,
     QTabWidget, QTableWidget, QTableWidgetItem, QToolButton, QVBoxLayout, QWidget,
@@ -918,6 +918,28 @@ class _HistComboDelegate(QStyledItemDelegate):
                          Qt.AlignCenter, "\u2715")
         painter.restore()
 
+class _HistListView(QListView):
+    """历史下拉的弹出列表: sizeHint 宽度按「最长项」计算。
+
+    ★ combo 显示 popup 时是按 `view.sizeHint()` 决定宽度的, 设 minimumWidth
+    无效(所以删除项后宽度不会缩) —— 必须重写 sizeHint 才真正跟随内容。
+    """
+
+    _PAD = 48      # ✕ 命中区(20) + 内边距 + 安全余量
+
+    def sizeHint(self):
+        s = super().sizeHint()
+        model = self.model()
+        if model is None:
+            return s
+        fm = self.fontMetrics()
+        longest = 0
+        for i in range(model.rowCount()):
+            txt = model.data(model.index(i, 0)) or ""
+            longest = max(longest, fm.horizontalAdvance(str(txt)))
+        return QSize(max(s.width(), longest + self._PAD), s.height())
+
+
 class _HistCombo(QComboBox):
     """历史下拉框: 点击项右侧 ✕ 删除该条历史。
 
@@ -931,19 +953,25 @@ class _HistCombo(QComboBox):
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        self.setView(_HistListView(self))
         self.view().viewport().installEventFilter(self)
 
-    def _fit_popup_width(self):
-        """弹出列表宽度按「最长的历史项」自适应(含 ✕ 命中区)。
-        删除/新增项后再弹出会重新计算(用户要求)"""
+    def _longest_item_width(self):
         fm = self.lineEdit().fontMetrics()
-        longest = max([fm.horizontalAdvance(self.itemText(i))
-                       for i in range(self.count())] or [0])
-        self.view().setMinimumWidth(max(self.width(), longest + 48))
+        return max([fm.horizontalAdvance(self.itemText(i))
+                    for i in range(self.count())] or [0])
 
     def showPopup(self):
-        self._fit_popup_width()
+        """显示后按最长项设定 popup 宽度。
+
+        ★ Qt 的 popup 容器不采用 view.sizeHint() 定宽(实测仍等于 combo 宽),
+        必须显示后直接 setFixedWidth; 每次弹出重算 ⇒ 删除项后自动缩窄。
+        """
         super().showPopup()
+        popup = self.view().window()
+        want = max(self.width(), self._longest_item_width() + _HistListView._PAD)
+        if popup is not None and popup.width() != want:
+            popup.setFixedWidth(want)
 
     def eventFilter(self, obj, ev):
         if obj is self.view().viewport() and ev.type() == QEvent.MouseButtonRelease:

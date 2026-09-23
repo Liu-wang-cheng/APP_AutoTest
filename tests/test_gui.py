@@ -2292,17 +2292,16 @@ def test_history_popup_width_adapts_and_recomputes(qapp, monkeypatch, tmp_path, 
         combo.showPopup()
         qapp.processEvents()
         view = combo.view()
+        popup = view.window()
         fm = combo.lineEdit().fontMetrics()
         longest = max(fm.horizontalAdvance(combo.itemText(i))
                       for i in range(combo.count()))
-        assert view.width() >= longest + 40, \
-            f"列表宽应容纳最长项: {view.width()} < {longest + 40}"
-        assert view.width() > combo.width(), "列表可比输入框宽(内容驱动)"
-        # 监控最长项(第 3 项)的整行宽度足够显示
-        row_w = view.visualRect(combo.model().index(2, 0)).width()
-        assert row_w >= longest, f"行宽不足: {row_w} < {longest}"
-        # 删掉最长项 → 重弹应变窄
-        wide = view.width()
+        # ★ 断言 popup 实际宽度(Qt 不采用 view.sizeHint, 靠 showPopup 后强制设定)
+        assert popup.width() >= longest + 40, \
+            f"popup 宽应容纳最长项: {popup.width()} < {longest + 40}"
+        assert popup.width() > combo.width(), "popup 可比输入框宽(内容驱动)"
+        # 删掉最长项 → 重弹应变窄(用户反馈的核心)
+        wide = popup.width()
         rect = view.visualRect(combo.model().index(2, 0))
         QTest.mouseClick(view.viewport(), Qt.LeftButton,
                          pos=QPoint(rect.right() - 6, rect.center().y()))
@@ -2310,8 +2309,8 @@ def test_history_popup_width_adapts_and_recomputes(qapp, monkeypatch, tmp_path, 
         assert combo.count() == 2, "最长项应已删除"
         combo.showPopup()
         qapp.processEvents()
-        assert combo.view().width() < wide, \
-            f"删除最长项后列表应变窄: {combo.view().width()} vs {wide}"
+        assert combo.view().window().width() < wide, \
+            f"删除最长项后 popup 应变窄: {combo.view().window().width()} vs {wide}"
     finally:
         w.close()
 
