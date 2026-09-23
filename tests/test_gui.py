@@ -2423,10 +2423,10 @@ def test_history_add_keeps_popup_full_height(qapp, monkeypatch, tmp_path, fake_s
         qapp.processEvents()
         popup = combo.view().window()
         view = combo.view()
-        row_h = view.sizeHintForRow(0) if view.sizeHintForRow(0) > 0 \
-            else view.fontMetrics().height() + 8
-        assert popup.height() >= row_h * 3, \
-            f"4 项列表不能只显示一行: 高 {popup.height()} < {row_h * 3}"
+        # ★ 高度必须 = 行高 × 项数(delegate 真实行高, 低估会出滚动条)
+        rh = combo._row_height()
+        assert popup.height() >= rh * combo.count(), \
+            f"列表高度不足(会出滚动条): {popup.height()} < {rh * combo.count()}"
         assert popup.width() >= combo.lineEdit().fontMetrics().horizontalAdvance(
             "超级无敌长的应用名称测试用例ABCDEF") + 40, "宽度应容纳最长项"
         # 打开状态下再新增 → 高度即时增加

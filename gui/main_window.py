@@ -14,14 +14,15 @@ import time
 import yaml
 from PySide6.QtCore import (QEvent, QPoint, QRect, QSettings, QSize, Qt, QThread,
                             QTimer, Signal)
-from PySide6.QtGui import (QAction, QColor, QDoubleValidator, QIcon, QIntValidator,
-                           QPainter, QPixmap)
+from PySide6.QtGui import (QAction, QColor, QDoubleValidator, QFontMetrics,
+                           QIcon, QIntValidator, QPainter, QPixmap)
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QCheckBox, QComboBox, QDialog,
     QFileDialog, QFrame, QGridLayout, QHBoxLayout,
     QHeaderView, QLabel, QLayout, QLineEdit, QListView, QListWidget, QListWidgetItem,
     QMainWindow, QMenu, QMessageBox, QPlainTextEdit, QPushButton,
     QScrollArea, QSizePolicy, QSpinBox, QSplitter, QStyle, QStyledItemDelegate,
+    QStyleOptionViewItem,
     QTabWidget, QTableWidget, QTableWidgetItem, QToolButton, QVBoxLayout, QWidget,
 )
 
@@ -964,6 +965,25 @@ class _FitCombo(QComboBox):
         w = self.longest_item_width() + 60
         self.setFixedWidth(max(70, min(w, 420)))
 
+    def _row_height(self):
+        """列表行高(px)。
+
+        ★ 不能用 fontMetrics().height()+8 估算: 真机行高由 delegate 的
+        sizeHint 决定(约 24px, 受 QSS 字体与 DPI 影响), 比字体高多 4~8px;
+        低估会让 popup 高度不足 → 出现滚动条(用户实测: 需要滑动才能看完)。
+        """
+        view = self.view()
+        model = view.model()
+        if model is not None and model.rowCount() > 0:
+            opt = QStyleOptionViewItem()
+            opt.font = view.font()
+            opt.fontMetrics = QFontMetrics(opt.font)
+            size = view.itemDelegate().sizeHint(opt, model.index(0, 0))
+            if size.height() > 0:
+                return size.height()
+        h = view.sizeHintForRow(0)
+        return h if h > 0 else view.fontMetrics().height() + 8
+
     def fit_popup_now(self):
         """按下拉当前内容重算 popup 的宽与高(仅当它正打开时)"""
         popup = self.view().window()
@@ -972,10 +992,7 @@ class _FitCombo(QComboBox):
         view = self.view()
         want_w = max(self.width(), self.longest_item_width() + self._POPUP_PAD)
         rows = self.count()
-        row_h = view.sizeHintForRow(0) if rows else 0
-        if row_h <= 0:
-            row_h = view.fontMetrics().height() + 8
-        want_h = (row_h * rows + 2 * view.frameWidth()) if rows else 30
+        want_h = (self._row_height() * rows + 2 * view.frameWidth()) if rows else 30
         want_h = min(want_h, 420)
         if popup.width() != want_w or popup.height() != want_h:
             popup.setFixedSize(want_w, want_h)
