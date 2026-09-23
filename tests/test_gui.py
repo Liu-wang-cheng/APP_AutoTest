@@ -2640,3 +2640,13 @@ def test_numeric_config_values_do_not_crash(qapp, monkeypatch, tmp_path, fake_se
         assert w.app_name_edit.currentText() == "123"
     finally:
         w.close()
+
+
+def test_menu_and_checkbox_styles(qapp):
+    """菜单勾选标记要有足够空间(否则被挤压发虚); 勾选框统一透明背景(防闪动)"""
+    import gui.main_window as mw
+    assert "QMenu::item { padding: 6px 24px 6px 26px;" in mw.STYLESHEET, \
+        "菜单项左侧须留够勾选标记空间(原来 12px 太小会发虚)"
+    assert "QMenu::indicator { width: 14px; height: 14px; }" in mw.STYLESHEET
+    assert "QCheckBox { background: transparent; }" in mw.STYLESHEET, \
+        "勾选框必须透明背景, 否则点击时闪动"

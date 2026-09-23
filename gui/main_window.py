@@ -183,6 +183,9 @@ QListWidget#caseList::item { background: transparent; border-radius: 4px; margin
 QListWidget#caseList::item:focus { outline: none; }   /* 去掉键盘焦点虚线框(用户要求) */
 QListWidget#caseList::item:hover { background: #f0f4fa; }
 QListWidget#caseList::item:selected { background: #dbe7fb; color: #1e293b; }
+/* ★ 勾选框统一透明背景: 全局 QWidget 背景规则会让点击时"高亮层 ↔ 控件自绘背景"
+   交替重绘 → 勾选时闪动(用例列表踩过一次, 前置条件对话框同样中招) */
+QCheckBox { background: transparent; }
 /* 勾选框用 Qt 原生样式(用户要求;闪动根源是此前的行内控件叠层,已移除) */
 
 QTabWidget::pane { border: 1px solid #e4e8ee; border-radius: 6px; background: #ffffff; top: -1px; }
@@ -201,8 +204,13 @@ QHeaderView::section {
 QPlainTextEdit { background: #ffffff; border: 1px solid #e4e8ee; border-radius: 6px; }
 QScrollArea { border: none; background: transparent; }
 QMenu { background: #ffffff; border: 1px solid #e4e8ee; border-radius: 8px; padding: 4px; }
-QMenu::item { padding: 6px 24px 6px 12px; border-radius: 5px; }
+/* ★ 左侧必须留够勾选标记的空间: 原来只有 12px, 勾被挤压变形发虚(用户实测).
+   26px 是「勾选标记 + 间距」的常规宽度; 不自定义 indicator, 交给 Qt 原生绘制 */
+QMenu::item { padding: 6px 24px 6px 26px; border-radius: 5px; }
 QMenu::item:selected { background: #eef4ff; color: #2563eb; }
+QMenu::item:checked { font-weight: bold; }
+/* 勾选标记尺寸(不设 image, 保留原生绘制) */
+QMenu::indicator { width: 14px; height: 14px; }
 QMenu::separator { height: 1px; background: #eef1f5; margin: 4px 8px; }
 
 /* 滚动条:细圆角悬浮式,与浅色主题协调 */
