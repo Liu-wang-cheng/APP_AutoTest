@@ -1479,8 +1479,10 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
         app = cfg.get("app", {})
-        self.app_name_edit.setCurrentText(app.get("name", ""))
-        self.device_name_edit.setCurrentText(cfg.get("target_device", ""))
+        # ★ YAML 会把纯数字值解析成 int(如 target_device: 111), 必须转字符串
+        #   —— 否则 setCurrentText(int) 抛 TypeError, 窗口构造直接失败(启动"卡住")
+        self.app_name_edit.setCurrentText(str(app.get("name") or ""))
+        self.device_name_edit.setCurrentText(str(cfg.get("target_device") or ""))
         self._refresh_devices()
 
     # ── 设备检测 ──
@@ -2250,9 +2252,9 @@ class MainWindow(QMainWindow):
             _vision.set_template_app_group(
                 os.path.basename(os.path.dirname(os.path.abspath(self.case_path))))
         c = self.current_case
-        self.module_edit.setText(self.data.get("module", ""))
-        self.case_name_edit.setText(c.get("name", ""))
-        pri = str(c.get("priority", "P1"))
+        self.module_edit.setText(str(self.data.get("module") or ""))
+        self.case_name_edit.setText(str(c.get("name") or ""))
+        pri = str(c.get("priority") or "P1")
         self.priority_combo.setCurrentIndex(max(0, self.priority_combo.findText(pri)))
         self.case_wait_edit.setText("" if c.get("wait") is None else str(c["wait"]))
 

@@ -2607,3 +2607,26 @@ def test_popup_no_scrollbar_no_extra_gap(qapp, monkeypatch, tmp_path, fake_setti
             qapp.processEvents()
     finally:
         w.close()
+
+
+def test_numeric_config_values_do_not_crash(qapp, monkeypatch, tmp_path, fake_settings):
+    """★ 配置里的纯数字值(YAML 解析成 int)不能让窗口构造崩溃。
+
+    用户实测: config 里 target_device: 111 → setCurrentText(111) 抛 TypeError
+    → 窗口构造失败, 表现为"GUI 启动卡住/打不开"。
+    """
+    import gui.main_window as mw
+    monkeypatch.setattr(mw, "CASES_DIR", str(tmp_path / "Test_cases"), raising=False)
+    monkeypatch.setattr(mw, "CONFIG_PATH", str(tmp_path / "config.yaml"), raising=False)
+    # 模拟用户的配置: 纯数字被 YAML 解析为 int
+    monkeypatch.setattr(mw, "load_config",
+                        lambda: {"app": {"name": 123, "package": "com.x"},
+                                 "target_device": 111,
+                                 "device": {"default": "auto", "list": []}},
+                        raising=False)
+    w = mw.MainWindow()          # 修复前这里抛 TypeError
+    try:
+        assert w.device_name_edit.currentText() == "111", "数字设备名应转字符串显示"
+        assert w.app_name_edit.currentText() == "123"
+    finally:
+        w.close()
