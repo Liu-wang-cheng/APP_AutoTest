@@ -998,8 +998,11 @@ class _FitCombo(QComboBox):
         if popup is None or not popup.isVisible():
             return
         want_w = max(self.width(), self.longest_item_width() + self._POPUP_PAD)
-        if popup.width() != want_w:
-            popup.setFixedWidth(want_w)
+        # 高度也要重设: popup 打开期间 Qt 不会按新项数重算 → 删除后底部多一行空白
+        rows = self.count()
+        want_h = (self._row_height() * rows + 2 * self.view().frameWidth()) if rows else 30
+        if popup.width() != want_w or popup.height() != want_h:
+            popup.setFixedSize(want_w, want_h)
         # 诊断日志(真机排查用): 项数 / 实际尺寸 / 行高
         log.info(f"[下拉] 项数={self.count()} popup={popup.width()}x{popup.height()} "
                  f"view={self.view().width()}x{self.view().height()} "
@@ -1318,9 +1321,8 @@ class MainWindow(QMainWindow):
         elif keep == removed_text:
             combo.setCurrentText("")     # 删掉的正是当前值 → 清空
         combo.blockSignals(False)
-        # 下拉正打开 → 立即按剩余项重算尺寸(否则仍显示删除前的大小)
-        if hasattr(combo, "fit_popup_now"):
-            combo.fit_popup_now()
+        # ★ 信号屏蔽期间宽度不重算, 这里补一次(删除后内容可能变化)
+        self._refresh_name_tip(combo)
         self.env_status.setText(f"已删除历史记录: {removed_text}")
 
     def _reload_name_combo(self, combo):
@@ -1334,8 +1336,8 @@ class MainWindow(QMainWindow):
         combo.addItems(self._load_name_history(hist_key))
         combo.setCurrentText(keep)
         combo.blockSignals(False)
-        if hasattr(combo, "fit_popup_now"):
-            combo.fit_popup_now()
+        # ★ 信号被屏蔽期间宽度不会自动重算, 这里显式补一次
+        self._refresh_name_tip(combo)
 
     def _purge_name_history(self, hist_key, value):
         """把某个值从历史中移除(用于「检测不到的 APP 不该记历史」, 用户要求)"""
