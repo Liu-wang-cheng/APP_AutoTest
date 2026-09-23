@@ -20,7 +20,7 @@ from tests.test_yaml_runner import iter_all_steps, iter_modules
 TEMPLATE_DIR = os.path.join(BASE_DIR, "Test_img", "templates")
 
 # 这些键的值可能是模板图名
-IMAGE_KEYS = ("click", "long_click", "assert", "wait_for", "compare", "diff",
+IMAGE_KEYS = ("click", "click_template", "long_click", "assert", "wait_for", "compare", "diff",
               "find_click", "if_click", "if", "if not", "screenshot",
               "switch_tpl", "add_tpl")
 META = {"desc", "wait", "timeout", "retry", "threshold", "duration", "circular",

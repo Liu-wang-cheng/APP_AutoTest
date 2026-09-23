@@ -7,8 +7,7 @@ cases:
     wait: 5
     steps:
       - desc: 进入设置界面
-        click: 进入设置.png
-
+        click_template: 进入设置.png
       - desc: 进入勿扰模式界面
         click: 勿扰模式
 
@@ -77,8 +76,7 @@ cases:
         screenshot: screenshots/预约清扫_04_清扫完成.png
 
       - desc: 展开清扫数据
-        click: 展开清扫数据.png
-
+        click_template: 展开清扫数据.png
       - desc: 等待清扫数据出现
         wait_for: 面积,清扫面积
 
@@ -87,7 +85,7 @@ cases:
         screenshot: screenshots/预约清扫_05_主界面清扫数据.png
 
       - desc: 进入设置界面
-        click: 进入设置.png
+        click_template: 进入设置.png
         screenshot: screenshots/预约清扫_06_进入设置.png
 
       - desc: 进入清扫记录界面

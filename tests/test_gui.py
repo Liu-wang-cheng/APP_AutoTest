@@ -2004,10 +2004,10 @@ def test_click_and_click_template_split(qapp, monkeypatch, tmp_path):
         cards = _card_widgets(w)
         w2 = cards[1].widgets["click_template"]
         assert isinstance(w2, QComboBox), "click_template = 模板下拉"
-        assert "开始清扫" in [w2.itemText(i) for i in range(w2.count())], \
-            "下拉应自动列出当前 APP 组模板"
-        w2.setCurrentText("开始清扫")
+        items = [w2.itemText(i) for i in range(w2.count())]
+        assert "开始清扫.png" in items, f"下拉应显示完整模板名(含 .png): {items}"
+        w2.setCurrentText("开始清扫.png")
         w2.currentIndexChanged.emit(0)   # combo 的写回信号
-        assert w.steps[1]["click_template"] == "开始清扫"
+        assert w.steps[1]["click_template"] == "开始清扫.png"
     finally:
         w.close()

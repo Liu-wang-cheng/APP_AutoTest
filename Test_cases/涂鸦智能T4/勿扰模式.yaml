@@ -7,8 +7,7 @@ cases:
     wait: 5
     steps:
       - desc: 进入设置界面
-        click: 进入设置.png
-
+        click_template: 进入设置.png
       - desc: 进入勿扰模式界面
         click: 勿扰模式
         screenshot: screenshots/勿扰模式_01_勿扰界面.png
@@ -77,8 +76,7 @@ cases:
         screenshot: screenshots/勿扰模式_06_勿扰生效.png
 
       - desc: 进入设置界面恢复
-        click: 进入设置.png
-
+        click_template: 进入设置.png
       - desc: 进入勿扰模式关闭
         click: 勿扰模式
 

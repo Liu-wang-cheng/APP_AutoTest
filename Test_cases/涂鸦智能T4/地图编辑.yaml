@@ -20,7 +20,7 @@ cases:
       assert: 充电中,充电完成
       timeout: 0
   - desc: 进入设置界面
-    click: 进入设置.png
+    click_template: 进入设置.png
     screenshot: screenshots/地图编辑_00_进入设置.png
   - desc: 进入地图管理
     click: 地图管理

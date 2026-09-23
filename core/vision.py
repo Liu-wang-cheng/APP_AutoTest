@@ -69,7 +69,7 @@ def set_template_app_group(group):
 
 
 def list_templates():
-    """当前 APP 组可用的模板名列表(去前缀/扩展名, 供编辑器下拉自动获取)"""
+    """当前 APP 组可用的模板名列表(带 .png 扩展名, 去 APP 前缀)"""
     names = []
     search_dirs = []
     if _template_app_group:
@@ -81,12 +81,13 @@ def list_templates():
         for fn in sorted(os.listdir(sd)):
             if not fn.lower().endswith((".png", ".jpg", ".jpeg", ".bmp")):
                 continue
-            base = os.path.splitext(fn)[0]
+            stem, ext = os.path.splitext(fn)
             prefix = _template_prefix()
-            if prefix and base.startswith(f"{prefix}_"):
-                base = base[len(prefix) + 1:]
-            if base not in names:
-                names.append(base)
+            if prefix and stem.startswith(f"{prefix}_"):
+                stem = stem[len(prefix) + 1:]
+            name = stem + ext          # ★ 保留扩展名(用户要求完整显示 .png)
+            if name not in names:
+                names.append(name)
     return names
 
 

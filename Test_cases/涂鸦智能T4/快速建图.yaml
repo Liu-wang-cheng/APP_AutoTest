@@ -9,7 +9,7 @@ cases:
     if: 扫地机器人
     else:
     - desc: 进入设置界面
-      click: 进入设置.png
+      click_template: 进入设置.png
       screenshot: screenshots/快速建图_02_进入设置界面.png
       wait: 3
     - desc: 进入地图管理

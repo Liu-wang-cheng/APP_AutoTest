@@ -14,7 +14,7 @@ cases:
         screenshot: screenshots/定点清扫_01_清扫完成抓取数据.png
 
       - desc: 进入设置界面
-        click: 进入设置.png
+        click_template: 进入设置.png
         screenshot: screenshots/定点清扫_02_进入设置.png
 
       - desc: 进入清扫记录界面

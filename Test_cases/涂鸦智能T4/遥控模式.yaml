@@ -10,14 +10,13 @@ cases:
         screenshot: screenshots/遥控模式_00_遥控前.png
 
       - desc: 进入设置界面
-        click: 进入设置.png
-
+        click_template: 进入设置.png
       - desc: 进入遥控界面
         click: 遥控控制
         screenshot: screenshots/遥控模式_01_遥控界面.png
 
       - desc: 点击遥控下桩
-        click: 前进按钮.png
+        click_template: 前进按钮.png
         wait: 3
 
       - desc: 长按前进4秒
@@ -51,7 +50,7 @@ cases:
         threshold: 0.6
 
       - desc: 点击回充
-        click: 开始回充.png
+        click_template: 开始回充.png
         wait: 3
 
       - desc: 确认回充

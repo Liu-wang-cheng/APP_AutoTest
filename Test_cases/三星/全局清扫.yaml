@@ -14,10 +14,7 @@ cases:
     screenshot: true
   - desc: 返回主界面
     back: true
-  - desc: 点击
-    click: 三星_开始清扫.png
-    screenshot: true
-  - desc: 点击
-    click: ''
+  - desc: 点击开始清扫
+    click_template: 三星_开始清扫
     screenshot: true
   wait: null
