@@ -1015,9 +1015,12 @@ def test_runworker_run_smoke(qapp, monkeypatch, tmp_path):
     monkeypatch.setattr(u2, "connect", lambda dev: fake_d)
 
     # 3) mock session 与配置
-    monkeypatch.setattr(rt.session, "prepare",
-                        lambda *a, **kw: {"restart": True, "charging": True,
-                                          "map_load": True, "battery": True})
+    monkeypatch.setattr(rt.session, "prepare_items",
+                        lambda d_, cfg_, items, **kw: [
+                            {"key": "pre0", "desc": "重启 APP", "ok": True},
+                            {"key": "pre1", "desc": "等待充电", "ok": True},
+                            {"key": "pre2", "desc": "地图加载", "ok": True},
+                            {"key": "pre3", "desc": "电量门槛≥50%", "ok": True}])
     monkeypatch.setattr(rt.session, "restart_app", lambda d_, cfg, enter_page=True: None)
     monkeypatch.setattr(rt.session, "get_battery_level", lambda d_: 78)
     monkeypatch.setattr(rt, "load_config",
@@ -1033,8 +1036,10 @@ def test_runworker_run_smoke(qapp, monkeypatch, tmp_path):
                         .ExcelReport(path=str(report_path)))
 
     worker = RunWorker("fake-dev", [str(case_file)],
-                       {"restart": True, "charging": True,
-                        "map_load": True, "battery": True}, 1)
+                       [{"type": "restart", "enabled": True},
+                        {"type": "charging", "enabled": True},
+                        {"type": "map_load", "enabled": True},
+                        {"type": "battery", "enabled": True}], 1)
     steps, done = [], []
     worker.step_done.connect(lambda r: steps.append(dict(r)))
     worker.finished_run.connect(lambda ok, msg: done.append((ok, msg)))
@@ -1045,8 +1050,8 @@ def test_runworker_run_smoke(qapp, monkeypatch, tmp_path):
     assert len(pre) == 4 and all(s["passed"] for s in pre)
     descs = {s["desc"] for s in pre}
     assert "前置-等待充电(当前电量 78%)" in descs
-    assert "前置-电量≥50%(当前电量 78%)" in descs
-    assert "前置-重启APP" in descs and "前置-地图加载" in descs
+    assert "前置-电量门槛≥50%(当前电量 78%)" in descs
+    assert "前置-重启 APP" in descs and "前置-地图加载" in descs
     # 步骤行 1 条 PASS
     body = [s for s in steps if not s["desc"].startswith("前置-")]
     assert len(body) == 1 and body[0]["passed"] and body[0]["desc"] == "等一下"
@@ -1115,9 +1120,12 @@ def test_runworker_precondition_failure_blocks(qapp, monkeypatch, tmp_path):
     import uiautomator2 as u2
     fake_d = types.SimpleNamespace(implicitly_wait=lambda t: None)
     monkeypatch.setattr(u2, "connect", lambda dev: fake_d)
-    monkeypatch.setattr(rt.session, "prepare",
-                        lambda *a, **kw: {"restart": True, "charging": False,
-                                          "map_load": True, "battery": False})
+    monkeypatch.setattr(rt.session, "prepare_items",
+                        lambda d_, cfg_, items, **kw: [
+                            {"key": "pre0", "desc": "重启 APP", "ok": True},
+                            {"key": "pre1", "desc": "等待充电", "ok": False},
+                            {"key": "pre2", "desc": "地图加载", "ok": True},
+                            {"key": "pre3", "desc": "电量门槛≥50%", "ok": False}])
     monkeypatch.setattr(rt.session, "get_battery_level", lambda d_: 20)
     monkeypatch.setattr(rt, "load_config",
                         lambda: {"runner": {"step_interval": 0}, "app": {"package": "p"},
@@ -1128,8 +1136,10 @@ def test_runworker_precondition_failure_blocks(qapp, monkeypatch, tmp_path):
                         .ExcelReport(path=str(report_path)))
 
     worker = RunWorker("fake-dev", [str(case_file)],
-                       {"restart": True, "charging": True,
-                        "map_load": True, "battery": True}, 1)
+                       [{"type": "restart", "enabled": True},
+                        {"type": "charging", "enabled": True},
+                        {"type": "map_load", "enabled": True},
+                        {"type": "battery", "enabled": True}], 1)
     steps, done, pre_fail = [], [], []
     worker.step_done.connect(lambda r: steps.append(dict(r)))
     worker.finished_run.connect(lambda ok, msg: done.append((ok, msg)))
@@ -1139,7 +1149,7 @@ def test_runworker_precondition_failure_blocks(qapp, monkeypatch, tmp_path):
     # 前置 4 行落表(2 FAIL),但用例步骤一行都没有(阻断)
     assert len([s for s in steps if s["desc"].startswith("前置-")]) == 4
     assert not [s for s in steps if not s["desc"].startswith("前置-")], "阻断后不得执行用例步骤"
-    assert pre_fail == ["等待充电、电量≥50%"], "阻断信号应带未通过项详情"
+    assert pre_fail == ["等待充电、电量门槛≥50%"], "阻断信号应带未通过项详情"
     assert done and not done[0][0] and "前置检查未通过" in done[0][1]
     assert report_path.exists(), "阻断时已执行部分(前置行)也要保住报告"
 

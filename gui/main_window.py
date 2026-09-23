@@ -18,7 +18,7 @@ from PySide6.QtGui import (QAction, QColor, QDoubleValidator, QFontMetrics,
                            QIcon, QIntValidator, QPainter, QPixmap)
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QCheckBox, QComboBox, QDialog,
-    QFileDialog, QFrame, QGridLayout, QHBoxLayout,
+    QFileDialog, QFormLayout, QFrame, QGridLayout, QHBoxLayout,
     QHeaderView, QLabel, QLayout, QLineEdit, QListView, QListWidget, QListWidgetItem,
     QMainWindow, QMenu, QMessageBox, QPlainTextEdit, QPushButton,
     QScrollArea, QSizePolicy, QSpinBox, QSplitter, QStyle, QStyledItemDelegate,
@@ -869,6 +869,175 @@ class DeviceScanThread(QThread):
         self.done.emit(devices, "")
 
 
+class PreconditionEditDialog(QDialog):
+    """新增/编辑单个前置条件: 选类型 + 填参数(按类型动态生成表单)"""
+
+    def __init__(self, item=None, parent=None):
+        super().__init__(parent)
+        from core.session import PRECONDITION_TYPES
+        self._types = PRECONDITION_TYPES
+        self._item = dict(item) if item else None
+        self.setWindowTitle("编辑前置条件" if item else "添加前置条件")
+        v = QVBoxLayout(self)
+
+        v.addWidget(QLabel("类型"))
+        self.type_combo = QComboBox()
+        for t, spec in self._types.items():
+            self.type_combo.addItem(spec["label"], t)
+        v.addWidget(self.type_combo)
+
+        self.form_host = QWidget()
+        self.form = QFormLayout(self.form_host)
+        v.addWidget(self.form_host)
+        self._edits = {}
+
+        btns = QHBoxLayout()
+        cancel = QPushButton("取消")
+        ok = QPushButton("确定")
+        ok.setObjectName("runBtn")
+        cancel.clicked.connect(self.reject)
+        ok.clicked.connect(self.accept)
+        btns.addStretch(1)
+        btns.addWidget(cancel)
+        btns.addWidget(ok)
+        v.addLayout(btns)
+
+        if item:
+            k = self.type_combo.findData(item.get("type"))
+            if k >= 0:
+                self.type_combo.setCurrentIndex(k)
+            self.type_combo.setEnabled(False)
+        else:
+            # 新增: 默认「自定义(检测文本→执行操作)」—— 最常用(用户要求填名称+操作)
+            k = self.type_combo.findData("text_check")
+            if k >= 0:
+                self.type_combo.setCurrentIndex(k)
+        self.type_combo.currentIndexChanged.connect(self._build_form)
+        self._build_form()
+
+    def accept(self):
+        """校验后关闭: 自定义类型必须填名称(报告与结果表用它区分各项)"""
+        v = self.values()
+        if v.get("type") == "text_check":
+            if not v.get("name"):
+                QMessageBox.warning(self, "提示", "请填写前置条件名称")
+                return
+            if not v.get("wait_text") and not v.get("absent_text"):
+                QMessageBox.warning(self, "提示",
+                                    "请至少填写一项操作内容(等待文本出现/消失)")
+                return
+        super().accept()
+
+    def _build_form(self):
+        while self.form.count():
+            it = self.form.takeAt(0)
+            w = it.widget()
+            if w:
+                w.deleteLater()
+        spec = self._types.get(self.type_combo.currentData()) or {}
+        self._edits = {}
+        for prm in spec.get("params", []):
+            e = QLineEdit()
+            cur = (self._item or {}).get(prm["key"], prm.get("default"))
+            e.setText("" if cur is None else str(cur))
+            if prm.get("hint"):
+                e.setPlaceholderText(prm["hint"])
+            self.form.addRow(prm["label"], e)
+            self._edits[prm["key"]] = (e, prm)
+
+    def values(self):
+        t = self.type_combo.currentData()
+        item = {"type": t, "enabled": True}
+        if self._item:
+            item["enabled"] = bool(self._item.get("enabled", True))
+        for k, (e, prm) in self._edits.items():
+            txt = e.text().strip()
+            if prm["type"] == "int":
+                try:
+                    item[k] = int(txt) if txt else prm.get("default", 0)
+                except ValueError:
+                    item[k] = prm.get("default", 0)
+            elif txt:
+                item[k] = txt
+        return item
+
+
+class PreconditionsDialog(QDialog):
+    """前置条件设置: 勾选启用 / 编辑 / 删除 / 新增(用户要求可编辑可新增)"""
+
+    def __init__(self, items, parent=None):
+        super().__init__(parent)
+        from core.session import _item_label
+        self.setWindowTitle("前置条件设置")
+        self.resize(560, 380)
+        self._label = _item_label
+        self.items = [dict(x) for x in items]
+        v = QVBoxLayout(self)
+        v.addWidget(QLabel("按顺序依次执行; 取消勾选则不执行"))
+        self.table = QTableWidget(0, 3)
+        self.table.setHorizontalHeaderLabels(["启用 / 前置条件", "编辑", "删除"])
+        self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+        self.table.setColumnWidth(1, 60)
+        self.table.setColumnWidth(2, 60)
+        self.table.verticalHeader().setVisible(False)
+        v.addWidget(self.table)
+
+        row = QHBoxLayout()
+        add_btn = QPushButton("+ 添加前置条件")
+        add_btn.setObjectName("chipBtn")
+        add_btn.clicked.connect(self._add)
+        row.addWidget(add_btn)
+        row.addStretch(1)
+        cancel = QPushButton("取消")
+        ok = QPushButton("确定")
+        ok.setObjectName("runBtn")
+        cancel.clicked.connect(self.reject)
+        ok.clicked.connect(self.accept)
+        row.addWidget(cancel)
+        row.addWidget(ok)
+        v.addLayout(row)
+        self._render()
+
+    def _render(self):
+        self.table.setRowCount(0)
+        for i, item in enumerate(self.items):
+            self.table.insertRow(i)
+            cb = QCheckBox(self._label(item))
+            cb.setChecked(bool(item.get("enabled", True)))
+            cb.toggled.connect(lambda on, k=i: self._toggle(k, on))
+            self.table.setCellWidget(i, 0, cb)
+            eb = QPushButton("编辑")
+            eb.clicked.connect(lambda _=False, k=i: self._edit(k))
+            self.table.setCellWidget(i, 1, eb)
+            db = QPushButton("删除")
+            db.clicked.connect(lambda _=False, k=i: self._del(k))
+            self.table.setCellWidget(i, 2, db)
+
+    def _toggle(self, idx, on):
+        if 0 <= idx < len(self.items):
+            self.items[idx]["enabled"] = bool(on)
+
+    def _edit(self, idx):
+        dlg = PreconditionEditDialog(self.items[idx], self)
+        if dlg.exec() == QDialog.Accepted:
+            self.items[idx] = dlg.values()
+            self._render()
+
+    def _del(self, idx):
+        if 0 <= idx < len(self.items):
+            self.items.pop(idx)
+            self._render()
+
+    def _add(self):
+        dlg = PreconditionEditDialog(None, self)
+        if dlg.exec() == QDialog.Accepted:
+            self.items.append(dlg.values())
+            self._render()
+
+    def values(self):
+        return self.items
+
+
 class NewCaseDialog(QDialog):
     """新建用例对话框: 用例名称 + APP 用例组(可选现有组或输入新组)"""
 
@@ -1252,17 +1421,12 @@ class MainWindow(QMainWindow):
         lay.addWidget(self.file_label)
         lay.addStretch()
         pre_btn = QPushButton("前置条件")
-        pre_menu = QMenu(pre_btn)
-        self.pre_actions = {}
-        for key, label in [("restart", "重启 APP"), ("charging", "等待充电"),
-                           ("map_load", "等待地图加载"), ("battery", "电量≥50%")]:
-            a = QAction(label, pre_menu)
-            a.setCheckable(True)
-            a.setChecked(True)
-            self.pre_actions[key] = a
-            pre_menu.addAction(a)
-        pre_btn.setMenu(pre_menu)
+        self.pre_menu = QMenu(pre_btn)
+        pre_btn.setMenu(self.pre_menu)
         lay.addWidget(pre_btn)
+        # 从配置加载前置项(无则用默认 4 项) → 动态生成菜单
+        self.preconditions = self._load_preconditions()
+        self._build_pre_menu()
 
         # ── 执行次数 ──
         lay.addWidget(QLabel("次数"))
@@ -1967,6 +2131,66 @@ class MainWindow(QMainWindow):
         sel, ok = QInputDialog.getItem(self, "选择APP", prompt, options, 0, False)
         return sel if ok else None
 
+    # ── 前置条件(可编辑/可新增) ──
+
+    def _load_preconditions(self):
+        """读配置里的前置项列表; 未配置用默认 4 项(行为与旧版一致)"""
+        from core.driver import load_preconditions
+        from core.session import DEFAULT_PRECONDITIONS
+        try:
+            items = load_preconditions()
+        except Exception:
+            items = None
+        if not items:
+            items = [dict(x) for x in DEFAULT_PRECONDITIONS]
+            try:
+                from core.driver import save_preconditions
+                save_preconditions(items)
+            except Exception:
+                pass
+        return items
+
+    def _pre_label(self, item):
+        from core.session import _item_label
+        return _item_label(item)
+
+    def _build_pre_menu(self):
+        """按当前前置项列表重建菜单(勾选=启用; 底部「设置…」增删改)"""
+        self.pre_menu.clear()
+        self.pre_actions = {}
+        for i, item in enumerate(self.preconditions):
+            a = QAction(self._pre_label(item), self.pre_menu)
+            a.setCheckable(True)
+            a.setChecked(bool(item.get("enabled", True)))
+            a.setToolTip("勾选=执行该前置条件; 需要改参数或增删请点下方「设置前置条件…」")
+            a.toggled.connect(lambda on, k=i: self._toggle_precondition(k, on))
+            self.pre_menu.addAction(a)
+            self.pre_actions[i] = a
+        self.pre_menu.addSeparator()
+        self.pre_menu.addAction("设置前置条件…", self.on_edit_preconditions)
+
+    def _toggle_precondition(self, idx, on):
+        if 0 <= idx < len(self.preconditions):
+            self.preconditions[idx]["enabled"] = bool(on)
+
+    def on_edit_preconditions(self):
+        """打开设置对话框: 增删改前置条件并写回 config"""
+        dlg = PreconditionsDialog(self.preconditions, self)
+        if dlg.exec() != QDialog.Accepted:
+            return
+        self.preconditions = dlg.values()
+        try:
+            from core.driver import save_preconditions
+            save_preconditions(self.preconditions)
+            self.status_label.setText("前置条件已保存")
+        except Exception as e:
+            QMessageBox.critical(self, "保存失败", str(e))
+        self._build_pre_menu()
+
+    def _selected_preconditions(self):
+        """当前启用中的前置项(执行时传给 RunWorker)"""
+        return [dict(x) for x in self.preconditions if x.get("enabled", True)]
+
     def _build_chip_strip(self):
         """测试步骤详情区标题 + 用例组/用例/优先级/步骤间隔/添加步骤(流式布局)"""
         strip = QFrame()
@@ -2538,12 +2762,12 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "提示", "请先在左侧勾选要执行的用例")
             return
         device_id = self.device_combo.currentData()
-        pre = {k: a.isChecked() for k, a in self.pre_actions.items()}
+        pre_items = self._selected_preconditions()   # 前置项列表(可编辑/可新增)
         repeat = self.repeat_spin.value()
         self.result_table.setRowCount(0)
         self._set_preview_placeholder("单击结果行显示对应截图\n点击图片可放大查看")
 
-        self.worker = RunWorker(device_id, case_files, pre, repeat)
+        self.worker = RunWorker(device_id, case_files, pre_items, repeat)
         self.worker.step_done.connect(self.on_step_done)
         self.worker.log_line.connect(self.log_view.appendPlainText)
         self.worker.status.connect(self.on_worker_status)

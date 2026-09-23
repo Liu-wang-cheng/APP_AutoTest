@@ -1,0 +1,183 @@
+# -*- coding: utf-8 -*-
+"""前置条件: 可编辑/可新增(列表驱动) + 配置读写 + 通用文本检查。
+
+2026-09-23 用户要求: 前置条件不止可选, 还要能改参数、能新增;
+新增项要填「名称」和「操作内容」(检测文本→执行操作)。
+"""
+import os
+import sys
+from pathlib import Path
+
+import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from core import session  # noqa: E402
+
+
+class FakeDev:
+    """可控设备桩: present 里的文本视为"存在", click/press 记录调用"""
+
+    def __init__(self, present=()):
+        self.present = set(present)
+        self.pressed = []
+        self.clicked = []
+
+    def __call__(self, **kw):
+        owner = self
+        key = next((k for k in ("textContains", "text", "description") if k in kw), None)
+
+        class R:
+            def exists(self, timeout=1):
+                return key is not None and kw[key] in owner.present
+
+            def click(self):
+                owner.clicked.append(kw.get(key))
+
+        return R()
+
+    def press(self, key):
+        self.pressed.append(key)
+
+    def app_stop(self, pkg):
+        pass
+
+    def dump_hierarchy(self):
+        return ""
+
+
+# ── 配置读写(注释/换行符保留) ──
+
+def test_save_preconditions_keeps_comments_and_crlf(tmp_path):
+    """写前置条件段: 保留注释、保留 CRLF、不动其它键"""
+    from core.driver import load_preconditions, save_preconditions
+    p = tmp_path / "config.yaml"
+    p.write_bytes("# 顶部注释\r\napp:\r\n  name: 涂鸦智能\r\n\r\ntarget_device: 111\r\n"
+                  .encode("utf-8"))
+    items = [{"type": "restart", "enabled": True},
+             {"type": "battery", "enabled": True, "min_level": 80}]
+    save_preconditions(items, str(p))
+    text = p.read_bytes().decode("utf-8")
+    assert "# 顶部注释" in text and "\r\n" in text, "注释与 CRLF 必须保留"
+    assert "target_device: 111" in text, "其它键不受影响"
+    assert load_preconditions(str(p)) == items
+
+
+def test_save_preconditions_replaces_existing_section(tmp_path):
+    """已有 preconditions 段 → 整段替换, 不重复追加"""
+    from core.driver import load_preconditions, save_preconditions
+    p = tmp_path / "config.yaml"
+    p.write_text("app:\n  name: x\npreconditions:\n- type: restart\n  enabled: true\n"
+                 "target_device: y\n", encoding="utf-8")
+    save_preconditions([{"type": "charging", "enabled": True}], str(p))
+    text = p.read_text(encoding="utf-8")
+    assert text.count("preconditions:") == 1, "不能重复插入"
+    assert "target_device: y" in text and "app:" in text
+    assert load_preconditions(str(p)) == [{"type": "charging", "enabled": True}]
+
+
+def test_load_preconditions_default_none(tmp_path):
+    """未配置返回 None(调用方回退默认值)"""
+    from core.driver import load_preconditions
+    p = tmp_path / "c.yaml"
+    p.write_text("app:\n  name: x\n", encoding="utf-8")
+    assert load_preconditions(str(p)) is None
+
+
+# ── 列表驱动执行 ──
+
+def test_prepare_items_runs_in_order_and_reports(monkeypatch):
+    """按列表顺序执行, 结果含 key/desc/ok; 未勾选(disabled)的被跳过"""
+    calls = []
+    monkeypatch.setattr(session, "restart_app",
+                        lambda d, cfg, enter_page=True: calls.append("restart"))
+    monkeypatch.setattr(session, "ensure_charging",
+                        lambda d, **kw: calls.append("charging") or True)
+    monkeypatch.setattr(session, "ensure_battery",
+                        lambda d, **kw: calls.append("battery") or False)
+    items = [
+        {"type": "restart", "enabled": True},
+        {"type": "charging", "enabled": True},
+        {"type": "battery", "enabled": True, "min_level": 80},
+        {"type": "map_load", "enabled": False},        # 未勾选 → 跳过
+    ]
+    res = session.prepare_items(FakeDev(), {"target_device": "SE3L"}, items)
+    assert calls == ["restart", "charging", "battery"], "应按顺序执行且跳过未勾选"
+    assert len(res) == 3
+    assert [r["ok"] for r in res] == [True, True, False]
+    assert res[2]["desc"] == "电量门槛≥80%", f"展示名应带参数: {res[2]['desc']}"
+
+
+def test_item_label_distinguishes_instances():
+    """同类型多实例的展示名要能区分(报告里靠它识别)"""
+    assert session._item_label({"type": "battery", "min_level": 50}) == "电量门槛≥50%"
+    assert session._item_label({"type": "battery", "min_level": 80}) == "电量门槛≥80%"
+    a = session._item_label({"type": "text_check", "name": "首页就绪",
+                             "wait_text": "首页"})
+    assert a == "首页就绪(出现「首页」)", f"实际: {a}"
+    assert session._item_label({"type": "restart"}) == "重启 APP"
+
+
+# ── 通用文本检查(用户新增的自定义前置项) ──
+
+def test_text_check_passes_when_text_appears(monkeypatch):
+    """等待文本出现 → 已出现即通过"""
+    monkeypatch.setattr(session.time, "sleep", lambda s: None)
+    dev = FakeDev(present=("首页",))
+    assert session.ensure_text_check(dev, wait_text="首页", timeout=10) is True
+
+
+def test_text_check_passes_when_text_absent(monkeypatch):
+    """等待文本消失 → 已不存在即通过"""
+    monkeypatch.setattr(session.time, "sleep", lambda s: None)
+    dev = FakeDev(present=())          # 页面上没有该文本
+    assert session.ensure_text_check(dev, absent_text="加载中", timeout=10) is True
+
+
+def test_text_check_timeout_runs_configured_action(monkeypatch):
+    """超时后按配置执行操作: back=按返回键 / click:文本=点击该文本"""
+    monkeypatch.setattr(session.time, "sleep", lambda s: None)
+    dev = FakeDev(present=())          # 目标文本永不出现
+    assert session.ensure_text_check(dev, wait_text="永远不出现", timeout=0.01,
+                                     on_timeout="back") is False
+    assert dev.pressed == ["back"], "超时应按返回键"
+    dev2 = FakeDev(present=("重试",))
+    session.ensure_text_check(dev2, wait_text="永远不出现", timeout=0.01,
+                              on_timeout="click:重试")
+    assert dev2.clicked == ["重试"], "超时应点击指定文本"
+    dev3 = FakeDev(present=())
+    session.ensure_text_check(dev3, wait_text="永不出现", timeout=0.01,
+                              on_timeout="none")
+    assert not dev3.pressed and not dev3.clicked, "none 不应有任何操作"
+
+
+def test_text_check_skips_when_no_text_configured(monkeypatch):
+    """未填任何文本 → 跳过并视为通过(不阻塞执行)"""
+    assert session.ensure_text_check(FakeDev(), name="空检查") is True
+
+
+# ── 地图加载的判断文本可配置 ──
+
+def test_map_load_custom_texts(monkeypatch):
+    """地图加载的就绪/加载中文案可配置(换 APP 时文案不同)"""
+    monkeypatch.setattr(session.time, "sleep", lambda s: None)
+    dev = FakeDev(present=("地图就绪了",))
+    assert session.ensure_map_loaded(dev, timeout=0.01, rounds=1,
+                                     ready_text="地图就绪了",
+                                     loading_text="地图渲染中") is True
+    dev2 = FakeDev(present=("地图就绪了", "地图渲染中"))     # 仍在加载
+    assert session.ensure_map_loaded(dev2, timeout=0.01, rounds=1,
+                                     ready_text="地图就绪了",
+                                     loading_text="地图渲染中") is False
+
+
+# ── 类型定义完整性 ──
+
+def test_precondition_types_cover_defaults():
+    """默认前置项的每个 type 都要在可选类型表里(对话框才能编辑)"""
+    for item in session.DEFAULT_PRECONDITIONS:
+        assert item["type"] in session.PRECONDITION_TYPES, item["type"]
+    # 自定义类型必须有「名称」与操作内容字段(用户要求)
+    tc = session.PRECONDITION_TYPES["text_check"]
+    keys = [p["key"] for p in tc["params"]]
+    assert "name" in keys and "wait_text" in keys and "absent_text" in keys

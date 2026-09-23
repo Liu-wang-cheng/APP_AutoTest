@@ -142,8 +142,12 @@ def ensure_charging(d, timeout=1200, on_progress=None, should_cancel=None):
     return False
 
 
-def ensure_map_loaded(d, timeout=10, device_name="", rounds=6):
+def ensure_map_loaded(d, timeout=10, device_name="", rounds=6,
+                      ready_text="地图编辑", loading_text="地图正在加载"):
     """等待地图加载:正常 10s 内就能加载出来;超时自动退出重进设备页面
+
+    ★ ready_text / loading_text 可配置(GUI 前置条件里可编辑) —— 换 APP 时
+      页面上的就绪/加载中文案不同, 硬编码会让检查永远不通过。
 
     每轮等 timeout 秒,没就绪就 back 退出设备页、重新点进设备页触发地图
     重新加载,最多 rounds 轮。全轮失败才放行告警(后续步骤会给出明确失败)。
@@ -151,8 +155,8 @@ def ensure_map_loaded(d, timeout=10, device_name="", rounds=6):
     for r in range(rounds):
         end = time.time() + timeout
         while time.time() < end:
-            if (d(textContains="地图编辑").exists(timeout=1)
-                    and not d(textContains="地图正在加载").exists(timeout=1)):
+            if (d(textContains=ready_text).exists(timeout=1)
+                    and not d(textContains=loading_text).exists(timeout=1)):
                 log.info("[前置] 地图已加载" + (f"(第{r + 1}轮)" if r else ""))
                 return True
             time.sleep(2)
@@ -165,6 +169,55 @@ def ensure_map_loaded(d, timeout=10, device_name="", rounds=6):
                 d(text=device_name).click()
                 time.sleep(5)
     log.warning(f"[前置] 地图 {rounds} 轮重进后仍未就绪,继续执行")
+    return False
+
+
+def ensure_text_check(d, wait_text="", absent_text="", timeout=60,
+                      on_timeout="none", name="", on_progress=None,
+                      should_cancel=None):
+    """通用文本检查(用户可自定义新增的前置项): 等文本出现/消失 → 超时执行操作。
+
+    wait_text    等待**出现**的文本(""=不要求)
+    absent_text  等待**消失**的文本(""=不要求); 两者可组合(都满足才算通过)
+    timeout      等待秒数
+    on_timeout   超时后的操作: none(仅报告失败)/ back(按返回键)/ click:文本(点击该文本)
+    返回 True 通过 / False 超时未满足
+    """
+    label = name or (wait_text or absent_text or "文本检查")
+    if not wait_text and not absent_text:
+        log.info(f"[前置] {label}: 未配置判断文本,跳过")
+        return True
+
+    def _ok():
+        if wait_text and not d(textContains=wait_text).exists(timeout=1):
+            return False
+        if absent_text and d(textContains=absent_text).exists(timeout=1):
+            return False
+        return True
+
+    end = time.time() + timeout
+    while time.time() < end:
+        if _ok():
+            log.info(f"[前置] {label}: 条件已满足")
+            return True
+        if should_cancel and should_cancel():
+            log.info(f"[前置] {label}: 收到停止请求")
+            return False
+        if on_progress:
+            on_progress(f"等待 {label}...")
+        time.sleep(2)
+    log.warning(f"[前置] {label}: {timeout}s 内未满足条件")
+    # 超时后的操作(用户配置): none=仅报告失败 / back=按返回键 / click:文本=点击该文本
+    if on_timeout == "back":
+        d.press("back")
+        log.info(f"[前置] {label}: 超时 → 已按返回键")
+    elif on_timeout.startswith("click:"):
+        target = on_timeout[6:].strip()
+        if target and d(textContains=target).exists(timeout=3):
+            d(textContains=target).click()
+            log.info(f"[前置] {label}: 超时 → 已点击「{target}」")
+        else:
+            log.warning(f"[前置] {label}: 超时 → 未找到可点击的「{target}」")
     return False
 
 
@@ -189,6 +242,117 @@ def ensure_battery(d, min_level=50, timeout=1800, on_progress=None, should_cance
             break
     log.info(f"[前置] 电量等待结束,当前 {battery}%")
     return battery >= min_level or battery <= 0
+
+
+# GUI「添加前置条件」可选的类型 → 展示名 + 可编辑参数(字段: 键/标签/默认值/类型)
+PRECONDITION_TYPES = {
+    "restart": {"label": "重启 APP", "params": []},
+    "charging": {"label": "等待充电", "params": [
+        {"key": "timeout", "label": "超时(秒)", "default": 1200, "type": "int"}]},
+    "map_load": {"label": "等待地图加载", "params": [
+        {"key": "timeout", "label": "单轮超时(秒)", "default": 10, "type": "int"},
+        {"key": "rounds", "label": "重试轮数", "default": 6, "type": "int"},
+        {"key": "ready_text", "label": "就绪文本", "default": "地图编辑", "type": "text"},
+        {"key": "loading_text", "label": "加载中文本", "default": "地图正在加载",
+         "type": "text"}]},
+    "battery": {"label": "电量门槛", "params": [
+        {"key": "min_level", "label": "最低电量(%)", "default": 50, "type": "int"},
+        {"key": "timeout", "label": "超时(秒)", "default": 1800, "type": "int"}]},
+    "text_check": {"label": "自定义(检测文本→执行操作)", "params": [
+        {"key": "name", "label": "前置条件名称", "default": "", "type": "text",
+         "hint": "如: 等待首页加载完成(报告里显示这个名字)"},
+        {"key": "wait_text", "label": "操作: 等待文本出现", "default": "", "type": "text",
+         "hint": "填要等待出现的文字, 如 地图编辑(可留空)"},
+        {"key": "absent_text", "label": "操作: 等待文本消失", "default": "", "type": "text",
+         "hint": "填要等待消失的文字, 如 地图正在加载(可留空)"},
+        {"key": "timeout", "label": "超时(秒)", "default": 60, "type": "int"},
+        {"key": "on_timeout", "label": "超时后操作", "default": "none", "type": "text",
+         "hint": "none=仅报告失败 / back=按返回键 / click:文本=点击该文本"}]},
+}
+
+# 默认前置项(首次使用/未配置时)
+DEFAULT_PRECONDITIONS = [
+    {"type": "restart", "enabled": True},
+    {"type": "charging", "enabled": True, "timeout": 1200},
+    {"type": "map_load", "enabled": True, "timeout": 10, "rounds": 6,
+     "ready_text": "地图编辑", "loading_text": "地图正在加载"},
+    {"type": "battery", "enabled": True, "min_level": 50, "timeout": 1800},
+]
+
+
+def _run_one(d, cfg, item, on_progress, should_cancel):
+    """执行单个前置项(按 type 分发);返回 True/False"""
+    t = item.get("type")
+    if t == "restart":
+        restart_app(d, cfg)
+        return True
+    if t == "charging":
+        return ensure_charging(d, timeout=int(item.get("timeout", 1200)),
+                               on_progress=on_progress, should_cancel=should_cancel)
+    if t == "map_load":
+        return ensure_map_loaded(
+            d, timeout=int(item.get("timeout", 10)),
+            device_name=cfg.get("target_device", ""),
+            rounds=int(item.get("rounds", 6)),
+            ready_text=item.get("ready_text") or "地图编辑",
+            loading_text=item.get("loading_text") or "地图正在加载")
+    if t == "battery":
+        return ensure_battery(d, min_level=int(item.get("min_level", 50)),
+                              timeout=int(item.get("timeout", 1800)),
+                              on_progress=on_progress, should_cancel=should_cancel)
+    if t == "text_check":
+        return ensure_text_check(
+            d, wait_text=item.get("wait_text") or "",
+            absent_text=item.get("absent_text") or "",
+            timeout=int(item.get("timeout", 60)),
+            on_timeout=item.get("on_timeout") or "none",
+            name=item.get("name") or "", on_progress=on_progress,
+            should_cancel=should_cancel)
+    log.warning(f"[前置] 未知类型: {t}, 跳过")
+    return None
+
+
+def prepare_items(d, cfg, items, on_progress=None, should_cancel=None):
+    """按前置项列表依次执行 → [{"key","desc","ok"}]。
+
+    key 供报告/结果去重(同类型多实例带序号), desc 是展示名(含参数摘要)。
+    """
+    results = []
+    for i, item in enumerate(items or []):
+        if not item.get("enabled", True):
+            continue
+        if should_cancel and should_cancel():
+            results.append({"key": f"pre{i}", "desc": _item_label(item), "ok": False})
+            continue
+        ok = _run_one(d, cfg, item, on_progress, should_cancel)
+        if ok is None:
+            continue
+        results.append({"key": f"pre{i}", "desc": _item_label(item), "ok": bool(ok)})
+    return results
+
+
+def _item_label(item):
+    """前置项展示名(带关键参数, 便于报告里区分同类型多实例)"""
+    t = item.get("type")
+    if t == "text_check":
+        base = item.get("name") or "文本检查"
+        conds = []
+        if item.get("wait_text"):
+            conds.append(f"出现「{item['wait_text']}」")
+        if item.get("absent_text"):
+            conds.append(f"消失「{item['absent_text']}」")
+        return base + ("(" + "+".join(conds) + ")" if conds else "")
+    labels = {"restart": "重启 APP", "charging": "等待充电",
+              "map_load": "地图加载", "battery": "电量门槛"}
+    base = labels.get(t, str(t))
+    extra = ""
+    if t == "battery":
+        extra = f"≥{item.get('min_level', 50)}%"
+    elif t == "map_load" and item.get("ready_text"):
+        extra = f"({item['ready_text']})"
+    elif t == "charging" and item.get("timeout"):
+        extra = f"({int(item['timeout']) // 60}分钟)"
+    return f"{base}{extra}"
 
 
 def prepare(d, cfg, restart=True, charging=True, map_load=True, battery=True,

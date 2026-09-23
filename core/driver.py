@@ -50,6 +50,47 @@ def load_config():
     return load_yaml_file(CONFIG_PATH)
 
 
+def load_preconditions(path=None):
+    """读前置条件列表; 未配置返回 None(调用方用默认值)"""
+    cfg = load_yaml_file(path or CONFIG_PATH)
+    items = cfg.get("preconditions") if isinstance(cfg, dict) else None
+    return items if isinstance(items, list) and items else None
+
+
+def save_preconditions(items, path=None):
+    """把前置条件列表写入 config.yaml 的 preconditions 段(整段替换, 保留其它内容与注释)
+
+    文本级实现: 有该段则原地替换, 没有则追加到末尾 —— 不走 yaml.safe_dump,
+    避免丢掉整个文件的注释与排版。
+    """
+    path = path or CONFIG_PATH
+    with open(path, encoding="utf-8", newline="") as f:
+        text = f.read()
+    eol = "\r\n" if "\r\n" in text else "\n"
+    body = yaml.safe_dump({"preconditions": items}, allow_unicode=True,
+                          sort_keys=False, default_flow_style=False)
+    lines = text.splitlines(keepends=True)
+    start = None
+    for i, ln in enumerate(lines):
+        if ln.startswith("preconditions:"):
+            start = i
+            break
+    if start is None:
+        new_text = text.rstrip("\r\n") + eol + eol + body
+    else:
+        end = len(lines)
+        for j in range(start + 1, len(lines)):
+            ln = lines[j]
+            # 下一个顶级键 = 非空、非缩进、**且非 YAML 列表项**(- 开头)
+            # ★ 漏掉 "- " 判断会把列表项当成新键 → 旧项残留、读回变两份
+            if ln.strip() and not ln[0].isspace() and not ln.startswith("-"):
+                end = j
+                break
+        new_text = "".join(lines[:start]) + body + "".join(lines[end:])
+    with open(path, "w", encoding="utf-8", newline="") as f:
+        f.write(new_text)
+
+
 def update_config(updates, path=None):
     """原位更新 config.yaml 的标量键,保留注释与格式(GUI 配置同步入口)
 

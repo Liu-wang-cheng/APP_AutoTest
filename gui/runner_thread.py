@@ -56,7 +56,11 @@ class RunWorker(QThread):
         super().__init__(parent)
         self.device_id = device_id
         self.case_files = case_files       # list: yaml 路径
-        self.pre = preconditions  # dict: restart/charging/map_load/battery
+        # 前置项列表 [{type, enabled, ...参数}](旧版传 dict 时自动转换, 兼容)
+        if isinstance(preconditions, dict):
+            preconditions = [{"type": k, "enabled": bool(v)}
+                             for k, v in preconditions.items()]
+        self.pre_items = preconditions
         self.repeat = max(1, int(repeat))  # 整个队列重复的轮数
         self.runner = None
         self._stop_requested = False
@@ -110,28 +114,28 @@ class RunWorker(QThread):
                     # 前置: 第 1 轮第 1 个用例按勾选项全量执行,后续用例只重启 APP
                     if rnd == 0 and i == 0:
                         self.status.emit(f"前置准备({case_name})...")
-                        pre_results = session.prepare(
-                            d, cfg, should_cancel=lambda: self._stop_requested,
-                            **self.pre)
+                        pre_results = session.prepare_items(
+                            d, cfg, self.pre_items,
+                            on_progress=self.status.emit,
+                            should_cancel=lambda: self._stop_requested)
                         # ★ 前置检查结果写入执行结果表与报告(用户要求可见);
                         #   充电/电量行带机器实际电量
                         try:
                             batt = session.get_battery_level(d)
                         except Exception:
                             batt = -1
-                        for key, ok in pre_results.items():
-                            if ok is None:      # 未勾选的不写
-                                continue
-                            desc = pre_step_desc(key, batt)
+                        for r in pre_results:
+                            desc = "前置-" + r["desc"]
+                            if ("电量" in desc or "充电" in desc) and batt >= 0:
+                                desc += f"(当前电量 {batt}%)"
                             report.set_step_desc(module, desc)
-                            report.add_result(module, bool(ok),
-                                              "" if ok else "前置未通过(超时或失败)", "")
-                            self.step_done.emit({"desc": desc, "passed": bool(ok),
-                                                 "error": "" if ok else "前置未通过",
+                            report.add_result(module, r["ok"],
+                                              "" if r["ok"] else "前置未通过(超时或失败)", "")
+                            self.step_done.emit({"desc": desc, "passed": r["ok"],
+                                                 "error": "" if r["ok"] else "前置未通过",
                                                  "screenshot": ""})
-                        # ★ 任一勾选的前置项未通过 → 阻断:本轮不再执行任何用例(用户要求)
-                        failed = [pre_step_desc(key).replace("前置-", "")
-                                  for key, ok in pre_results.items() if ok is False]
+                        # ★ 任一前置项未通过 → 阻断:本轮不再执行任何用例(用户要求)
+                        failed = [r["desc"] for r in pre_results if not r["ok"]]
                         if failed:
                             detail = "、".join(failed)
                             self.log_line.emit(f"[前置] 未通过,阻断本轮执行: {detail}")
