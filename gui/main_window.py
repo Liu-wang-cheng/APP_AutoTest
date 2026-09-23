@@ -1217,6 +1217,25 @@ class MainWindow(QMainWindow):
         combo.blockSignals(False)
         self.env_status.setText(f"已删除历史记录: {removed_text}")
 
+    def _purge_name_history(self, hist_key, value):
+        """把某个值从历史中移除(用于「检测不到的 APP 不该记历史」, 用户要求)"""
+        if not hist_key or not value:
+            return
+        hist = self._load_name_history(hist_key)
+        if value not in hist:
+            return
+        hist = [v for v in hist if v != value]
+        st = QSettings("vacuum_test", "case_studio")
+        st.setValue(hist_key, hist)
+        combo = getattr(self, "app_name_edit", None)
+        if combo is not None and combo.property("hist_key") == hist_key:
+            keep = combo.currentText()
+            combo.blockSignals(True)
+            combo.clear()
+            combo.addItems(hist)
+            combo.setCurrentText(keep)     # 输入框保留用户所写, 只是不再进历史
+            combo.blockSignals(False)
+
     @staticmethod
     def _load_name_history(hist_key):
         st = QSettings("vacuum_test", "case_studio")
@@ -1777,6 +1796,7 @@ class MainWindow(QMainWindow):
                     packages)
             if package is None:
                 self.env_status.setText("")
+                self._purge_name_history("hist/app_name", app_name)   # 未检测到 → 不记历史
                 return
             activity = app_detect.detect_main_activity(device_id, package) or ""
             update_config({"app.package": package, "app.main_activity": activity})
@@ -1785,6 +1805,7 @@ class MainWindow(QMainWindow):
         except Exception as e:
             QMessageBox.critical(self, "检测失败", f"{type(e).__name__}: {e}")
             self.env_status.setText("")
+            self._purge_name_history("hist/app_name", app_name)       # 检测失败 → 不记历史
         finally:
             self.detect_btn.setEnabled(True)
             self.detect_btn.setText("🔍 检测")

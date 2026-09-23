@@ -2314,3 +2314,43 @@ def test_history_popup_width_adapts_and_recomputes(qapp, monkeypatch, tmp_path, 
             f"删除最长项后列表应变窄: {combo.view().width()} vs {wide}"
     finally:
         w.close()
+
+
+def test_detect_failure_purges_history(qapp, monkeypatch, tmp_path, fake_settings):
+    """★ 检测不到的 APP 不进历史(用户要求): 未匹配/异常两条路径都清除该名字,
+    其他历史项保留; 输入框内容不被改动"""
+    import gui.main_window as mw
+    monkeypatch.setattr(mw, "CASES_DIR", str(tmp_path / "Test_cases"), raising=False)
+    monkeypatch.setattr(mw, "CONFIG_PATH", str(tmp_path / "config.yaml"), raising=False)
+    monkeypatch.setattr(mw, "load_config", lambda: {"app": {}, "device": {}}, raising=False)
+    fake_settings.store["hist/app_name"] = ["不存在的APP", "涂鸦智能"]
+    w = mw.MainWindow()
+    try:
+        monkeypatch.setattr(w, "_current_device_id", lambda: "127.0.0.1:7555")
+        monkeypatch.setattr(mw.app_detect, "list_packages", lambda dev: [], raising=False)
+        monkeypatch.setattr(mw.QMessageBox, "warning",
+                            staticmethod(lambda *a, **k: None))
+        w.app_name_edit.setCurrentText("不存在的APP")
+        w.on_detect_app()
+        qapp.processEvents()
+        hist = fake_settings.store["hist/app_name"]
+        assert "不存在的APP" not in hist, f"未检测到不应记历史: {hist}"
+        assert "涂鸦智能" in hist, "其他历史项须保留"
+        assert w.app_name_edit.currentText() == "不存在的APP", "输入框保留用户所写"
+        items = [w.app_name_edit.itemText(i) for i in range(w.app_name_edit.count())]
+        assert "不存在的APP" not in items, "下拉里也应消失"
+        # 异常路径同样清除
+        fake_settings.store["hist/app_name"] = ["也检测不到", "涂鸦智能"]
+        w.app_name_edit.setCurrentText("也检测不到")
+
+        def _boom(dev):
+            raise RuntimeError("adb 挂了")
+        monkeypatch.setattr(mw.app_detect, "list_packages", _boom, raising=False)
+        monkeypatch.setattr(mw.QMessageBox, "critical",
+                            staticmethod(lambda *a, **k: None))
+        w.on_detect_app()
+        qapp.processEvents()
+        assert "也检测不到" not in fake_settings.store["hist/app_name"]
+        assert "涂鸦智能" in fake_settings.store["hist/app_name"]
+    finally:
+        w.close()
