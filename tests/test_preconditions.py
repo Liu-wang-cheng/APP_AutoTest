@@ -438,3 +438,33 @@ def test_steps_editor_has_app_group_picker(qapp, monkeypatch, tmp_path):
         assert "模板B.png" in vision.list_templates(), "切换组后应取组B的模板"
     finally:
         dlg.close()
+
+
+def test_steps_editor_syncs_context_on_first_open(qapp, monkeypatch, tmp_path):
+    """★ 首次打开就要能取到模板(用户实测: 之前要手动切一次 APP 组才有)
+
+    组下拉默认选中第一个组, 且初始化时就把模板上下文设好
+    (setCurrentIndex 不触发 currentTextChanged, 必须显式同步)。
+    """
+    import gui.main_window as mw
+    from core import vision
+    root = tmp_path / "Test_cases"
+    for g in ("组A", "组B"):
+        tdir = root / g / "templates"
+        tdir.mkdir(parents=True)
+        (tdir / f"涂鸦_{g}模板.png").write_bytes(b"fake")
+    monkeypatch.setattr(mw, "BASE_DIR", str(tmp_path), raising=False)
+    monkeypatch.setattr(vision, "BASE_DIR", str(tmp_path), raising=False)
+    monkeypatch.setattr(vision, "_template_prefix", lambda: "涂鸦", raising=False)
+    vision.set_template_app_group("")          # 模拟: 主窗口还没设上下文
+
+    dlg = mw.PreconditionEditDialog({"type": "steps", "enabled": True,
+                                     "name": "x", "steps": []}, None,
+                                    app_group="")
+    try:
+        ed = dlg._edits["steps_yaml"][0]
+        assert ed.group_combo.currentText() == "组A", "应默认选中第一个组"
+        assert vision.current_app_group() == "组A", "初始化就该同步模板上下文"
+        assert "组A模板.png" in vision.list_templates(), "首次打开即可取到模板"
+    finally:
+        dlg.close()

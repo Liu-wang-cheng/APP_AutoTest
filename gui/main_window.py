@@ -173,7 +173,8 @@ QFrame#subStepCard QCheckBox, QFrame#subStepCardOpen QCheckBox { background: tra
 /* ⚠ 不要自定义勾选标记(指示器)的样式 —— 一旦自定义, Qt 就不再绘制原生勾,
    勾会直接看不见(实测踩过两次)。只让容器透明, 勾完全交给 Qt 原生绘制。 */
 QPushButton#chipBtn {
-    background: #f1f5f9; border: 1px solid transparent; border-radius: 12px;
+    /* ★ 常驻边框: 原来是 transparent(只有 hover 才出现), 按钮不明显(用户反馈) */
+    background: #f8fafc; border: 1px solid #d9dee6; border-radius: 12px;
     padding: 3px 12px; color: #475569;
 }
 QPushButton#chipBtn:hover { border-color: #2563eb; color: #2563eb; background: #eef4ff; }
@@ -974,13 +975,7 @@ class _StepsEditor(QWidget):
 
     def __init__(self, steps=None, parent=None, app_group=""):
         super().__init__(parent)
-        # ★ 设置模板上下文: 否则模板/基准图下拉取不到当前 APP 组的模板
-        if app_group:
-            from core import vision
-            vision.set_template_app_group(app_group)
-        else:
-            from core import vision
-            app_group = vision.current_app_group()
+        from core import vision
         self.host = _StepsHost(steps)
         self.host.changed.connect(self.render_cards)
         v = QVBoxLayout(self)
@@ -992,10 +987,20 @@ class _StepsEditor(QWidget):
         grow.addWidget(QLabel("APP 组"))
         self.group_combo = QComboBox()
         self.group_combo.addItems(self._list_groups())
-        if app_group and self.group_combo.findText(app_group) >= 0:
-            self.group_combo.setCurrentText(app_group)
+        # 优先用传入的组, 其次当前上下文, 最后**默认第一个组** ——
+        # 否则首次打开时组为空 → 模板上下文为空 → 模板下拉读不到模板,
+        # 要手动切一次组才有(用户实测)
+        want = app_group or vision.current_app_group()
+        k = self.group_combo.findText(want) if want else -1
+        if k >= 0:
+            self.group_combo.setCurrentIndex(k)
+        elif self.group_combo.count() > 0:
+            self.group_combo.setCurrentIndex(0)
         self.group_combo.setToolTip("选择 APP 组后, 模板下拉会列出该组的模板")
         self.group_combo.currentTextChanged.connect(self._on_group_changed)
+        # ★ setCurrentIndex 不触发信号 → 这里显式同步一次模板上下文,
+        #   否则首次打开时模板下拉仍为空(要手动切组才有)
+        vision.set_template_app_group(self.group_combo.currentText() or "")
         grow.addWidget(self.group_combo)
         grow.addStretch(1)
         v.addLayout(grow)
@@ -2003,7 +2008,9 @@ class MainWindow(QMainWindow):
         v.setContentsMargins(0, 0, 0, 0)
         v.setSpacing(2)
         head = QHBoxLayout()
-        head.addWidget(QLabel("用例列表"))
+        list_title = QLabel("用例列表")   # 与「测试步骤详情」同一标题样式(用户要求)
+        list_title.setStyleSheet("color:#2563eb; font-weight:bold; font-size:13px;")
+        head.addWidget(list_title)
         head.addStretch(1)
         all_btn = QPushButton("全选")
         all_btn.clicked.connect(lambda: self._set_cases_checked(Qt.Checked))

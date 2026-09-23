@@ -2655,3 +2655,25 @@ def test_menu_and_checkbox_styles(qapp):
     # ★ 绝不能给 QCheckBox::indicator 设样式: 会让 Qt 不再绘制原生勾(勾会消失)
     assert "QCheckBox::indicator" not in mw.STYLESHEET, \
         "不要自定义勾选标记(indicator), 否则勾不显示"
+
+
+def test_chipbtn_has_visible_border_and_list_title(qapp, monkeypatch, tmp_path):
+    """小圆角按钮(chipBtn)要有常驻边框(原来只有 hover 才出现);
+    用例列表标题与「测试步骤详情」同一标题样式"""
+    import gui.main_window as mw
+    assert "border: 1px solid #d9dee6; border-radius: 12px;" in mw.STYLESHEET, \
+        "chipBtn 边框应常驻(不是 transparent)"
+    monkeypatch.setattr(mw, "CASES_DIR", str(tmp_path / "Test_cases"), raising=False)
+    monkeypatch.setattr(mw, "CONFIG_PATH", str(tmp_path / "config.yaml"), raising=False)
+    w = mw.MainWindow()
+    try:
+        from PySide6.QtWidgets import QLabel
+        # 两个标题都应是蓝色粗体 13px
+        titles = [l for l in w.findChildren(QLabel)
+                  if l.text() in ("用例列表", "测试步骤详情")]
+        assert len(titles) == 2, f"应有两个标题, 实际 {[t.text() for t in titles]}"
+        for t in titles:
+            assert "2563eb" in t.styleSheet() and "bold" in t.styleSheet() \
+                and "13px" in t.styleSheet(), f"「{t.text()}」样式应一致"
+    finally:
+        w.close()
