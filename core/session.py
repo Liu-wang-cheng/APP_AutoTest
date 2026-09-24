@@ -142,21 +142,50 @@ def ensure_charging(d, timeout=1200, on_progress=None, should_cancel=None):
     return False
 
 
+def _split_texts(value):
+    """把一个文本字段拆成多个候选文本(逗号/顿号/分号/换行分隔)。
+
+    ★ 支持多文本是因为同一处文案在不同 APP/机型/版本上可能不同 —— 例如地图就绪
+    可能是「地图编辑」也可能是「地图」, 只填一个就会出现「6 轮重进仍未就绪」
+    (用户真机实测)。填「地图编辑,地图」即可任一命中。
+    """
+    if isinstance(value, (list, tuple, set)):
+        parts = [str(v) for v in value]
+    else:
+        parts = re.split(r"[,，、;；\r\n]", str(value or ""))
+    return [p.strip() for p in parts if p.strip()]
+
+
+def _any_present(d, texts):
+    """texts 里任一文本出现在屏幕上 → True(空列表 → False)。
+
+    单个文本走 textContains(与旧行为完全一致); 多个文本用 textMatches 正则
+    **一次查询** —— 候选变多也不会线性增加等待时间。
+    """
+    if not texts:
+        return False
+    if len(texts) == 1:
+        return bool(d(textContains=texts[0]).exists(timeout=1))
+    return bool(d(textMatches="|".join(re.escape(t) for t in texts)).exists(timeout=1))
+
+
 def ensure_map_loaded(d, timeout=10, device_name="", rounds=6,
                       ready_text="地图编辑", loading_text="地图正在加载"):
     """等待地图加载:正常 10s 内就能加载出来;超时自动退出重进设备页面
 
     ★ ready_text / loading_text 可配置(GUI 前置条件里可编辑) —— 换 APP 时
       页面上的就绪/加载中文案不同, 硬编码会让检查永远不通过。
+      两个字段都支持**多个文本**(逗号/顿号/分号/换行分隔):
+      就绪 = 命中任一; 加载中 = 任一仍在 ⇒ 未就绪。
 
     每轮等 timeout 秒,没就绪就 back 退出设备页、重新点进设备页触发地图
     重新加载,最多 rounds 轮。全轮失败才放行告警(后续步骤会给出明确失败)。
     """
+    ready, loading = _split_texts(ready_text), _split_texts(loading_text)
     for r in range(rounds):
         end = time.time() + timeout
         while time.time() < end:
-            if (d(textContains=ready_text).exists(timeout=1)
-                    and not d(textContains=loading_text).exists(timeout=1)):
+            if _any_present(d, ready) and not _any_present(d, loading):
                 log.info("[前置] 地图已加载" + (f"(第{r + 1}轮)" if r else ""))
                 return True
             time.sleep(2)
@@ -179,19 +208,22 @@ def ensure_text_check(d, wait_text="", absent_text="", timeout=60,
 
     wait_text    等待**出现**的文本(""=不要求)
     absent_text  等待**消失**的文本(""=不要求); 两者可组合(都满足才算通过)
+                 两者都支持**多个文本**(逗号/顿号/分号/换行分隔):
+                 等待出现 = 命中任一即可; 等待消失 = 全部都不在才算通过
     timeout      等待秒数
     on_timeout   超时后的操作: none(仅报告失败)/ back(按返回键)/ click:文本(点击该文本)
     返回 True 通过 / False 超时未满足
     """
+    waits, absents = _split_texts(wait_text), _split_texts(absent_text)
     label = name or (wait_text or absent_text or "文本检查")
-    if not wait_text and not absent_text:
+    if not waits and not absents:
         log.info(f"[前置] {label}: 未配置判断文本,跳过")
         return True
 
     def _ok():
-        if wait_text and not d(textContains=wait_text).exists(timeout=1):
+        if waits and not _any_present(d, waits):
             return False
-        if absent_text and d(textContains=absent_text).exists(timeout=1):
+        if absents and _any_present(d, absents):
             return False
         return True
 
@@ -252,9 +284,11 @@ PRECONDITION_TYPES = {
     "map_load": {"label": "等待地图加载", "params": [
         {"key": "timeout", "label": "单轮超时(秒)", "default": 10, "type": "int"},
         {"key": "rounds", "label": "重试轮数", "default": 6, "type": "int"},
-        {"key": "ready_text", "label": "就绪文本", "default": "地图编辑", "type": "text"},
+        {"key": "ready_text", "label": "就绪文本", "default": "地图编辑", "type": "text",
+         "hint": "多个用逗号分隔, 命中任一即算就绪。如: 地图编辑,地图,清扫地图"},
         {"key": "loading_text", "label": "加载中文本", "default": "地图正在加载",
-         "type": "text"}]},
+         "type": "text",
+         "hint": "多个用逗号分隔, 任一仍存在即算未就绪"}]},
     "battery": {"label": "电量门槛", "params": [
         {"key": "min_level", "label": "最低电量(%)", "default": 50, "type": "int"},
         {"key": "timeout", "label": "超时(秒)", "default": 1800, "type": "int"}]},

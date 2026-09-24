@@ -5,6 +5,7 @@
 新增项要填「名称」和「操作内容」(检测文本→执行操作)。
 """
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -35,11 +36,16 @@ class FakeDev:
 
     def __call__(self, **kw):
         owner = self
-        key = next((k for k in ("textContains", "text", "description") if k in kw), None)
+        key = next((k for k in ("textContains", "text", "textMatches", "description")
+                    if k in kw), None)
 
         class R:
             def exists(self, timeout=1):
-                return key is not None and kw[key] in owner.present
+                if key is None:
+                    return False
+                if key == "textMatches":     # 多文本走正则(见 session._any_present)
+                    return any(re.search(kw[key], t) for t in owner.present)
+                return kw[key] in owner.present
 
             def click(self):
                 owner.clicked.append(kw.get(key))
@@ -179,6 +185,57 @@ def test_map_load_custom_texts(monkeypatch):
     assert session.ensure_map_loaded(dev2, timeout=0.01, rounds=1,
                                      ready_text="地图就绪了",
                                      loading_text="地图渲染中") is False
+
+
+# ── 多文本判断(同一处文案在不同 APP/机型上不一样) ──
+
+def test_split_texts_separators():
+    """一个字段可填多个文本: 逗号/顿号/分号/换行 都能分隔, 空项丢弃"""
+    assert session._split_texts("地图编辑,地图") == ["地图编辑", "地图"]
+    assert session._split_texts("地图编辑，地图、清扫地图") == ["地图编辑", "地图", "清扫地图"]
+    assert session._split_texts("地图编辑;地图\n清扫地图") == ["地图编辑", "地图", "清扫地图"]
+    assert session._split_texts("  ") == []
+    assert session._split_texts("") == []
+    assert session._split_texts(["A", " B "]) == ["A", "B"]      # 已是列表也接受
+
+
+def test_map_load_multi_texts(monkeypatch):
+    """★ 就绪/加载中文本各支持多个: 就绪命中任一即可; 加载中任一仍在 ⇒ 未就绪。
+
+    真机背景: 只填一个「地图编辑」时, 用户设备上 6 轮重进都判定未就绪。
+    """
+    monkeypatch.setattr(session.time, "sleep", lambda s: None)
+    # 实际文案是「地图」, 配置里写了两个 → 应判定就绪
+    ok = FakeDev(present=("地图",))
+    assert session.ensure_map_loaded(ok, timeout=0.01, rounds=1,
+                                     ready_text="地图编辑,地图",
+                                     loading_text="地图正在加载") is True
+    # 就绪文案命中, 但加载中文案命中(多个里任一个) → 仍未就绪
+    loading = FakeDev(present=("地图", "加载中"))
+    assert session.ensure_map_loaded(loading, timeout=0.01, rounds=1,
+                                     ready_text="地图编辑,地图",
+                                     loading_text="地图正在加载,加载中") is False
+    # 就绪文案一个都没命中 → 未就绪
+    miss = FakeDev(present=("首页",))
+    assert session.ensure_map_loaded(miss, timeout=0.01, rounds=1,
+                                     ready_text="地图编辑,地图",
+                                     loading_text="地图正在加载") is False
+
+
+def test_text_check_multi_texts(monkeypatch):
+    """★ 文本检查同样支持多个: 等待出现=任一命中; 等待消失=全部不在"""
+    monkeypatch.setattr(session.time, "sleep", lambda s: None)
+    assert session.ensure_text_check(FakeDev(present=("主页",)), wait_text="首页,主页",
+                                     timeout=0.01) is True
+    assert session.ensure_text_check(FakeDev(present=("首页",)), wait_text="首页,主页",
+                                     timeout=0.01) is True
+    assert session.ensure_text_check(FakeDev(present=("首页",)), wait_text="主页,设置",
+                                     timeout=0.01) is False
+    # 等待消失: 只要还有任一个在, 就不算通过
+    assert session.ensure_text_check(FakeDev(present=("请稍候",)),
+                                     absent_text="加载中,请稍候", timeout=0.01) is False
+    assert session.ensure_text_check(FakeDev(present=("首页",)),
+                                     absent_text="加载中,请稍候", timeout=0.01) is True
 
 
 # ── 类型定义完整性 ──
