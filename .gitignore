@@ -7,4 +7,5 @@ Test_img/screenshots/
 .pytest_cache/
 *.bak*
 .DS_Store
-Test_cases/*/screenshots/     # 用例执行截图(运行产物, 不入库)
+# 用例执行截图(运行产物, 不入库)
+Test_cases/*/screenshots/
