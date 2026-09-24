@@ -33,7 +33,8 @@ runner:
 # 用例执行期间一律跳过(不打扰真机测试)。
 update:
   enabled: true
-  repository: ""            # 如 your-name/Auto_test
+  repository: "Liu-wang-cheng/APP_AutoTest"   # GitHub owner/repo(发布脚本会更新这里的 version.json)
+  branch: "master"          # ★ 版本清单所在分支 —— 本仓库默认分支是 master, 不是 main
   version_file: "version.json"
   check_interval_hours: 8
   # mirrors 一般不用改 —— 国内访问 GitHub 慢时按延迟自动挑最快的一个。

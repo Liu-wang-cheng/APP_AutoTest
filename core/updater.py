@@ -37,16 +37,18 @@ VERSION_TIMEOUT = 10.0
 DOWNLOAD_TIMEOUT = 60.0
 _UA = "AutoTest-Updater"          # 有的 CDN 对空 UA 不友好
 
-#: 镜像站: base_url 取仓库文件, download_prefix 加速 Release 下载(留空=直连)
+#: 镜像站: base_url 取仓库文件, download_prefix 加速 Release 下载(留空=直连)。
+#: {repo}/{branch} 两个占位符都会被替换 —— 分支**不能写死 main**: 本仓库默认分支
+#: 是 master, 照搬参考项目的 /main 会让版本清单 404(OTA 永远检查失败)。
 DEFAULT_MIRRORS = (
     {"name": "github",
-     "base_url": "https://raw.githubusercontent.com/{repo}/main",
+     "base_url": "https://raw.githubusercontent.com/{repo}/{branch}",
      "download_prefix": ""},
     {"name": "ghfast",
-     "base_url": "https://ghfast.top/https://raw.githubusercontent.com/{repo}/main",
+     "base_url": "https://ghfast.top/https://raw.githubusercontent.com/{repo}/{branch}",
      "download_prefix": "https://ghfast.top/"},
     {"name": "jsdelivr",
-     "base_url": "https://cdn.jsdelivr.net/gh/{repo}@main",
+     "base_url": "https://cdn.jsdelivr.net/gh/{repo}@{branch}",
      "download_prefix": ""},
 )
 
@@ -60,6 +62,7 @@ def default_config():
     return {
         "enabled": True,
         "repository": "",                 # owner/repo
+        "branch": "master",               # 版本清单所在分支(默认分支)
         "version_file": "version.json",
         "check_interval_hours": CHECK_INTERVAL_HOURS,
         "mirrors": [dict(m) for m in DEFAULT_MIRRORS],
@@ -75,7 +78,8 @@ def load_update_config(cfg):
     user = (cfg or {}).get("update") or {}
     if not isinstance(user, dict):
         return out
-    for k in ("enabled", "repository", "version_file", "check_interval_hours"):
+    for k in ("enabled", "repository", "branch", "version_file",
+              "check_interval_hours"):
         if k in user and user[k] is not None:
             out[k] = user[k]
     mirrors = user.get("mirrors")
@@ -83,6 +87,24 @@ def load_update_config(cfg):
         cleaned = [m for m in mirrors if isinstance(m, dict) and m.get("base_url")]
         if cleaned:
             out["mirrors"] = cleaned
+    return out
+
+
+def build_mirrors(conf, repo):
+    """把配置里的镜像模板展开成可直接请求的列表(替换 {repo}/{branch} 占位符)。
+
+    repo 为空返回空列表 —— 替换出 `github.com//master` 这种畸形 URL 毫无意义。
+    """
+    if not str(repo or "").strip():
+        return []
+    branch = str(conf.get("branch") or "master")
+    out = []
+    for m in conf.get("mirrors") or []:
+        base = str(m.get("base_url") or "").replace("{repo}", repo) \
+            .replace("{branch}", branch)
+        if base:
+            out.append({"name": m.get("name") or base, "base_url": base,
+                        "download_prefix": str(m.get("download_prefix") or "")})
     return out
 
 
@@ -296,12 +318,7 @@ def check_for_update(cfg, current=None):
     if not repo:
         return CheckResult("skipped", "未配置更新仓库(update.repository)")
     version_file = str(conf.get("version_file") or "version.json")
-    mirrors = []
-    for m in conf.get("mirrors") or []:
-        base = str(m.get("base_url") or "").replace("{repo}", repo)
-        if base:
-            mirrors.append({"name": m.get("name") or base, "base_url": base,
-                            "download_prefix": str(m.get("download_prefix") or "")})
+    mirrors = build_mirrors(conf, repo)
     if not mirrors:
         return CheckResult("error", "更新配置里没有可用的镜像站")
 
