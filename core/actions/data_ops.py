@@ -7,6 +7,7 @@
 import re
 import time
 
+from core.driver import split_texts      # 关键字多个: 半角/全角逗号、顿号、分号、换行
 from core.logger import get_logger
 
 log = get_logger()
@@ -22,7 +23,7 @@ def do_grab(runner, keywords):
     一击不中就报错(2026-09-16 全局清扫实测踩坑)。
     """
     if isinstance(keywords, str):
-        keywords = [k.strip() for k in keywords.split(",")]
+        keywords = split_texts(keywords)
     start = time.time()
     missing = list(keywords)
     results = []
@@ -58,7 +59,7 @@ def do_match(runner, keywords):
     不能拿转场中的错位几何(比如把状态卡的 99% 当面积)一击定胜负。
     """
     if isinstance(keywords, str):
-        keywords = [k.strip() for k in keywords.split(",")]
+        keywords = split_texts(keywords)
     start = time.time()
     mismatches, match_results = [], []
     attempt = 0

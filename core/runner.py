@@ -12,7 +12,7 @@ import yaml
 
 from core import registry as reg
 import core.actions  # noqa: F401  导入即注册全部动作(见 core/actions/__init__.py)
-from core.driver import BASE_DIR
+from core.driver import BASE_DIR, split_texts
 from core.logger import get_logger
 from core.trace import TraceRecorder
 from vlm.backend import VisionRouter
@@ -414,10 +414,14 @@ class ActionRunner:
             self.last_click = None
 
     def _assert_locator(self, value, timeout=None):
-        """文本断言: 逗号分隔多值任一命中即通过,轮询至超时(0=无限等)"""
+        """文本断言: 多值任一命中即通过,轮询至超时(0=无限等)
+
+        多值分隔与前置共用 `split_texts` —— 半角/全角逗号、顿号、分号、换行都算
+        (曾只认半角逗号, 用户写「清洁中，正在吸尘」被当成一整串, 必然超时失败)。
+        """
         timeout = timeout if timeout is not None else self.timeout
         end_time = time.time() + timeout if timeout > 0 else None
-        values = [v.strip() for v in value.split(",")] if "," in value else [value]
+        values = split_texts(value) or [value]
         check_count = 0
         while True:
             if end_time and time.time() >= end_time:

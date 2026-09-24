@@ -41,17 +41,17 @@ ACTIONS = [
     ]},
     {"key": "if_click", "label": "条件点击", "category": "操作", "fields": [
         {"key": "if_click", "label": "候选目标", "type": "text", "required": True,
-         "hint": "逗号分隔多个,存在哪个点哪个"},
+         "hint": "多个用逗号/顿号/分号分隔(中英文逗号均可),存在哪个点哪个"},
     ]},
     {"key": "find_click", "label": "多选一点击", "category": "操作", "fields": [
         {"key": "find_click", "label": "候选(按优先级)", "type": "text", "required": True,
-         "hint": "逗号分隔;支持图片名;也可用 YAML 列表语法"},
+         "hint": "多个用逗号/顿号/分号分隔(中英文逗号均可);支持图片名;也可用 YAML 列表语法"},
     ]},
 
     # ── 断言 ──
     {"key": "assert", "label": "断言(文本/图片)", "category": "断言", "fields": [
         {"key": "assert", "label": "期望出现", "type": "text", "required": True,
-         "hint": "文本(逗号分隔任一匹配) / 图片名(.png)"},
+         "hint": "文本(多个用逗号/顿号分隔, 中英文逗号均可, 任一匹配) / 图片名(.png)"},
     ]},
     {"key": "assert_switch", "label": "断言开关状态", "category": "断言", "fields": [
         {"key": "assert_switch", "label": "期望状态", "type": "text", "required": True,
@@ -72,7 +72,7 @@ ACTIONS = [
     # ── 数据 ──
     {"key": "grab", "label": "抓取页面数据", "category": "数据", "fields": [
         {"key": "grab", "label": "关键字", "type": "text", "required": True,
-         "hint": "逗号分隔,如 面积,时间"},
+         "hint": "多个用逗号/顿号/分号分隔(中英文逗号均可),如 面积,时间"},
     ]},
     {"key": "match", "label": "比对抓取数据", "category": "数据", "fields": [
         {"key": "match", "label": "关键字", "type": "text", "required": True,
@@ -97,7 +97,7 @@ ACTIONS = [
     ]},
     {"key": "wait_for", "label": "等待元素出现", "category": "时间", "fields": [
         {"key": "wait_for", "label": "目标", "type": "text", "required": True,
-         "hint": "文本(逗号任一) / 图片名(.png)"},
+         "hint": "文本(多个用逗号/顿号分隔, 中英文逗号均可) / 图片名(.png)"},
     ]},
     {"key": "wait_loading", "label": "等待加载消失", "category": "时间", "fields": [], "fixed_bool": True},
 
@@ -142,7 +142,7 @@ ACTIONS = [
     # ── 流程控制 ──
     {"key": "if", "label": "条件满足则跳过", "category": "流程控制", "fields": [
         {"key": "if", "label": "条件", "type": "text", "required": True,
-         "hint": "文本 / 电量>50 / 图片名 / resource-id;条件成立跳过本步"},
+         "hint": "文本(多个用逗号/顿号分隔, 中英文逗号均可) / 电量>50 / 图片名 / resource-id;条件成立跳过本步"},
         {"key": "threshold", "label": "相似度阈值", "type": "float",
          "hint": "条件为图片时,填写则用图像对比判断"},
     ], "tip": "条件不成立时执行 else 子步骤;展开卡片后可在下方添加/编辑"},

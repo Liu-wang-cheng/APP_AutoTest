@@ -11,6 +11,7 @@ click 值支持四种形态:
 import time
 
 from core import registry as reg
+from core.driver import split_texts      # 多值文本拆分: 半角/全角逗号、顿号、分号、换行
 from core.logger import get_logger
 
 log = get_logger()
@@ -108,8 +109,8 @@ def do_swipe(runner, step):
 
 @reg.action("if_click", priority=90)
 def do_if_click(runner, step):
-    """存在才点: 逗号分隔多值,点到第一个出现的就停;都不存在不算失败"""
-    values = [v.strip() for v in str(step["if_click"]).split(",")]
+    """存在才点: 多值(逗号/顿号/分号/换行分隔),点到第一个出现的就停;都不存在不算失败"""
+    values = split_texts(step["if_click"]) or [str(step["if_click"])]
     for v in values:
         el = runner._find_element(v)
         if el.exists(timeout=1):
@@ -124,7 +125,7 @@ def do_find_click(runner, step):
     """候选列表,点第一个存在的;全都没有则失败"""
     values = step["find_click"]
     if isinstance(values, str):
-        values = [v.strip() for v in values.split(",")]
+        values = split_texts(values)
     for v in values:
         el = runner._find_element(v)
         if el.exists(timeout=1):
@@ -153,7 +154,7 @@ def do_wait_for(runner, step):
                                    vision.resolve_template(value), min_matches=4):
                 return
         else:
-            for v in [x.strip() for x in value.split(",")]:
+            for v in (split_texts(value) or [value]):
                 if runner._find_element(v).exists(timeout=1):
                     return
         n += 1
@@ -232,11 +233,11 @@ def do_if_impl(runner, step, negate):
         elif ":id/" in condition:
             passed = runner.d(resourceId=condition).exists(timeout=timeout)
         else:
-            # 逗号分隔多值: 任一命中即条件成立(与 assert 的多值语义一致)。
+            # 多值(逗号/顿号/分号/换行分隔): 任一命中即条件成立(与 assert 的多值语义一致)。
             # v1.4 的 TextViewContentChecker(driver, ["充电中","充电完成"], t) 就是这个语义,
             # 转换后的用例大量依赖它。
-            passed = any(runner.d(textContains=c.strip()).exists(timeout=timeout)
-                         for c in condition.split(","))
+            passed = any(runner.d(textContains=c).exists(timeout=timeout)
+                         for c in (split_texts(condition) or [condition]))
 
     if negate:
         passed = not passed

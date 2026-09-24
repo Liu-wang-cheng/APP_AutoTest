@@ -9,6 +9,7 @@ import time
 import cv2
 
 from core import vision
+from core.driver import split_texts as _split_texts   # 多值文本拆分(与断言共用同一套规则)
 from core.logger import get_logger
 
 log = get_logger()
@@ -140,20 +141,6 @@ def ensure_charging(d, timeout=1200, on_progress=None, should_cancel=None):
         time.sleep(30)
     log.warning(f"[前置] 超时 {timeout // 60} 分钟,设备仍未进入充电状态")
     return False
-
-
-def _split_texts(value):
-    """把一个文本字段拆成多个候选文本(逗号/顿号/分号/换行分隔)。
-
-    ★ 支持多文本是因为同一处文案在不同 APP/机型/版本上可能不同 —— 例如地图就绪
-    可能是「地图编辑」也可能是「地图」, 只填一个就会出现「6 轮重进仍未就绪」
-    (用户真机实测)。填「地图编辑,地图」即可任一命中。
-    """
-    if isinstance(value, (list, tuple, set)):
-        parts = [str(v) for v in value]
-    else:
-        parts = re.split(r"[,，、;；\r\n]", str(value or ""))
-    return [p.strip() for p in parts if p.strip()]
 
 
 def _any_present(d, texts):

@@ -19,6 +19,21 @@ class YamlFileError(ValueError):
     pass
 
 
+def split_texts(value):
+    """把一个文本字段拆成多个候选文本。
+
+    ★ 断言(`assert`)与前置(就绪/加载中/文本检查)共用这一套规则 —— 曾经只有断言
+    按**半角逗号**拆, 用户写「清洁中，正在吸尘」(全角逗号)时会被当成一整串去找,
+    必然超时失败(真机实测)。现在半角/全角逗号、顿号、分号、换行都算分隔符,
+    空项自动丢弃; 传入 list/tuple 也接受。
+    """
+    if isinstance(value, (list, tuple, set)):
+        parts = [str(v) for v in value]
+    else:
+        parts = re.split(r"[,，、;；\r\n]", str(value or ""))
+    return [p.strip() for p in parts if p.strip()]
+
+
 def load_yaml_file(path):
     """读取 YAML 文件;失败时抛出带文件名与原因说明的 YamlFileError
 

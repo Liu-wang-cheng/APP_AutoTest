@@ -14,7 +14,7 @@ import numpy as np
 from PIL import Image
 
 from core import registry as reg
-from core.driver import BASE_DIR
+from core.driver import BASE_DIR, split_texts   # 状态文本多个: 半角/全角逗号、顿号等
 from core.logger import get_logger
 
 log = get_logger()
@@ -302,7 +302,7 @@ def do_spot_clean(runner, step):
         cfg.update({k: v for k, v in over.items() if v not in (None, "")})
     for k in ("state_texts",):
         if isinstance(cfg[k], str):
-            cfg[k] = [s.strip() for s in cfg[k].split(",") if s.strip()]
+            cfg[k] = split_texts(cfg[k])
     zones = getattr(runner, "_stored_zones", [])
     if not zones:
         raise RuntimeError("未识别到任何房间分区,请先执行 room_zones")

@@ -459,3 +459,55 @@ def test_match_raises_on_real_mismatch(make_runner, monkeypatch):
     r.store["面积"] = "5"
     with pytest.raises(AssertionError, match="数据不一致"):
         data_ops.do_match(r, "面积")
+
+
+# ── 断言的多值拆分(半角/全角逗号都要认) ──
+
+def test_assert_multi_value_full_width_comma(make_runner, monkeypatch):
+    """★ 断言的多个候选值必须支持**全角逗号**。
+
+    真机实证: 用例里写 `assert: 清洁中，正在吸尘`(全角逗号), 而旧实现只按半角逗号
+    拆分 → 整串被当成一个文本去找, 必然失败:
+        日志: 超时(30s)未找到: 清洁中，正在吸尘
+    """
+    d = FakeDevice(present=("正在吸尘",))
+    r = make_runner(d)
+    monkeypatch.setattr(r, "_poll_sleep", lambda n: None)
+    r._assert_locator("清洁中，正在吸尘", timeout=1)        # 命中其一即通过, 不抛异常
+    assert any(q.get("textContains") == "正在吸尘" for q in d.queries), \
+        f"应按全角逗号拆分后逐个查找: {d.queries}"
+    # 顿号/分号/换行同样算分隔符
+    d2 = FakeDevice(present=("清洁中",))
+    r2 = make_runner(d2)
+    monkeypatch.setattr(r2, "_poll_sleep", lambda n: None)
+    r2._assert_locator("清洁中、正在吸尘", timeout=1)
+    r2._assert_locator("清洁中;正在吸尘", timeout=1)
+    # 都没命中时仍必须失败(不能变成恒真)
+    d3 = FakeDevice(present=())
+    r3 = make_runner(d3)
+    monkeypatch.setattr(r3, "_poll_sleep", lambda n: None)
+    with pytest.raises(AssertionError):
+        r3._assert_locator("清洁中，正在吸尘", timeout=0.2)
+
+
+# ── 多值文本的分隔符一致性(全角逗号等) ──
+
+def test_if_click_full_width_comma(make_runner):
+    """★ if_click 的候选也要支持全角逗号(用户要求: 所有多值判断格式一致)"""
+    from core.actions.basic import do_if_click
+    d = FakeDevice(present=("乙",))
+    do_if_click(make_runner(d), {"if_click": "甲，乙"})
+    vals = [q.get("textContains") for q in d.queries]
+    assert "甲" in vals and "乙" in vals, f"应按全角逗号拆分后逐个查找: {vals}"
+
+
+def test_wait_for_full_width_comma(make_runner):
+    """★ wait_for 的候选同样支持全角逗号/顿号"""
+    from core.actions.basic import do_wait_for
+    d = FakeDevice(present=("已就绪",))
+    do_wait_for(make_runner(d), {"wait_for": "加载中，已就绪", "timeout": 2})
+    vals = [q.get("textContains") for q in d.queries]
+    assert "加载中" in vals and "已就绪" in vals, f"应拆分后逐个查找: {vals}"
+    d2 = FakeDevice(present=("清洁中",))
+    do_wait_for(make_runner(d2), {"wait_for": "清洁中、回充中", "timeout": 2})
+    assert "清洁中" in [q.get("textContains") for q in d2.queries]
