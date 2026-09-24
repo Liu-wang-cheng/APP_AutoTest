@@ -143,12 +143,16 @@ def get_token():
 
 def _request_json(url, token, method="GET", data=None, ctype="application/json",
                   timeout=(10, 600)):
+    # ★ urllib 的 timeout 只接受**单个数字**(socket 级 per-op 超时), 不像 requests
+    #   接受 (连接, 读取) 元组 —— 传元组会在建连时 TypeError(实测踩过)。
+    #   取元组的较大值: 上传大文件时每个收发操作都可能持续较久。
+    t = max(timeout) if isinstance(timeout, (tuple, list)) else timeout
     req = urllib.request.Request(
         url, method=method,
         data=data.encode("utf-8") if isinstance(data, str) else data,
         headers={"Authorization": f"token {token}", "Accept": "application/vnd.github+json",
                  "User-Agent": UA, "Content-Type": ctype})
-    return urllib.request.urlopen(req, timeout=timeout)
+    return urllib.request.urlopen(req, timeout=t)
 
 
 def create_release(repo, token, version, notes, branch):
