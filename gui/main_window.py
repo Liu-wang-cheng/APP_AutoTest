@@ -961,28 +961,25 @@ class UpdateDownloadThread(QThread):
         from core.driver import DATA_DIR
         try:
             conf = updater.load_update_config(self._cfg)
-            mirrors = {m.get("name"): m for m in conf.get("mirrors") or []}
             # 下载走镜像加速: 版本清单所在的镜像若配了 download_prefix 就用它
             prefix = getattr(self._mirror, "download_prefix", "") or ""
             url = updater.apply_download_prefix(self._info.download_url, prefix)
             if not url:
                 self.done.emit("", "版本清单里没有 download_url")
                 return
-            zip_path = os.path.join(DATA_DIR, "_update_download.zip")
-            updater.download(url, zip_path,
+            # onefile: 安装包就是 exe 本体, 直接下成固定名, 替换脚本按它工作
+            new_exe = os.path.join(DATA_DIR, "_update_download.exe")
+            updater.download(url, new_exe,
                              progress_cb=lambda d, t, s: self.progress.emit(d, t, s))
-            if not updater.verify_sha256(zip_path, self._info.sha256):
+            if not updater.verify_sha256(new_exe, self._info.sha256):
                 try:
-                    os.remove(zip_path)
+                    os.remove(new_exe)
                 except OSError:
                     pass
                 self.done.emit("", "下载包校验失败(sha256 不符), 已删除")
                 return
-            extract_dir = os.path.join(DATA_DIR, "_update_extracted")
-            updater.extract_package(zip_path, extract_dir)
-            bat = updater.generate_update_bat(
-                DATA_DIR, extract_dir, os.getpid(),
-                "AutoTest.exe")          # exe 名实际由 bat 动态解析, 这里仅占位
+            updater.validate_new_exe(new_exe)
+            bat = updater.generate_update_bat(DATA_DIR, os.getpid())
             self.done.emit(bat, "")
         except Exception as e:
             self.done.emit("", f"下载/准备更新失败: {e}")

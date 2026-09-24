@@ -1,7 +1,7 @@
 @echo off
 chcp 65001 >nul 2>&1
-REM 一键打包: 检查环境 -> 清理旧产物 -> PyInstaller(onedir) -> 验证
-REM 产物: dist\AutoTest\  (整个目录拷走即可用; 用户数据在 exe 旁边自动生成)
+REM 一键打包: 检查环境 -> 清理旧产物 -> PyInstaller(onefile 单exe) -> 验证
+REM 产物: dist\AutoTest.exe  (单个 exe, 双击即用; 用户数据在其同级目录自动生成)
 setlocal
 cd /d "%~dp0"
 
@@ -29,12 +29,12 @@ echo [3/4] 清理旧产物...
 if exist build rmdir /s /q build
 if exist dist rmdir /s /q dist
 
-echo [4/4] PyInstaller 打包(onedir, 首次约需几分钟)...
+echo [4/4] PyInstaller 打包(onefile, 首次约需几分钟)...
 "%PY%" -m PyInstaller AutoTest.spec --noconfirm --distpath dist --workpath build\pyi || exit /b 1
 
 echo.
 echo 验证产物...
-"%PY%" tools\verify_package.py dist\AutoTest
+"%PY%" tools\verify_package.py dist\AutoTest.exe
 if errorlevel 1 (
     echo.
     echo [WARN] 产物验证未全通过, 请查看上面的 [FAIL]
@@ -43,7 +43,7 @@ if errorlevel 1 (
 
 echo.
 echo ============================================
-echo  打包完成: dist\AutoTest\
-echo  分发: 整个目录拷给对方, 双击 AutoTest.exe
+echo  打包完成: dist\AutoTest.exe
+echo  分发: 把这一个 exe 发给对方, 双击即用
 echo ============================================
 endlocal

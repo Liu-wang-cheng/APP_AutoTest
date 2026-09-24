@@ -27,20 +27,29 @@ _SEED_FILES = (
     ("config/locators.yaml", "config/locators.yaml"),
     ("config/config.example.yaml", "config/config.example.yaml"),
 )
+#: 默认用户数据的**目录**(逐文件"缺才补"): 用例与模板随包带一套默认的,
+#: 本地没有的文件解压出来当默认值, 本地已有的**绝不覆盖** —— 更新/重装都
+#: 不会动用户改过的用例与模板(用户要求 2026-09-24)。
+#: screenshots 之类的运行产物在 spec 里就不进包, 这里只管"缺才补"。
+_SEED_DIRS = ("Test_cases", "Test_img/templates")
 #: 用户配置的模板(只生成, 之后由用户在 GUI 里改)
 _CONFIG_TEMPLATE = "config/config.example.yaml"
 _CONFIG_TARGET = "config/config.yaml"
 
 #: OTA 自替换可能留下的残留(更新 bat 删不掉时的兜底, 见 updater.generate_update_bat)
-_UPDATE_LEFTOVERS = ("_internal_old", "_update_extracted", "_update_download.zip")
+_UPDATE_LEFTOVERS = ("_update_download.exe",)
+#: 旧程序备份(onefile 更新把当前 exe 改名成 <名>.exe.bak, 杀软锁定时可能残留);
+#: 名字不固定(用户可能重命名过 exe), 用 glob 找
+_LEFTOVER_GLOB = "*.exe.bak"
 
 
 def cleanup_update_leftovers(app_dir=None):
     """清掉上次更新中断留下的残留; 返回清理掉的条目。
 
     ★ 正常情况下更新 bat 自己会清; 但杀软可能短暂锁定导致残留 —— 启动时再兜一道
-      (此刻新版本已在运行, 旧 _internal_old 必然没用了)。任何失败都吞掉。
+      (此刻新版本已在运行, 旧 .bak 必然没用了)。任何失败都吞掉。
     """
+    import glob as _glob
     import shutil
     # ★ app_dir 必须单独判断 —— 写成 `app_dir or X if frozen else ""` 会被解析成
     #   `(app_dir or X) if frozen else ""`: 未打包时 app_dir 被整个丢掉, 清理落空
@@ -64,6 +73,12 @@ def cleanup_update_leftovers(app_dir=None):
                 os.remove(p)
             if not os.path.exists(p):
                 cleaned.append(name)
+        except OSError:
+            pass
+    for p in _glob.glob(os.path.join(root, _LEFTOVER_GLOB)):
+        try:
+            os.remove(p)
+            cleaned.append(os.path.basename(p))
         except OSError:
             pass
     if cleaned:
@@ -104,6 +119,28 @@ def ensure_data_dirs(app_dir=None, data_dir=None):
             seeded.append(rel_dst)
         except OSError as e:
             log.warning(f"[初始化] 复制 {rel_dst} 失败(忽略): {e}")
+
+    # 默认用例/模板: 逐文件"缺才补" —— 用户删了某个默认用例, 下次启动会回来;
+    # 用户改过的文件永不被覆盖
+    for rel_dir in _SEED_DIRS:
+        src_dir = os.path.join(src_root, rel_dir)
+        if not os.path.isdir(src_dir):
+            continue
+        for base, _dirs, files in os.walk(src_dir):
+            for fn in files:
+                src = os.path.join(base, fn)
+                # ★ 相对 src_dir(而不是 src_root): 否则目标会变成
+                #   Test_cases/Test_cases/...(双重前缀), 铺错位置
+                rel = os.path.relpath(src, src_dir)
+                dst = os.path.join(dst_root, rel_dir, rel)
+                if os.path.exists(dst):
+                    continue
+                try:
+                    os.makedirs(os.path.dirname(dst), exist_ok=True)
+                    shutil.copy2(src, dst)
+                    seeded.append(os.path.join(rel_dir, rel))
+                except OSError as e:
+                    log.warning(f"[初始化] 铺默认文件 {rel} 失败(忽略): {e}")
 
     # 没有用户配置时, 从模板生成一份, 免得程序一上来就读不到配置
     cfg_dst = os.path.join(dst_root, _CONFIG_TARGET)

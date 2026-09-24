@@ -416,6 +416,39 @@ def test_bootstrap_seeds_program_resources(tmp_path):
     assert (dst / "config" / "config.yaml").is_file()
 
 
+def test_bootstrap_seeds_default_cases_only_when_missing(tmp_path):
+    """★ 默认用例/模板: 本地**缺**的文件解压出来当默认值; 已有的**绝不覆盖**。
+
+    用户要求(2026-09-24): 更新/重装不替换本地的用例或模板之类的数据,
+    只有本地没有这些文件才解压出来变成默认的。
+    """
+    from core import bootstrap
+    src, dst = tmp_path / "pkg", tmp_path / "data"
+    # 包内自带一套默认用例与模板
+    (src / "Test_cases" / "三星").mkdir(parents=True)
+    (src / "Test_cases" / "三星" / "a.yaml").write_text("module: a\n",
+                                                        encoding="utf-8")
+    (src / "Test_cases" / "三星" / "templates").mkdir()
+    (src / "Test_cases" / "三星" / "templates" / "t.png").write_bytes(b"png")
+    (src / "Test_img" / "templates").mkdir(parents=True)
+    (src / "Test_img" / "templates" / "README.md").write_text("r",
+                                                              encoding="utf-8")
+    dst.mkdir()
+    # 用户本地已有一个改过的同名用例
+    (dst / "Test_cases" / "三星").mkdir(parents=True)
+    (dst / "Test_cases" / "三星" / "a.yaml").write_text("module: 用户改过的\n",
+                                                        encoding="utf-8")
+
+    bootstrap.ensure_data_dirs(app_dir=str(src), data_dir=str(dst))
+
+    # 缺的补上
+    assert (dst / "Test_cases" / "三星" / "templates" / "t.png").read_bytes() == b"png"
+    assert (dst / "Test_img" / "templates" / "README.md").read_text() == "r"
+    # 已有的绝不覆盖
+    assert (dst / "Test_cases" / "三星" / "a.yaml").read_text(
+        encoding="utf-8") == "module: 用户改过的\n"
+
+
 def test_bootstrap_never_overwrites_user_data(tmp_path):
     """★ 已存在的文件一律不动 —— 用户改过的定位器/配置不能被初始化覆盖"""
     from core import bootstrap
@@ -452,16 +485,16 @@ def test_bootstrap_never_raises(tmp_path, monkeypatch):
 
 
 def test_cleanup_update_leftovers(tmp_path):
-    """★ 上次更新被杀软打断留下的 _internal_old 必须在启动时清掉 ——
-    否则每次更新都先带上一份 400M 的旧程序目录。"""
+    """★ 上次更新被杀软打断留下的残留必须启动时清掉:
+    半截下载(_update_download.exe)与旧程序备份(*.exe.bak)。"""
     from core import bootstrap
-    (tmp_path / "_internal_old").mkdir()
-    (tmp_path / "_internal_old" / "x.dll").write_bytes(b"old")
-    (tmp_path / "_update_extracted").mkdir()
-    (tmp_path / "_update_download.zip").write_bytes(b"partial")
+    (tmp_path / "_update_download.exe").write_bytes(b"partial")
+    (tmp_path / "AutoTest.exe.bak").write_bytes(b"old")
     cleaned = bootstrap.cleanup_update_leftovers(app_dir=str(tmp_path))
-    assert set(cleaned) == {"_internal_old", "_update_extracted", "_update_download.zip"}
-    assert not (tmp_path / "_internal_old").exists()
+    assert "_update_download.exe" in cleaned
+    assert "AutoTest.exe.bak" in cleaned
+    assert not (tmp_path / "_update_download.exe").exists()
+    assert not (tmp_path / "AutoTest.exe.bak").exists()
     # 没有残留时是安静的无操作
     assert bootstrap.cleanup_update_leftovers(app_dir=str(tmp_path)) == []
 
@@ -542,23 +575,24 @@ def test_download_done_flow(monkeypatch, tmp_path):
 
 
 def test_download_worker_emits_bat(monkeypatch, tmp_path):
-    """UpdateDownloadThread: mock 掉下载/解包/bat 生成, 验证成功路径发 (bat, "")"""
+    """UpdateDownloadThread: mock 掉下载/校验/bat 生成, 验证成功路径发 (bat, "")"""
     import gui.main_window as mw
     from core import updater
 
     monkeypatch.setattr(updater, "apply_download_prefix",
-                        lambda u, p: u or "https://e/pkg.zip")
+                        lambda u, p: u or "https://e/AutoTest.exe")
     monkeypatch.setattr(updater, "download", lambda url, dest, progress_cb=None: None)
     monkeypatch.setattr(updater, "verify_sha256", lambda f, s: True)
-    monkeypatch.setattr(updater, "extract_package", lambda z, d: "AutoTest.exe")
+    monkeypatch.setattr(updater, "validate_new_exe", lambda p: p)
     monkeypatch.setattr(updater, "generate_update_bat",
-                        lambda app, ext, pid, exe: str(tmp_path / "_update.bat"))
+                        lambda app, pid: str(tmp_path / "_update.bat"))
     # run() 里是 from core.driver import DATA_DIR(调用时才取), 钉住它
     monkeypatch.setattr("core.driver.DATA_DIR", str(tmp_path), raising=False)
 
     th = mw.UpdateDownloadThread(
         {"update": {}},
-        updater.VersionInfo(version="2.0", download_url="https://e/pkg.zip"),
+        updater.VersionInfo(version="2.0",
+                            download_url="https://e/AutoTest_v2.0.exe"),
         None)
     results = []
     th.done.connect(lambda bat, err: results.append((bat, err)))

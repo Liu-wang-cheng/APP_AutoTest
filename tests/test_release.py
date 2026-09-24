@@ -6,7 +6,6 @@
 """
 import os
 import sys
-import zipfile
 from pathlib import Path
 
 import pytest
@@ -78,46 +77,38 @@ def test_version_consistency_catches_drift(tmp_path, monkeypatch):
     assert any("CHANGELOG" in e for e in errs)
 
 
-# ── 打包: 用户数据绝不能进更新包 ──
+# ── 产物校验: onefile 的发布物就是一个 exe ──
 
 def _make_dist(root):
-    root.mkdir(parents=True, exist_ok=True)      # write_bytes 不会自建父目录
-    (root / "AutoTest.exe").write_bytes(b"MZ")
-    (root / "_internal" / "core").mkdir(parents=True)
-    (root / "_internal" / "core" / "driver.py").write_bytes(b"#")
-    (root / "_internal" / "PySide6").mkdir()
-    (root / "_internal" / "PySide6" / "Qt6Core.dll").write_bytes(b"dll")
-    # ↓ 验证打包时启动过 exe 会生成的运行时数据
-    (root / "config").mkdir()
-    (root / "config" / "config.yaml").write_text("target_device: 用户的\n", encoding="utf-8")
-    (root / "backups").mkdir()
-    (root / "backups" / "20260924-000000.zip").write_bytes(b"b")
-    (root / "reports").mkdir()
-    (root / "reports" / "r.xlsx").write_bytes(b"x")
+    """造一份合法的打包产物(dist/AutoTest.exe)"""
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "AutoTest.exe").write_bytes(b"MZ" + b"x" * (2 << 20))
 
 
-def test_package_zip_contains_program_only(tmp_path):
-    """★ 更新包只能有 exe + _internal —— config/backups 混进去,
-    下次更新就会覆盖用户机器上的同名用户数据。"""
-    dist = tmp_path / "AutoTest"
-    _make_dist(dist)
-    zp = tmp_path / "AutoTest_v1.1.zip"
-    release.package_zip(str(dist), str(zp))
-    with zipfile.ZipFile(zp) as zf:
-        names = [n.replace("\\", "/") for n in zf.namelist()]
-    assert "AutoTest.exe" in names
-    assert any(n.startswith("_internal/") for n in names)
-    for bad in ("config/", "backups/", "reports/"):
-        assert not any(n.startswith(bad) for n in names), \
-            f"用户数据 {bad} 混进了更新包: {names}"
+def test_find_dist_exe_ok(tmp_path):
+    _make_dist(tmp_path)
+    p = release.find_dist_exe(str(tmp_path))
+    assert os.path.isfile(p) and p.endswith("AutoTest.exe")
 
 
-def test_package_zip_rejects_incomplete_dist(tmp_path):
-    """没有 exe 或 _internal 的产物目录 = 打包没完成, 必须拒绝而不是发个坏包"""
-    d = tmp_path / "bad"
+def test_find_dist_exe_rejects_bad_artifacts(tmp_path):
+    """缺 exe / 太小 / 不是可执行文件, 都必须在发布前拦下(不能发个坏包)"""
+    d = tmp_path / "empty"
     d.mkdir()
     with pytest.raises(FileNotFoundError):
-        release.package_zip(str(d), str(tmp_path / "x.zip"))
+        release.find_dist_exe(str(d))            # 没打包就发布
+
+    d2 = tmp_path / "small"
+    d2.mkdir()
+    (d2 / "AutoTest.exe").write_bytes(b"MZ")
+    with pytest.raises(ValueError, match="字节"):
+        release.find_dist_exe(str(d2))           # 构建中断的半成品
+
+    d3 = tmp_path / "notexe"
+    d3.mkdir()
+    (d3 / "AutoTest.exe").write_bytes(b"<html>error</html>" + b"x" * (2 << 20))
+    with pytest.raises(ValueError, match="可执行"):
+        release.find_dist_exe(str(d3))           # 未知内容
 
 
 # ── 更新器的分支支持: 本仓库默认分支是 master, 不是 main ──

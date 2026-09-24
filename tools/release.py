@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""一键发布: 打 zip -> 传 GitHub Release -> 更新 version.json -> 推 tag。
+"""一键发布: 校验打包产物 -> 传 GitHub Release -> 更新 version.json -> 推 tag。
 
 用法:
     python tools/release.py --version 1.1 --dry-run    # 先预览将做什么(不碰网络)
@@ -9,8 +9,7 @@
 流程(参考 TB_Import_tool 的 release.py, 按本项目改造):
   ① 版本一致性: VERSION == core/version.py == CHANGELOG 最新节, 不一致直接拒绝
      (三处只改了一处就发版, 用户的"检查更新"会永远判断错)
-  ② 打包: dist/AutoTest -> dist/AutoTest_v{ver}.zip, **只装 exe + _internal/**
-     (运行时生成的 config/ backups/ 等绝不进包)
+  ② 产物校验: dist/AutoTest.exe(onefile, 发布物就是一个 exe)
   ③ sha256 -> 创建 Release(v{ver}) -> 上传 asset
   ④ 写 version.json(仓库根) -> commit -> push -> tag v{ver} -> push tag
      (OTA 读的就是仓库根这份 version.json)
@@ -19,7 +18,6 @@
 """
 import argparse
 import hashlib
-import io
 import json
 import os
 import re
@@ -27,7 +25,6 @@ import subprocess
 import sys
 import urllib.error
 import urllib.request
-import zipfile
 from urllib.parse import quote
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -92,31 +89,21 @@ def check_version_consistency(root, version):
     return errs
 
 
-def package_zip(dist_dir, zip_path):
-    """把 dist/AutoTest 打成更新包; 返回 zip 路径。
+def find_dist_exe(dist_dir):
+    """定位并校验打包产物(onefile: 就是一个 exe); 返回其路径。
 
-    ★ 只装 AutoTest.exe + _internal/ —— dist 目录里可能残留运行时生成的
-      config/ backups/ reports/(验证打包时启动过就会生成), 那是用户数据,
-      进了包下次更新就会覆盖用户机器上的同名内容。
+    校验 MZ 头与基本大小 —— 打包失败/产物不完整必须在这里拦下, 而不是发个坏包。
     """
-    exe = None
-    for f in os.listdir(dist_dir):
-        if f.lower().endswith(".exe"):
-            exe = f
-            break
-    if not exe:
-        raise FileNotFoundError(f"{dist_dir} 里没有 exe(先跑 build.bat?)")
-    internal = os.path.join(dist_dir, "_internal")
-    if not os.path.isdir(internal):
-        raise FileNotFoundError(f"{dist_dir} 里没有 _internal/(不完整的产物?)")
-    os.makedirs(os.path.dirname(os.path.abspath(zip_path)), exist_ok=True)
-    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
-        zf.write(os.path.join(dist_dir, exe), exe)
-        for base, _dirs, files in os.walk(internal):
-            for fn in files:
-                full = os.path.join(base, fn)
-                zf.write(full, os.path.relpath(full, dist_dir))
-    return zip_path
+    exe = os.path.join(dist_dir, "AutoTest.exe")
+    if not os.path.isfile(exe):
+        raise FileNotFoundError(
+            f"{exe} 不存在(先跑构建: pytest 后 pyinstaller AutoTest.spec)")
+    if os.path.getsize(exe) < 1 << 20:
+        raise ValueError(f"{exe} 只有 {os.path.getsize(exe)} 字节, 不像完整产物")
+    with open(exe, "rb") as f:
+        if f.read(2) != b"MZ":
+            raise ValueError(f"{exe} 不是 Windows 可执行文件")
+    return exe
 
 
 def compute_sha256(path):
@@ -255,16 +242,16 @@ def main(argv=None):
             print(f"[ERROR] {e}")
         return 1
 
-    # ② 打 zip
-    asset = args.asset or f"AutoTest_v{args.version}.zip"
-    zip_path = os.path.join(ROOT, "dist", asset)
-    print(f"[1/4] 打包 {args.dist} -> {asset}")
+    # ② 产物校验(onefile: 发布物就是一个 exe)
+    asset = args.asset or f"AutoTest_v{args.version}.exe"
+    print(f"[1/4] 校验产物 {args.dist}")
     if args.dry_run:
         if not os.path.isdir(args.dist):
             print(f"  [dry-run] {args.dist} 不存在, 实际运行会在这里失败")
+        exe_path = os.path.join(args.dist, "AutoTest.exe")
     else:
-        package_zip(args.dist, zip_path)
-        print(f"  {os.path.getsize(zip_path) / 1048576:.0f} MB")
+        exe_path = find_dist_exe(args.dist)
+        print(f"  {os.path.getsize(exe_path) / 1048576:.0f} MB")
 
     # ③ 更新说明: 默认取 CHANGELOG 对应节
     date, notes = load_changelog_section(os.path.join(ROOT, "CHANGELOG.md"),
@@ -290,7 +277,7 @@ def main(argv=None):
         if gh_available():
             subprocess.run(["gh", "release", "create", f"v{args.version}",
                             "--target", "master", "--title", f"v{args.version}",
-                            "--notes", notes, zip_path],
+                            "--notes", notes, exe_path],
                            cwd=ROOT, check=True)
             download_url = (f"https://github.com/{repo}/releases/download/"
                             f"v{args.version}/{asset}")
@@ -301,11 +288,11 @@ def main(argv=None):
                       "(GITHUB_TOKEN / ~/.github_token)")
                 return 1
             rid = create_release(repo, token, args.version, notes, "master")
-            download_url = upload_asset(repo, token, rid, zip_path, asset)
+            download_url = upload_asset(repo, token, rid, exe_path, asset)
         print(f"  下载地址: {download_url}")
 
         print("[4/4] 更新 version.json + tag")
-        update_version_json_and_tag(repo, args.version, compute_sha256(zip_path),
+        update_version_json_and_tag(repo, args.version, compute_sha256(exe_path),
                                     download_url, notes)
         print("\n完成。已装旧版的用户会在下次检查更新时收到这个版本。")
     else:

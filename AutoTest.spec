@@ -1,10 +1,10 @@
 # -*- mode: python ; coding: utf-8 -*-
-"""PyInstaller 打包配置(onedir)。
+"""PyInstaller 打包配置(**onefile 单文件**)。
 
-★ 为什么是 onedir 而不是 onefile
-  本项目依赖 1.1G(PySide6 640M + opencv 113M + 两个 onnx 模型)。onefile 每次启动都要
-  把这堆东西解压到 %TEMP%, 而这是个**要反复启动**调模板/跑用例的工具, 等十几秒到几十秒
-  不能接受。onedir 一次展开、之后秒开。
+★ 用户定的形态(2026-09-24): 只交付一个 exe, 双击时 PyInstaller 自动把内部
+  文件解压到 %TEMP% 再运行 —— 分发极简, 更新 = 替换一个文件。
+  代价是每次启动都有解压开销(411MB 载荷, SSD 上数秒); 因此 upx 保持关闭
+  (再压缩只会拖慢启动, 且杀软误报率高)。
 
 ★ 为什么能把 640M 的 PySide6 砍到约 200M
   项目只 import 了 QtCore / QtGui / QtWidgets(已全仓 grep 确认), 其余全是白带的:
@@ -12,12 +12,12 @@
     translations/              60M  项目自己写 QSS, 没用 Qt 自带翻译
     qml/ + Qt6Quick.dll        36M  用的是 Widgets, 不是 QML
     avcodec-61.dll             14M  无多媒体需求
-  下面的 excludes 排模块, datas 过滤再兜一道(有些 DLL 是被 hook 硬塞进来的, 光靠
-  excludes 排不掉)。
+  下面的 excludes 排模块, 再按路径过滤 binaries/datas 兜一道(有些 DLL 是被
+  hook 硬塞进来的, 光靠 excludes 排不掉)。
 
 ★ 用户数据不进包
-  config/config.yaml、Test_cases/、Test_preconditions/、Test_img/ 都是运行时的**外部**
-  数据(见 core/driver.USER_DATA_PATHS)—— 打包只带随版本走的程序资源, 打包进来反而会
+  config/config.yaml、Test_cases/ 等是运行时的**外部**数据(见
+  core/driver.USER_DATA_PATHS)—— 打包只带随版本走的程序资源; 打包进来反而会
   在每次更新时覆盖用户的用例与配置。
 
     pyinstaller AutoTest.spec --noconfirm
@@ -57,7 +57,7 @@ datas = [
     ("gui/assets", "gui/assets"),
     ("config/locators.yaml", "config"),        # 定位器配置(可被更新覆盖)
     ("config/config.example.yaml", "config"),  # 配置模板: 首次运行据此生成 config.yaml
-    ("VERSION", "."),                          # 落在 _internal/VERSION, 更新 bat 用它验证
+    ("VERSION", "."),                          # 落在解压目录, 便于事后取证版本
     ("CHANGELOG.md", "."),
     ("README.md", "."),
 ]
@@ -68,6 +68,23 @@ for pkg in ("rapidocr_onnxruntime", "ddddocr"):
         datas += collect_data_files(pkg, include_py_files=False)
     except Exception as e:
         print(f"[spec] 收集 {pkg} 数据文件失败(打包后 OCR 可能不可用): {e}")
+
+# 默认用例与模板: 随包带一套, 启动时"缺才补"(本地已有绝不覆盖,
+# 见 core/bootstrap._SEED_DIRS)。screenshots/ 与 __pycache__/ 是运行产物,
+# 绝不进包; 只收用例 YAML 与模板目录里的全部文件(模板是 png)。
+_cases_root = os.path.join(ROOT, "Test_cases")
+for _base, _dirs, _files in os.walk(_cases_root):
+    _dirs[:] = [d for d in _dirs if d not in ("screenshots", "__pycache__")]
+    for _fn in _files:
+        _full = os.path.join(_base, _fn)
+        _rel_dir = os.path.relpath(os.path.dirname(_full), ROOT)
+        _in_templates = os.sep + "templates" + os.sep in _full
+        if _in_templates or _fn.lower().endswith((".yaml", ".yml")):
+            datas.append((_full, _rel_dir))
+for _base, _dirs, _files in os.walk(os.path.join(ROOT, "Test_img", "templates")):
+    for _fn in _files:
+        _full = os.path.join(_base, _fn)
+        datas.append((_full, os.path.relpath(os.path.dirname(_full), ROOT)))
 
 a = Analysis(
     ["gui/main.py"],
@@ -107,11 +124,13 @@ a.datas = [d for d in a.datas if _keep(d)]
 
 pyz = PYZ(a.pure)
 
+# onefile: 所有内容打进单个 exe(无 COLLECT 段)
 exe = EXE(
     pyz,
     a.scripts,
+    a.binaries,
+    a.datas,
     [],
-    exclude_binaries=True,
     name="AutoTest",
     debug=False,
     bootloader_ignore_signals=False,
@@ -119,13 +138,4 @@ exe = EXE(
     upx=False,              # UPX 压缩会拖慢启动, 且杀软误报率高, 不开
     console=False,          # 无控制台窗口(与 start_gui.vbs 的效果一致)
     icon=os.path.join(ROOT, "gui", "assets", "app_icon.ico"),
-)
-
-coll = COLLECT(
-    exe,
-    a.binaries,
-    a.datas,
-    strip=False,
-    upx=False,
-    name="AutoTest",
 )

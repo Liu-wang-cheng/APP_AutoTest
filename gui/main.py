@@ -61,8 +61,10 @@ def main():
     _run_backup_async()
     app = QApplication(sys.argv)
     # 应用图标(任务栏/窗口):自绘 乐动品牌融合(O传感器+对勾);ico 含 16~256 多尺寸
+    # ★ 不要在 main() 里再 `import os` —— 函数内 import 会把 os 变成**整个函数**
+    #   的局部变量, 上面 cleanup_update_leftovers(os.path...) 那行就会
+    #   UnboundLocalError(打包后启动即崩, 产物验证抓到过)。模块级已导入。
     from PySide6.QtGui import QIcon
-    import os
     assets = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets")
     icon_path = os.path.join(assets, "app_icon.ico")
     if not os.path.isfile(icon_path):

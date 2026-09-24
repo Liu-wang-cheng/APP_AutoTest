@@ -271,66 +271,47 @@ def test_apply_download_prefix():
     assert updater.apply_download_prefix("", "https://p/") == ""
 
 
-def _make_package(path, with_exe=True, slip=False):
-    """造一个更新包 zip: AutoTest.exe + _internal/...; slip=True 时夹带越界条目"""
-    import zipfile
-    with zipfile.ZipFile(path, "w") as zf:
-        if with_exe:
-            zf.writestr("AutoTest.exe", b"MZ fake exe")
-        zf.writestr("_internal/VERSION", "9.9\n")
-        zf.writestr("_internal/core/driver.py", b"#")
-        if slip:
-            zf.writestr("../evil.txt", "越界文件")
+# ── 新版本 exe 校验(onefile: 安装包就是一个 exe) ──
+
+def test_validate_new_exe_ok(tmp_path):
+    p = tmp_path / "_update_download.exe"
+    p.write_bytes(b"MZ" + b"x" * (2 << 20))        # MZ 头 + 足够大
+    assert updater.validate_new_exe(str(p)) == str(p)
 
 
-def test_extract_package_ok_and_validates_layout(tmp_path):
-    import zipfile
-    z = tmp_path / "pkg.zip"
-    _make_package(str(z))
-    out = tmp_path / "out"
-    exe = updater.extract_package(str(z), str(out))
-    assert exe == "AutoTest.exe"
-    assert (out / "_internal" / "VERSION").read_text(encoding="utf-8").strip() == "9.9"
+def test_validate_new_exe_rejects_bad_files(tmp_path):
+    """错误页/截断文件/不存在的文件都必须拦下, 不能让它们流进替换流程"""
+    small = tmp_path / "small.exe"
+    small.write_bytes(b"MZ")                        # 太小
+    with pytest.raises(ValueError, match="字节"):
+        updater.validate_new_exe(str(small))
 
+    txt = tmp_path / "fake.exe"
+    txt.write_bytes(b"<html>502 Bad Gateway</html>" + b"x" * (2 << 20))
+    with pytest.raises(ValueError, match="MZ"):
+        updater.validate_new_exe(str(txt))          # 镜像报错页被当成程序
 
-def test_extract_package_rejects_zip_without_exe(tmp_path):
-    """包里没有 exe = 包坏了, 必须报错而不是装一个启动不了的东西"""
-    import zipfile
-    z = tmp_path / "bad.zip"
-    with zipfile.ZipFile(z, "w") as zf:
-        zf.writestr("_internal/VERSION", "9.9\n")
-    with pytest.raises(ValueError, match="exe"):
-        updater.extract_package(str(z), str(tmp_path / "out"))
-
-
-def test_extract_package_blocks_zip_slip(tmp_path):
-    """★ 恶意/损坏 zip 里的 ../ 条目不得被解到目标目录之外(zip-slip)"""
-    import zipfile
-    z = tmp_path / "evil.zip"
-    _make_package(str(z), slip=True)
-    with pytest.raises(ValueError, match="越界"):
-        updater.extract_package(str(z), str(tmp_path / "out"))
-    assert not (tmp_path / "evil.txt").exists(), "越界文件被写出来了!"
+    with pytest.raises(ValueError, match="不存在"):
+        updater.validate_new_exe(str(tmp_path / "nope.exe"))
 
 
 def test_generate_update_bat_structure(tmp_path):
-    """★ bat 必须包含完整的替换与回滚流程, 且**不含绝对路径**(GBK 代码页下会被
-    cmd 读乱码, rename/robocopy 全部失效 —— 参考项目实战踩过)。"""
+    """★ bat 必须包含完整的单文件替换与回滚流程, 且**不含绝对路径**(GBK 代码页下
+    会被 cmd 读乱码 —— 参考项目实战踩过)。"""
     app_dir = tmp_path / "app"
-    extract = tmp_path / "app" / "_update_extracted"
     app_dir.mkdir()
-    bat = updater.generate_update_bat(str(app_dir), str(extract), pid=12345,
-                                      exe_name="AutoTest.exe")
+    (app_dir / "AutoTest.exe").write_bytes(b"MZ")   # 当前程序(供动态定位语义)
+    bat = updater.generate_update_bat(str(app_dir), pid=12345)
     text = open(bat, encoding="utf-8").read()
     # 完整流程的关键步骤
-    for must in ('tasklist /FI "PID eq 12345"',            # 等 PID 退出
-                 'rename "_internal" "_internal_old"',      # 原子改名
-                 "robocopy",                                # 空目录复制
-                 'rename "_internal_old" "_internal"',      # 失败回滚
-                 "start \"\"",                              # 启动新版本
-                 "del /f /q \"%~f0\""):                     # 自删
+    for must in ('tasklist /FI "PID eq 12345"',              # 等 PID 退出
+                 '.bak"',                                    # 旧 exe 改名备份
+                 'copy /y "_update_download.exe"',           # 复制新程序
+                 "回滚",                                     # 失败回滚
+                 "start \"\"",                               # 启动新版本
+                 "del /f /q \"%~f0\""):                      # 自删
         assert must in text, f"bat 缺少关键步骤: {must}"
-    # 用户数据绝不出现在替换范围里(bat 只碰 exe 与 _internal)
+    # 用户数据绝不出现在替换范围里(bat 只碰 exe)
     assert "Test_cases" not in text and "Test_preconditions" not in text
     assert "config.yaml" not in text
     # 不嵌绝对路径: app_dir 是含盘符的绝对路径, 不得出现在 bat 里(全用 %~dp0)
