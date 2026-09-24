@@ -7,4 +7,4 @@ Test_img/screenshots/
 .pytest_cache/
 *.bak*
 .DS_Store
-  - tools/_dbg_combo.py
+Test_cases/*/screenshots/     # 用例执行截图(运行产物, 不入库)

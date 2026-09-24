@@ -10,11 +10,32 @@ cases:
     click: 清扫类型
     screenshot: true
   - desc: 点击切换扫拖模式
-    click: 扫地机器人+拖布
+    click: 真空吸尘器
     screenshot: true
   - desc: 返回主界面
     back: true
   - desc: 点击开始清扫
-    click_template: 三星_开始清扫
+    click_template: 开始清扫.png
     screenshot: true
-  wait: null
+  - desc: 判断是否处于清扫状态
+    assert: 清洁中，正在吸尘
+    screenshot: true
+    timeout: 30
+  - desc: 点击暂停清扫
+    click_template: 暂停清扫.png
+    screenshot: true
+  - desc: 判断是否处于暂停状态
+    assert: 暂停
+    screenshot: true
+  - desc: 点击继续清扫
+    click_template: 开始清扫.png
+    screenshot: true
+  - desc: 判断是否处于清扫状态
+    assert: 清洁中，正在吸尘
+    screenshot: true
+    timeout: 30
+  - desc: 判断是否清扫完成
+    assert: 充电,烘干
+    screenshot: true
+    timeout: 0
+  wait: 5

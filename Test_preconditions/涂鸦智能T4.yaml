@@ -1,0 +1,23 @@
+preconditions:
+- type: restart
+  enabled: true
+- type: charging
+  enabled: true
+  timeout: 1200
+- type: map_load
+  enabled: true
+  timeout: 10
+  rounds: 6
+  ready_text: 地图编辑，全部
+  loading_text: 地图正在加载
+- type: battery
+  enabled: true
+  min_level: 50
+  timeout: 1800
+- type: steps
+  enabled: true
+  name: 退出省电模式
+  steps:
+  - desc: 关闭省电模式
+    if_click: 关闭省电模式
+    screenshot: false
