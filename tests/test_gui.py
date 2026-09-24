@@ -1702,287 +1702,6 @@ def test_delete_current_case_unloads_editor(qapp, monkeypatch, tmp_path):
         w.close()
 
 
-# ── 点击模板勾选组合控件(2026-09-23) ──
-
-def test_collapse_via_real_click_after_reorder(qapp, monkeypatch, tmp_path):
-    """★ 完整用户路径验证: 排序(order_paths 分支)→ QTest 真实点击组头折叠 →
-    折叠组只有 ▸ 组头无占位; 空组占位仍在; 再点击展开数据完整"""
-    from PySide6.QtCore import Qt, QPoint
-    from PySide6.QtTest import QTest
-    from gui import main_window as mw
-    root = tmp_path / "Test_cases"
-    (root / "涂鸦智能T4").mkdir(parents=True)
-    (root / "三星").mkdir()
-    for n in ("全局清扫", "划区清扫"):
-        (root / "涂鸦智能T4" / f"{n}.yaml").write_text(
-            "module: %s\ncases: [{name: a, steps: []}]\n" % n, encoding="utf-8")
-    monkeypatch.setattr(mw, "CASES_DIR", str(root), raising=False)
-    monkeypatch.setattr(mw, "CONFIG_PATH", str(tmp_path / "config.yaml"), raising=False)
-    w = mw.MainWindow()
-    w.resize(900, 700)
-    w.show()
-    try:
-        qapp.processEvents()
-        lst = w.case_list
-        # 第一步: 箭头移动(触发 order_paths 重建分支 —— bug 触发条件)
-        first = lst.item(case_row_index(lst, 0)).data(Qt.UserRole)
-        w._move_case(first, +1)
-        texts_after_move = [lst.item(i).text() for i in range(lst.count())]
-        # 三星是空组: 排序后显示占位是正确行为; 但不得给有用例的组插占位
-        assert texts_after_move.count("　　(暂无用例)") == 1, "占位只属于真空组"
-        # 第二步: QTest 真实点击「涂鸦智能T4」组头(排序后它排在三星之后)
-        head_idx = next(i for i in range(lst.count())
-                        if lst.item(i).data(0x0100) is None
-                        and "涂鸦智能T4" in lst.item(i).text())
-        rect = lst.visualItemRect(lst.item(head_idx))
-        QTest.mouseClick(lst.viewport(), Qt.LeftButton,
-                         pos=QPoint(rect.center().x(), rect.center().y()))
-        qapp.processEvents()
-        texts = [lst.item(i).text() for i in range(lst.count())]
-        assert "涂鸦智能T4" in w._collapsed_groups
-        assert not any("暂无用例" in t and "涂鸦智能T4" in t for t in texts), \
-            f"折叠的有用例组不得显示占位: {texts}"
-        assert sum("涂鸦智能T4" in t for t in texts) == 1, "折叠组只显示一个组头"
-        # 第三步: 再点击展开 → 用例数据完整恢复
-        QTest.mouseClick(lst.viewport(), Qt.LeftButton,
-                         pos=QPoint(rect.center().x(), rect.center().y()))
-        qapp.processEvents()
-        roles = [lst.item(i).data(Qt.UserRole) for i in range(lst.count())
-                 if lst.item(i).data(Qt.UserRole)]
-        assert len(roles) == 2 and all(roles), "展开后两条用例数据完整"
-    finally:
-        w.close()
-
-
-def test_collapse_empty_group_hides_placeholder(qapp, monkeypatch, tmp_path):
-    """★ 收起空组(三星)后占位行必须消失(用户实测 bug); 再展开恢复"""
-    from PySide6.QtCore import Qt, QPoint
-    from PySide6.QtTest import QTest
-    from gui import main_window as mw
-    root = tmp_path / "Test_cases"
-    (root / "三星").mkdir(parents=True)          # 空组
-    monkeypatch.setattr(mw, "CASES_DIR", str(root), raising=False)
-    monkeypatch.setattr(mw, "CONFIG_PATH", str(tmp_path / "config.yaml"), raising=False)
-    w = mw.MainWindow()
-    w.resize(900, 700)
-    w.show()
-    try:
-        qapp.processEvents()
-        lst = w.case_list
-        texts0 = [lst.item(i).text() for i in range(lst.count())]
-        assert texts0 == ["▾ 三星", "　　(暂无用例)"]
-        # QTest 真实点击组头折叠
-        rect = lst.visualItemRect(lst.item(0))
-        QTest.mouseClick(lst.viewport(), Qt.LeftButton,
-                         pos=QPoint(rect.center().x(), rect.center().y()))
-        qapp.processEvents()
-        texts1 = [lst.item(i).text() for i in range(lst.count())]
-        assert texts1 == ["▸ 三星"], f"折叠空组后占位必须消失, 实际: {texts1}"
-        # 再点击展开 → 占位恢复
-        QTest.mouseClick(lst.viewport(), Qt.LeftButton,
-                         pos=QPoint(rect.center().x(), rect.center().y()))
-        qapp.processEvents()
-        texts2 = [lst.item(i).text() for i in range(lst.count())]
-        assert texts2 == ["▾ 三星", "　　(暂无用例)"], "展开后占位恢复"
-    finally:
-        w.close()
-
-
-# ── 动作键完整性 + 截图开关(2026-09-22) ──
-
-def test_all_actions_have_key_after_new_step():
-    """★ 全部动作 new_step 后动作键必须存在(此前 back/set_time/room_click
-    等新建后无动作键 → 卡片显示未知、引擎无动作);serialize 也不得丢键"""
-    from gui import schema
-    missing = []
-    for a in schema.ACTIONS:
-        step = schema.new_step(a["key"])
-        if a["key"] not in step:
-            missing.append((a["key"], list(step.keys())))
-        ser = schema.serialize_step(dict(step))
-        if a["key"] not in ser:
-            missing.append((a["key"] + "(serialize丢键)", list(ser.keys())))
-    assert not missing, f"动作键缺失: {missing}"
-    # 语义默认抽查
-    assert schema.new_step("back")["back"] is True
-    assert schema.new_step("set_time")["set_time"] == 0      # 0=当前时间
-    assert schema.new_step("room_click")["room_click"] == 1  # 第1个分区
-    # 条件动作: 空条件保留键(serialize 不清动作键)
-    assert "if" in schema.serialize_step(schema.new_step("if"))
-
-
-def test_screenshot_switch_and_auto_name(qapp, monkeypatch, tmp_path):
-    """截图字段 = 开关(True 自动命名), 旧字符串路径兼容保留"""
-    from types import SimpleNamespace
-    from core import runner as cr
-    root = tmp_path / "Test_img"
-    monkeypatch.setattr(cr, "BASE_DIR", str(tmp_path), raising=False)
-    saved = {"path": None}
-
-    class _Dev:
-        def screenshot(self, path=None):
-            saved["path"] = path
-            return path
-
-    dev = _Dev()
-    cfg = {"step_interval": 0, "default_timeout": 1, "click_timeout": 1}
-    r = cr.ActionRunner(dev, cfg, case_name="冒烟用例")
-    r._execute({"desc": "点击 主界面 按钮", "screenshot": True})
-    p1 = saved["path"].replace("\\", "/")
-    assert "冒烟用例" in p1 and "step01" in p1, f"自动命名: {p1}"
-    assert "点击_主界面_按钮" in p1, "自动命名应含描述"
-    # 旧字符串路径兼容(screenshots/ 前缀补 Test_img/)
-    r._execute({"desc": "d", "screenshot": "screenshots/manual.png"})
-    p2 = saved["path"].replace("\\", "/")
-    assert p2.endswith("Test_img/screenshots/manual.png"), f"旧路径兼容: {p2}"
-
-
-def test_compare_baseline_step_dropdown(qapp, monkeypatch, tmp_path):
-    """compare 基准图 = 下拉选择前面开启截图的步骤(值 step:N);
-    执行端 runner 解析 step:N 为该步截图路径;无截图时明确报错"""
-    from PySide6.QtWidgets import QComboBox
-    from gui import main_window as mw
-    from core import runner as cr
-    root = tmp_path / "Test_cases" / "涂鸦智能T4"
-    root.mkdir(parents=True)
-    (root / "a.yaml").write_text(
-        "module: a\ncases: [{name: x, steps: []}]\n", encoding="utf-8")
-    monkeypatch.setattr(mw, "CASES_DIR", str(root), raising=False)
-    monkeypatch.setattr(mw, "CONFIG_PATH", str(tmp_path / "config.yaml"), raising=False)
-    w = mw.MainWindow()
-    try:
-        # 步骤: 1 开截图, 2 不开, 3 开截图, 4 compare
-        w.add_step("click")
-        w.steps[0]["screenshot"] = True     # 步骤1 开截图
-        w.add_step("click")                  # 步骤2 不开
-        w.add_step("click")                  # 步骤3 开截图
-        w.steps[2]["screenshot"] = True
-        w.add_step("compare")                # 步骤4 对比
-        card = [wd for wd in _card_widgets(w)][3]
-        combo = card.widgets.get("compare")
-        assert isinstance(combo, QComboBox), "基准图应为下拉选择"
-        data = [combo.itemData(i) for i in range(combo.count())]
-        assert data == ["step:1", "step:3"], f"选项应为开启截图的步骤: {data}"
-        combo.setCurrentIndex(1)         # 选 步骤3
-        w._sync_header() if hasattr(w, "_sync_header") else None
-        assert w.steps[3]["compare"] == "step:3"
-    finally:
-        w.close()
-
-
-def test_runner_compare_resolves_step_ref(qapp, tmp_path):
-    """runner: compare=step:N → 取第 N 步结果截图;无截图时明确报错"""
-    import core.actions.asserts as asserts_mod
-    from types import SimpleNamespace
-    from core import runner as cr
-    saved = {"path": None}
-
-    import numpy as np
-    from PIL import Image
-    Image.new("RGB", (64, 64), "white").save(tmp_path / "shot1.png")
-
-    class _Dev:
-        def screenshot(self, path=None, format=None):
-            if format == "opencv":
-                import numpy as np
-                return np.zeros((32, 32, 3), dtype=np.uint8)
-            saved["path"] = path
-            return path
-
-    dev = _Dev()
-    r = cr.ActionRunner(dev, {"step_interval": 0, "default_timeout": 1,
-                              "click_timeout": 1}, case_name="c")
-    # 模拟第 1 步已截图
-    r.results.append({"desc": "步骤1", "passed": True,
-                      "screenshot": str(tmp_path / "shot1.png")})
-    assert asserts_mod._resolve_baseline(r, "step:1") == str(tmp_path / "shot1.png"), \
-        "step:1 应解析为第1步截图路径"
-    # 无截图引用 → 明确报错
-    import pytest
-    with pytest.raises(RuntimeError, match="没有截图"):
-        asserts_mod._resolve_baseline(r, "step:2")
-
-
-def test_delete_selected_case_and_group(qapp, monkeypatch, tmp_path):
-    """删除按钮: 删除选中用例(文件移除+编辑区清空)与删除选中组(整目录移除),
-    均需确认弹窗(测试中 mock);只删除选中的那一个"""
-    from PySide6.QtCore import Qt
-    from PySide6.QtWidgets import QMessageBox
-    import gui.main_window as mw
-    root = tmp_path / "Test_cases"
-    (root / "涂鸦智能T4").mkdir(parents=True)
-    (root / "三星").mkdir(parents=True)
-    for n in ("全局清扫", "划区清扫"):
-        (root / "涂鸦智能T4" / f"{n}.yaml").write_text(
-            "module: %s\ncases: [{name: a, steps: []}]\n" % n, encoding="utf-8")
-    monkeypatch.setattr(mw, "CASES_DIR", str(root), raising=False)
-    monkeypatch.setattr(mw, "CONFIG_PATH", str(tmp_path / "config.yaml"), raising=False)
-    boxes = []
-    monkeypatch.setattr(mw.QMessageBox, "question",
-                        staticmethod(lambda *a, **k: boxes.append(a) or
-                                     QMessageBox.Yes))
-    w = mw.MainWindow()
-    w.resize(900, 700)
-    w.show()
-    try:
-        qapp.processEvents()
-        lst = w.case_list
-        # ── 删除单个用例(划区清扫) ──
-        idx = case_row_index(lst, 1)
-        lst.setCurrentRow(idx)
-        w.on_delete_selected()
-        qapp.processEvents()
-        assert boxes, "删除必须弹确认框"
-        assert not (root / "涂鸦智能T4" / "划区清扫.yaml").exists()
-        roles = [lst.item(i).data(Qt.UserRole) for i in range(lst.count())
-                 if lst.item(i).data(Qt.UserRole)]
-        assert roles == [str(root / "涂鸦智能T4" / "全局清扫.yaml")]
-        # ── 删除整组(三星, 空组): 选中三星组头行 ──
-        head_idx = next(i for i in range(lst.count())
-                        if lst.item(i).data(Qt.UserRole) is None
-                        and "三星" in lst.item(i).text())
-        lst.setCurrentRow(head_idx)
-        assert lst.currentItem().data(Qt.UserRole) is None
-        w.on_delete_selected()
-        qapp.processEvents()
-        assert not (root / "三星").exists(), "删除组应移除整个目录"
-        assert len(boxes) == 2, "两次删除各弹一次确认"
-    finally:
-        w.close()
-
-
-def test_delete_current_case_unloads_editor(qapp, monkeypatch, tmp_path):
-    """删除的正是当前编辑用例时, 编辑区同步清空"""
-    from PySide6.QtCore import Qt, QPoint
-    from PySide6.QtWidgets import QMessageBox
-    from PySide6.QtTest import QTest
-    from gui import main_window as mw
-    root = tmp_path / "Test_cases"
-    (root / "涂鸦智能T4").mkdir(parents=True)
-    (root / "涂鸦智能T4" / "a.yaml").write_text(
-        "module: a\ncases: [{name: x, steps: [{desc: s, click: y}]}]\n",
-        encoding="utf-8")
-    monkeypatch.setattr(mw, "CASES_DIR", str(root), raising=False)
-    monkeypatch.setattr(mw, "CONFIG_PATH", str(tmp_path / "config.yaml"), raising=False)
-    w = mw.MainWindow()
-    w.resize(900, 700)
-    w.show()
-    try:
-        qapp.processEvents()
-        lst = w.case_list
-        w._on_case_item_clicked(lst.item(case_row_index(lst, 0)))
-        assert w.case_path and w.data["module"] == "a"
-        monkeypatch.setattr(mw.QMessageBox, "question",
-                            staticmethod(lambda *a, **k: QMessageBox.Yes))
-        lst.setCurrentRow(case_row_index(lst, 0))
-        w.on_delete_selected()
-        qapp.processEvents()
-        assert w.case_path is None and len(w.steps) == 0, \
-            "删除当前编辑用例后编辑区应清空"
-        assert w.file_label.text() == "未选中用例"
-    finally:
-        w.close()
-
 # ── 点击 / 点击模板 拆分动作(2026-09-23) ──
 
 def test_click_and_click_template_split(qapp, monkeypatch, tmp_path):
@@ -2172,72 +1891,6 @@ def test_name_save_writes_config_and_history(qapp, monkeypatch, tmp_path, fake_s
         assert w.app_name_edit.currentText() == "新APP名", "不应丢失当前输入"
     finally:
         w.close()
-
-
-def test_name_combo_width_adapts_to_content(qapp, monkeypatch, tmp_path, fake_settings):
-    """输入框宽度随内容自适应(长名称不被截断)"""
-    import gui.main_window as mw
-    monkeypatch.setattr(mw, "CASES_DIR", str(tmp_path / "Test_cases"), raising=False)
-    monkeypatch.setattr(mw, "CONFIG_PATH", str(tmp_path / "config.yaml"), raising=False)
-    w = mw.MainWindow()
-    try:
-        w.app_name_edit.setCurrentText("短")
-        qapp.processEvents()
-        narrow = w.app_name_edit.width()
-        w.app_name_edit.setCurrentText("非常长的应用名称用于测试自适应宽度")
-        qapp.processEvents()
-        wide = w.app_name_edit.width()
-        assert wide > narrow, f"长内容应变宽: {narrow} → {wide}"
-        assert wide <= 420, "有上限(420)防止极端长名撑破布局"
-        # 内容必须放得下: combo 宽 ≥ 文本 + 内边距(16) + 箭头区(36)
-        c = w.app_name_edit
-        need = c.lineEdit().fontMetrics().horizontalAdvance(c.currentText()) + 52
-        assert c.width() >= need, f"输入框宽度不足: {c.width()} < {need}"
-        # 设备名称同样自适应
-        w.device_name_edit.setCurrentText("VERY_LONG_DEVICE_NAME_001")
-        qapp.processEvents()
-        assert w.device_name_edit.width() > 100
-    finally:
-        w.close()
-
-
-def test_name_history_push_dedup_and_cap(monkeypatch, fake_settings):
-    """历史记录: 去重、最近在前、最多 10 条"""
-    import gui.main_window as mw
-    for i in range(12):
-        mw.MainWindow._push_name_history("hist/app_name", f"app{i}")
-    hist = fake_settings.store["hist/app_name"]
-    assert len(hist) == 10, f"上限 10 条: {len(hist)}"
-    assert hist[0] == "app11", "最近填写的排最前"
-    # 重复值 → 提到最前且不重复
-    mw.MainWindow._push_name_history("hist/app_name", "app5")
-    hist = fake_settings.store["hist/app_name"]
-    assert hist[0] == "app5" and hist.count("app5") == 1
-    assert len(hist) == 10
-    # 空值不记
-    mw.MainWindow._push_name_history("hist/app_name", "")
-    assert len(fake_settings.store["hist/app_name"]) == 10
-
-
-def test_name_save_writes_config_and_history(qapp, monkeypatch, tmp_path, fake_settings):
-    """编辑名称 → 写 config + 记入历史 + 下拉刷新"""
-    import gui.main_window as mw
-    import core.driver as driver
-    saved = {}
-    monkeypatch.setattr(mw, "update_config", lambda d: saved.update(d), raising=False)
-    monkeypatch.setattr(mw, "CASES_DIR", str(tmp_path / "Test_cases"), raising=False)
-    monkeypatch.setattr(mw, "CONFIG_PATH", str(tmp_path / "config.yaml"), raising=False)
-    w = mw.MainWindow()
-    try:
-        w.app_name_edit.setCurrentText("新APP名")
-        w._save_env_field_of(w.app_name_edit)
-        assert saved.get("app.name") == "新APP名", f"应写回配置: {saved}"
-        # ★ 新语义: APP 名称编辑不记历史(仅检测成功才记)
-        assert "新APP名" not in (fake_settings.store.get("hist/app_name") or []),             "APP 名称编辑不应记历史"
-        assert w.app_name_edit.currentText() == "新APP名", "不应丢失当前输入"
-    finally:
-        w.close()
-
 
 
 def test_detect_app_restores_cursor_and_button(qapp, monkeypatch, tmp_path, fake_settings):
@@ -2724,6 +2377,127 @@ def test_ui_hints_also_go_to_run_log(qapp, monkeypatch, tmp_path):
         w._save_env_field_of(w.app_name_edit)
         qapp.processEvents()
         assert "配置已保存" in w.log_view.toPlainText(), "保存配置应进日志"
+    finally:
+        w.close()
+
+
+def test_name_save_not_duplicated_by_two_signals(qapp, monkeypatch, tmp_path, fake_settings):
+    """★ 一次保存动作只应写一次盘、记一行日志。
+
+    真机日志实证(17:28:36 同一秒出现两行「配置已保存: target_device = 扫地机器0087」):
+    combo 的 activated 与 lineEdit().editingFinished 都接了 _save_env_field_of,
+    从下拉点选一项时两个信号都会发 → 保存执行两次、日志重复。
+    """
+    import gui.main_window as mw
+    saved = []
+    monkeypatch.setattr(mw, "update_config", lambda d: saved.append(d), raising=False)
+    monkeypatch.setattr(mw, "CASES_DIR", str(tmp_path / "Test_cases"), raising=False)
+    monkeypatch.setattr(mw, "CONFIG_PATH", str(tmp_path / "config.yaml"), raising=False)
+    w = mw.MainWindow()
+    try:
+        c = w.device_name_edit
+        w.log_view.clear()
+        c.setCurrentText("扫地机器0087")
+        c.lineEdit().editingFinished.emit()   # 输入框编辑结束
+        c.activated.emit(0)                   # 紧接着从下拉点选同一条
+        qapp.processEvents()
+        assert len(saved) == 1, f"同一值被重复保存 {len(saved)} 次: {saved}"
+        assert w.log_view.toPlainText().count("配置已保存: target_device") == 1, \
+            "运行日志里同一句提示不应重复"
+        # 真的换了值 → 必须照常写盘(去重不能把正常保存也吞掉)
+        c.setCurrentText("扫地机器0099")
+        c.lineEdit().editingFinished.emit()
+        qapp.processEvents()
+        assert len(saved) == 2 and saved[-1].get("target_device") == "扫地机器0099", \
+            f"换了值必须照常保存: {saved}"
+    finally:
+        w.close()
+
+
+def test_delete_current_history_clears_config(qapp, monkeypatch, tmp_path, fake_settings):
+    """★ 用户要求: ✕ 删掉的若是「当前生效的值」, 连 config 一起清空。
+
+    否则输入框清空了、配置里还留着 → 重启按配置回填, 用户看到的是
+    "删了下次启动又出现"。(点击 → _remove_name_history 的事件链由
+    test_history_item_delete_real_click 守护, 这里验证删除语义本身)
+    """
+    import gui.main_window as mw
+    fake_settings.store["hist/device_name"] = ["又一个新的名字", "SE3L"]
+    # 假配置要跟着写入变化, 否则模拟不出"清空后再启动"这一步
+    cfg = {"app": {}, "target_device": "又一个新的名字"}
+    saved = []
+
+    def _upd(d):
+        saved.append(d)
+        cfg.update(d)
+
+    monkeypatch.setattr(mw, "load_config", lambda: cfg, raising=False)
+    monkeypatch.setattr(mw, "update_config", _upd, raising=False)
+    monkeypatch.setattr(mw, "CASES_DIR", str(tmp_path / "Test_cases"), raising=False)
+    monkeypatch.setattr(mw, "CONFIG_PATH", str(tmp_path / "config.yaml"), raising=False)
+    w = mw.MainWindow()
+    try:
+        c = w.device_name_edit
+        # ① 删的不是当前值 → 只删历史, 配置不动, 当前值保留
+        w._remove_name_history(c, 1)          # SE3L
+        qapp.processEvents()
+        assert fake_settings.store["hist/device_name"] == ["又一个新的名字"]
+        assert c.currentText() == "又一个新的名字", "当前值不该被牵连清空"
+        assert not saved, f"删非当前值不该动配置: {saved}"
+        # ② 删的正是当前值 → 历史 + 输入框 + 配置 一起清空
+        w._remove_name_history(c, 0)          # 又一个新的名字(当前值)
+        qapp.processEvents()
+        assert fake_settings.store["hist/device_name"] == []
+        assert c.currentText() == "", "删掉当前值后输入框应清空"
+        assert saved and saved[-1] == {"target_device": ""}, \
+            f"删当前值必须连配置一起清空: {saved}"
+        # ③ 清空后重启: 输入框不再出现该名称(用户报的现象)
+        w.close()
+        w2 = mw.MainWindow()
+        try:
+            assert w2.device_name_edit.currentText() == "", \
+                "重启后不该再回填已被清空的设备名"
+        finally:
+            w2.close()
+        w = None
+    finally:
+        if w is not None:
+            w.close()
+
+
+def test_unchanged_value_not_repushed_to_history(qapp, monkeypatch, tmp_path, fake_settings):
+    """★ 值没变时不该再"保存"、更不该把它重新记回历史。
+
+    真机实证(重启后 17:31:54): 用户没改任何值, 只触发了一次 editingFinished,
+    就把 config 里的 target_device 重新写回历史 —— 下拉从 3 项变 4 项,
+    等于把用户刚用 ✕ 删掉的历史项又撤销回来了(用户报: 删了下次启动又出现)。
+    """
+    import gui.main_window as mw
+    fake_settings.store["hist/device_name"] = ["SE3L", "L10"]
+    monkeypatch.setattr(mw, "load_config",
+                        lambda: {"app": {}, "target_device": "又一个新的名字"}, raising=False)
+    saved = []
+    monkeypatch.setattr(mw, "update_config", lambda d: saved.append(d), raising=False)
+    monkeypatch.setattr(mw, "CASES_DIR", str(tmp_path / "Test_cases"), raising=False)
+    monkeypatch.setattr(mw, "CONFIG_PATH", str(tmp_path / "config.yaml"), raising=False)
+    w = mw.MainWindow()
+    try:
+        c = w.device_name_edit
+        assert c.currentText() == "又一个新的名字", "启动时应按 config 回填当前设备名"
+        assert fake_settings.store["hist/device_name"] == ["SE3L", "L10"]
+        # 用户只是点了下输入框又点到别处(值没改) → editingFinished
+        c.lineEdit().editingFinished.emit()
+        qapp.processEvents()
+        assert fake_settings.store["hist/device_name"] == ["SE3L", "L10"], \
+            f"值未变化却把它重新记入历史: {fake_settings.store['hist/device_name']}"
+        assert not saved, f"值未变化不该重复写盘: {saved}"
+        # 真改了值 → 照常保存并记历史
+        c.setCurrentText("扫地机器0087")
+        c.lineEdit().editingFinished.emit()
+        qapp.processEvents()
+        assert saved and saved[-1].get("target_device") == "扫地机器0087"
+        assert fake_settings.store["hist/device_name"][0] == "扫地机器0087", \
+            "改了值必须记入历史"
     finally:
         w.close()
 

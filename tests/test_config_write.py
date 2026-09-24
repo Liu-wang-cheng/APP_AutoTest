@@ -58,6 +58,21 @@ def test_idempotent_same_value(tmp_path):
     assert p.read_bytes() == before       # 同值回写字节不变
 
 
+def test_update_scalar_to_empty(tmp_path):
+    """清空配置: 空值写成 "" 而不是留空 —— 留空会被读成 None, 与"空串"语义混淆"""
+    import yaml
+    p = _write(tmp_path)
+    update_config({"target_device": ""}, path=p)
+    out = p.read_text(encoding="utf-8")
+    assert 'target_device: ""  # APP内设备名' in out, out
+    assert yaml.safe_load(out)["target_device"] == ""
+    # 嵌套键同样(删除当前 APP 名称时走这条)
+    update_config({"app.name": ""}, path=p)
+    out = p.read_text(encoding="utf-8")
+    assert 'name: ""   # 被测APP' in out, out
+    assert yaml.safe_load(out)["app"]["name"] == ""
+
+
 def test_crlf_preserved(tmp_path):
     p = tmp_path / "c.yaml"
     p.write_text(SAMPLE.replace("\n", "\r\n"), encoding="utf-8", newline="")

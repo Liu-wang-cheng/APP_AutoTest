@@ -1825,17 +1825,23 @@ class MainWindow(QMainWindow):
         st = QSettings("vacuum_test", "case_studio")
         st.setValue(hist_key, hist)
         keep = combo.currentText()
+        removed_current = bool(keep) and keep == removed_text
         combo.blockSignals(True)
         combo.clear()
         combo.addItems(hist)
-        if keep and keep != removed_text:
-            combo.setCurrentText(keep)
-        elif keep == removed_text:
+        if removed_current:
             combo.setCurrentText("")     # 删掉的正是当前值 → 清空
+        elif keep:
+            combo.setCurrentText(keep)
         combo.blockSignals(False)
         # ★ 信号屏蔽期间宽度不重算, 这里补一次(删除后内容可能变化)
         self._refresh_name_tip(combo)
         self._set_status(f"已删除历史记录: {removed_text}")
+        if removed_current:
+            # ★ 用户要求: 删的若是「当前生效的值」, 就把它连 config 一起清掉。
+            #   否则输入框清空了、配置里还在 → 重启按配置回填回来, 用户看到
+            #   的却是"删了下次启动又出现"(真机实测)。
+            self._clear_env_field(combo)
 
     def _reload_name_combo(self, combo):
         """按最新历史重载下拉项(保留当前输入), 并同步宽度"""
@@ -1901,16 +1907,42 @@ class MainWindow(QMainWindow):
         value = w.currentText().strip()
         if not key or not value:
             return
+        # ★ 同值不重复保存: 从下拉点选一项时 activated 与 editingFinished 会各发一次
+        #   (见 _make_name_combo 的接线), 不去重会写两次盘、运行日志出现两行相同提示
+        #   (用户真机实测: 同一秒两条「配置已保存: target_device = ...」)
+        if w.property("last_saved_value") == value:
+            return
         try:
             update_config({key: value})
             self._set_status(f"配置已保存: {key} = {value}")
         except Exception as e:
             QMessageBox.critical(self, "保存配置失败", str(e))
             return
+        w.setProperty("last_saved_value", value)
         hist_key = w.property("hist_key")
         if hist_key and w.property("record_on_save") is not False:
             self._push_name_history(hist_key, value)
             self._reload_name_combo(w)
+
+    def _clear_env_field(self, combo):
+        """把该字段对应的配置值清空(值写为 "")
+
+        ★ 用户要求: 点 ✕ 删掉的若是「当前生效的值」, 连 config 一起清 ——
+        否则输入框清空了、配置里还留着, 重启又回填回来。
+
+        注意: 这只由「✕ 删除当前值」这个明确动作触发; 输入框手动清空后失焦
+        不会清配置(_save_env_field_of 对空值直接 return), 避免误清。
+        """
+        key = combo.property("cfg_key")
+        if not key:
+            return
+        try:
+            update_config({key: ""})
+        except Exception as e:
+            QMessageBox.critical(self, "清空配置失败", str(e))
+            return
+        combo.setProperty("last_saved_value", "")   # 空值如今也是"已写盘"
+        self._set_status(f"已清空配置: {key}")
 
     def _build_env_strip(self):
         """环境配置条(流式布局,窗口窄时自动换行): 设备优先,其次测试APP"""
@@ -1975,6 +2007,12 @@ class MainWindow(QMainWindow):
         #   —— 否则 setCurrentText(int) 抛 TypeError, 窗口构造直接失败(启动"卡住")
         self.app_name_edit.setCurrentText(str(app.get("name") or ""))
         self.device_name_edit.setCurrentText(str(cfg.get("target_device") or ""))
+        # ★ 登记"当前已写盘的值": 启动回填的值本来就是 config 里的值, 不算一次修改。
+        #   否则用户只是点一下输入框再点到别处(editingFinished, 值没变)就会触发一次
+        #   "保存" —— 不但重复写盘, 还会把这个值重新记回历史, 等于把用户刚用 ✕
+        #   删掉的历史项又撤销回来(用户真机实测: 删了下次启动又出现)。
+        for c in (self.app_name_edit, self.device_name_edit):
+            c.setProperty("last_saved_value", c.currentText().strip())
         self._refresh_devices()
 
     # ── 设备检测 ──

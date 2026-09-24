@@ -135,9 +135,9 @@ def _set_top_scalar(lines, key, value):
 
 
 def _fmt_scalar(value):
-    """标量转 YAML 文本,含特殊字符时加引号"""
+    """标量转 YAML 文本,含特殊字符时加引号;空值写 "" 而非留空(读回语义明确)"""
     s = str(value)
-    if re.search(r"[:#'\"]|^ |\s$|\n", s):
+    if s == "" or re.search(r"[:#'\"]|^ |\s$|\n", s):
         s = '"' + s.replace("\\", "\\\\").replace('"', '\\"') + '"'
     return s
 
