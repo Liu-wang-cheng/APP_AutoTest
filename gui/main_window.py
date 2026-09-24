@@ -29,14 +29,13 @@ from PySide6.QtWidgets import (
 from core import app_detect
 from core.driver import BASE_DIR, load_config, update_config, is_case_file
 from core.logger import get_logger
+from core.version import __version__ as APP_VERSION   # 版本号单一真源: core/version.py
 
 log = get_logger()
 from gui import schema
 from gui.runner_thread import RunWorker
 
 CASES_DIR = os.path.join(BASE_DIR, "Test_cases")
-
-APP_VERSION = "1.0"   # 与 git tag v1.0 对应(2026-09-21 首个正式版)
 
 # 用例执行状态灯(delegate 绘制在用例名后面;勾选框保持原生)
 # idle=未执行置灰 / running=执行中黄 / passed=通过绿 / failed=失败红

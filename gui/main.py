@@ -27,6 +27,25 @@ def _detach_console():
         pass
 
 
+def _run_backup_async():
+    """后台做一次用户数据备份 —— 不阻塞启动。
+
+    ★ 必须异步: 用例/模板多的时候要复制几十 MB, 放主线程会让窗口白屏一两秒。
+    ★ 必须 daemon: 备份跑着时用户直接关窗口也不该拖住进程退出。
+    ★ 必须吞异常: 备份是兜底手段, 它自己失败绝不能影响程序启动。
+    """
+    import threading
+
+    def _work():
+        try:
+            from core.backup import make_backup
+            make_backup()
+        except Exception:
+            pass
+
+    threading.Thread(target=_work, name="auto-backup", daemon=True).start()
+
+
 def main():
     _detach_console()
 
@@ -36,6 +55,7 @@ def main():
     from gui.main_window import MainWindow
 
     setup_logger()
+    _run_backup_async()
     app = QApplication(sys.argv)
     # 应用图标(任务栏/窗口):自绘 乐动品牌融合(O传感器+对勾);ico 含 16~256 多尺寸
     from PySide6.QtGui import QIcon

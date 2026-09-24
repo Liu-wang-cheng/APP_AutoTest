@@ -6,12 +6,52 @@ BASE_DIR 不依赖 pytest 启动目录 —— GUI 与 pytest 两条入口共用�
 """
 import os
 import re
+import sys
 import tempfile
 
 import yaml
 
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-CONFIG_PATH = os.path.join(BASE_DIR, "config", "config.yaml")
+
+def _resolve_dirs():
+    """解析「程序目录」与「用户数据目录」, 返回 (APP_DIR, DATA_DIR)。
+
+    ★ 开发环境(未打包): 两者都是项目根 —— 与从前**完全一致**, 零行为变化。
+    ★ 打包后(sys.frozen): 必须是 **exe 所在目录**。
+      不能用 __file__ 推 —— PyInstaller 把代码收在 _internal/ 下, __file__ 会指向
+      _internal/core/driver.py, 推出的是 _internal/ 而不是 exe 旁边, 于是既找不到
+      用户的 config/ 也找不到 Test_cases/。
+
+    用户数据与程序同目录(便携; 用户决策 2026-09-24), 所以两者取值相同 —— 但
+    **概念上必须分开**: OTA 更新只替换程序文件, 绝不能碰 DATA_DIR 下的用户数据
+    (见 USER_DATA_PATHS)。将来若要挪到 %APPDATA%, 只改这一处。
+    """
+    if getattr(sys, "frozen", False):
+        app_dir = os.path.dirname(os.path.abspath(sys.executable))
+        return app_dir, app_dir
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    return root, root
+
+
+APP_DIR, DATA_DIR = _resolve_dirs()
+
+#: 兼容沿用: 现有代码里 BASE_DIR 全部指「用户数据根」—— 保持这个语义, 拆分的
+#: 改动面才最小(所有既有路径解析都不用动)。程序资源该用 APP_DIR。
+BASE_DIR = DATA_DIR
+
+CONFIG_PATH = os.path.join(DATA_DIR, "config", "config.yaml")
+
+#: OTA 更新时**不允许被替换**的路径(相对 DATA_DIR)。更新器按这份清单跳过,
+#: 打包脚本也用它区分"程序文件"与"用户数据"。
+#: ★ config 只保护 config.yaml 本身 —— locators.yaml / config.example.yaml 是
+#:   随版本走的程序资源, 该被更新覆盖。
+USER_DATA_PATHS = (
+    "config/config.yaml",
+    "Test_cases",
+    "Test_preconditions",
+    "Test_img",
+    "reports",
+    "backups",
+)
 
 _ENCRYPTED_HEADER = b"%TSD-Header"
 
