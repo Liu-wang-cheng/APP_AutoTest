@@ -215,3 +215,112 @@ def test_backup_skips_when_nothing_to_back_up(tmp_path):
     from core.backup import make_backup
     clean = tmp_path / "clean_data"
     assert make_backup(data_dir=str(clean), force=True) == ""
+
+
+# ── OTA 的 GUI 接入 ──
+
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
+
+@pytest.fixture(scope="module")
+def qapp():
+    pytest.importorskip("PySide6")
+    from PySide6.QtWidgets import QApplication
+    return QApplication.instance() or QApplication([])
+
+
+@pytest.fixture
+def win(qapp, monkeypatch, tmp_path):
+    import gui.main_window as mw
+    monkeypatch.setattr(mw, "CASES_DIR", str(tmp_path / "Test_cases"), raising=False)
+    monkeypatch.setattr(mw, "load_config", lambda: {"app": {}, "device": {}},
+                        raising=False)
+    w = mw.MainWindow()
+    yield w
+    w.close()
+
+
+def test_update_timer_period_follows_config(win, monkeypatch):
+    """★ 每 8 小时自动检测: 周期取自配置(默认 8 小时), 不是写死的"""
+    from core import updater
+    assert win._update_timer.interval() == \
+        int(updater.CHECK_INTERVAL_HOURS * 3600 * 1000), "默认应为 8 小时"
+
+    # 配置里改成 2 小时 -> 新窗口的周期跟着变
+    import gui.main_window as mw
+    monkeypatch.setattr(mw, "load_config",
+                        lambda: {"update": {"check_interval_hours": 2}}, raising=False)
+    w2 = mw.MainWindow()
+    try:
+        assert w2._update_timer.interval() == 2 * 3600 * 1000
+    finally:
+        w2.close()
+
+
+def test_check_skipped_while_running_cases(win, monkeypatch):
+    """★ 用例执行期间**不检测**新版本(用户明确要求) —— 不建线程、不发请求"""
+    started = []
+    import gui.main_window as mw
+
+    class _FakeThread:
+        def __init__(self, *a, **k):
+            started.append(1)
+    monkeypatch.setattr(mw, "UpdateCheckThread", _FakeThread)
+
+    win.worker = object()          # 模拟"正在跑用例"
+    try:
+        win._check_update_now()
+    finally:
+        # ★ 必须清掉: 否则 teardown 的 close() 会因为它弹「正在执行,停止并退出?」
+        #   的**模态**对话框 —— 断言一旦失败就会挂死在这里(反向验证时踩到过)
+        win.worker = None
+    assert started == [], "执行用例期间不该发起检查"
+
+    win._check_update_now()
+    assert started == [1], "空闲时应该发起检查"
+
+
+def test_only_new_version_pops_dialog(win, monkeypatch):
+    """只有「有新版本」才弹窗; 已是最新/检查失败只写日志, 不打扰用户"""
+    import gui.main_window as mw
+    from core import updater
+    pops = []
+    monkeypatch.setattr(mw.QMessageBox, "information",
+                        lambda *a, **k: pops.append(a))
+
+    win._on_update_checked(updater.CheckResult("up_to_date", "已是最新(1.0)"))
+    win._on_update_checked(updater.CheckResult("error", "网络不通"))
+    win._on_update_checked(updater.CheckResult("skipped", "未配置仓库"))
+    assert pops == [], f"这些状态不该弹窗: {pops}"
+
+    info = updater.parse_version_info({"version": "2.0", "release_notes": "修了 X",
+                                       "release_date": "2026-10-01"})
+    win._on_update_checked(updater.CheckResult("has_update", "发现新版本 2.0",
+                                               info, None, False))
+    assert len(pops) == 1, "有新版本应该弹窗"
+    body = pops[0][2]
+    assert "2.0" in body and "修了 X" in body
+
+
+def test_force_update_mentions_mandatory(win, monkeypatch):
+    """低于 min_version 时弹窗要说明"需强制更新", 别让用户以为是可选"""
+    import gui.main_window as mw
+    from core import updater
+    pops = []
+    monkeypatch.setattr(mw.QMessageBox, "information",
+                        lambda *a, **k: pops.append(a))
+    info = updater.parse_version_info({"version": "3.0", "min_version": "2.0"})
+    win._on_update_checked(updater.CheckResult("has_update", "x", info, None, True))
+    assert "强制" in pops[0][2], pops[0][2]
+
+
+def test_check_update_never_raises_in_gui(win, monkeypatch):
+    """检查更新出岔子不能把界面搞崩(它跑在启动路径上)"""
+    import gui.main_window as mw
+
+    def boom(*_a, **_k):
+        raise RuntimeError("模拟: 线程起不来")
+
+    monkeypatch.setattr(mw, "UpdateCheckThread", boom)
+    win._check_update_now()          # 不得抛
+

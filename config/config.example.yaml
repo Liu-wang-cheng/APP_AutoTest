@@ -26,3 +26,23 @@ runner:
 # vlm:
 #   enabled: false
 #   impl: vlm.glm4v:Glm4vBackend
+
+# ── OTA 自动更新(可选) ──
+# repository 留空 = **不检查更新**(默认): 免得在企业网里对着一个瞎猜的仓库外联。
+# 填上 GitHub 的 owner/repo 后: 启动后延迟几秒检查一次, 之后每 8 小时自动检测;
+# 用例执行期间一律跳过(不打扰真机测试)。
+update:
+  enabled: true
+  repository: ""            # 如 your-name/Auto_test
+  version_file: "version.json"
+  check_interval_hours: 8
+  # mirrors 一般不用改 —— 国内访问 GitHub 慢时按延迟自动挑最快的一个。
+  # ★ 版本清单永远走 GitHub 直连(CDN 会缓存, 走镜像会读到旧版本号);
+  #   只有下载安装包才用下面的 download_prefix 加速。
+  # mirrors:
+  #   - name: github
+  #     base_url: "https://raw.githubusercontent.com/{repo}/main"
+  #     download_prefix: ""
+  #   - name: ghfast
+  #     base_url: "https://ghfast.top/https://raw.githubusercontent.com/{repo}/main"
+  #     download_prefix: "https://ghfast.top/"

@@ -922,6 +922,26 @@ class DeviceScanThread(QThread):
         self.done.emit(devices, "")
 
 
+class UpdateCheckThread(QThread):
+    """后台检查更新: 多镜像并发测速最坏要十几秒, 放 GUI 线程会把窗口卡住。
+
+    ★ 只检查、不下载不安装 —— 下载交给后续带进度条的流程。
+    """
+    done = Signal(object)          # 参数是 updater.CheckResult
+
+    def __init__(self, cfg, parent=None):
+        super().__init__(parent)
+        self._cfg = cfg
+
+    def run(self):
+        from core import updater
+        try:
+            result = updater.check_for_update(self._cfg)
+        except Exception as e:     # 兜底: 检查更新绝不能把线程跑崩
+            result = updater.CheckResult("error", str(e))
+        self.done.emit(result)
+
+
 class _StepsHost(QObject):
     """前置条件里「步骤编辑」的迷你宿主 —— 让 StepCard 等用例编辑组件原样复用。
 
@@ -1760,8 +1780,64 @@ class MainWindow(QMainWindow):
         self.render_cards()
         self._fill_env_from_config()
         self._attach_log_handler()      # core 日志 → 运行日志页签
+        self._setup_update_check()      # OTA: 启动后延迟检查 + 每 8 小时自动检测
 
     # ── 顶部工具栏 ──
+    # ── OTA 自动更新 ──
+
+    def _setup_update_check(self):
+        """启动后延迟检查一次, 之后每 N 小时自动检测(用户要求)。
+
+        ★ 延迟几秒再查: 首次检查要并发测多个镜像, 放在窗口刚显示时做会拖慢启动感知。
+        ★ 定时器周期取配置里的 check_interval_hours(默认 8) —— 程序挂在测试机上常年
+          不关时靠它持续覆盖; 只靠"启动时检查"对这种情况只生效一次。
+        """
+        from core import updater
+        try:
+            conf = updater.load_update_config(load_config())
+            hours = float(conf.get("check_interval_hours")
+                          or updater.CHECK_INTERVAL_HOURS)
+        except Exception:
+            hours = float(updater.CHECK_INTERVAL_HOURS)
+        self._update_thread = None
+        self._update_timer = QTimer(self)
+        self._update_timer.setInterval(max(1, int(hours * 3600 * 1000)))
+        self._update_timer.timeout.connect(self._check_update_now)
+        self._update_timer.start()
+        QTimer.singleShot(3000, self._check_update_now)   # 首次: 启动 3 秒后
+
+    def _check_update_now(self):
+        """发起一次检查; 正在跑用例时**整轮跳过**(用户要求: 执行期间不检测新版本)"""
+        if self.worker:
+            log.info("[更新] 正在执行用例, 跳过本次检查")
+            return
+        if self._update_thread is not None and self._update_thread.isRunning():
+            return                                   # 上一次还没结束
+        try:
+            self._update_thread = UpdateCheckThread(load_config(), self)
+            self._update_thread.done.connect(self._on_update_checked)
+            self._update_thread.start()
+        except Exception as e:
+            log.warning(f"[更新] 检查失败(忽略): {e}")
+
+    def _on_update_checked(self, result):
+        """检查结果: 只有「有新版本」才打扰用户, 其余只写日志"""
+        log.info(f"[更新] {result.message}")
+        if result.status != "has_update":
+            return
+        info = result.info
+        notes = (info.release_notes or "").strip()
+        if len(notes) > 600:
+            notes = notes[:600] + "…"
+        body = f"当前版本: {APP_VERSION}\n最新版本: {info.version}"
+        if info.release_date:
+            body += f"  ({info.release_date})"
+        if notes:
+            body += f"\n\n更新内容:\n{notes}"
+        if result.force:
+            body += "\n\n★ 此版本要求强制更新, 请尽快升级。"
+        QMessageBox.information(self, "发现新版本", body)
+
     def _set_status(self, msg, label=None):
         """同时更新界面提示并写运行日志。
 
