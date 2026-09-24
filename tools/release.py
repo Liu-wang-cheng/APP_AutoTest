@@ -227,7 +227,8 @@ def ensure_clean_tree():
 def main(argv=None):
     ap = argparse.ArgumentParser(description="打包并发布一个版本")
     ap.add_argument("--version", required=True, help="要发布的版本号, 如 1.1")
-    ap.add_argument("--dist", default=os.path.join(ROOT, "dist", "AutoTest"))
+    ap.add_argument("--dist", default=os.path.join(ROOT, "dist"),
+                    help="产物目录(内含 AutoTest.exe, 默认 dist/)")
     ap.add_argument("--asset", default="", help="asset 文件名(默认 AutoTest_v{ver}.zip)")
     ap.add_argument("--notes", default="", help="更新说明(默认取 CHANGELOG 该节)")
     ap.add_argument("--min-version", default="1.0", help="低于此版本强制更新")
