@@ -52,7 +52,8 @@ class RunWorker(QThread):
     case_finished = Signal(str, str, bool)  # 单条用例结束(路径, 用例名, 是否通过)
     precondition_failed = Signal(str)  # 前置检查未通过(阻断详情)→ GUI 弹窗提醒
 
-    def __init__(self, device_id, case_files, preconditions, repeat=1, parent=None):
+    def __init__(self, device_id, case_files, preconditions, repeat=1, parent=None,
+                 pre_by_group=None, device_name=""):
         super().__init__(parent)
         self.device_id = device_id
         self.case_files = case_files       # list: yaml 路径
@@ -61,6 +62,9 @@ class RunWorker(QThread):
             preconditions = [{"type": k, "enabled": bool(v)}
                              for k, v in preconditions.items()]
         self.pre_items = preconditions
+        # ★ {APP组: [前置项]} —— 切到某组时执行那组的前置(用户要求: 前置与 APP 组绑定);
+        #   没给的组回退 self.pre_items
+        self.pre_by_group = pre_by_group or {}
         self.repeat = max(1, int(repeat))  # 整个队列重复的轮数
         self.runner = None
         self._stop_requested = False
@@ -70,6 +74,26 @@ class RunWorker(QThread):
         self._stop_requested = True
         if self.runner:
             self.runner.stop()
+
+    def _emit_pre_result(self, d, module, report, r):
+        """单条前置结果 → 执行结果表 + 报告(带该项自己的耗时)。
+
+        ★ 用户要求: 前置也要**一条一条**显示结果和耗时, 不要全部执行完再刷出来;
+          充电/电量行附带机器当前电量。
+        """
+        desc = "前置-" + r["desc"]
+        if "电量" in desc or "充电" in desc:
+            try:
+                batt = session.get_battery_level(d)
+            except Exception:
+                batt = -1
+            if batt >= 0:
+                desc += f"(当前电量 {batt}%)"
+        err = "" if r["ok"] else "前置未通过(超时或失败)"
+        report.set_step_desc(module, desc)
+        report.add_result(module, r["ok"], err, "")
+        self.step_done.emit({"desc": desc, "passed": r["ok"], "error": err,
+                             "screenshot": "", "elapsed": r.get("elapsed")})
 
     # ── 线程主体 ──
     def run(self):
@@ -103,36 +127,31 @@ class RunWorker(QThread):
             report = ExcelReport()
             all_passed = True
             total_rounds = self.repeat
+            prepared_group = None       # 已经做过前置的 APP 组
             for rnd in range(total_rounds):
-                for i, (module, case, fp) in enumerate(tasks):
+                for module, case, fp in tasks:
                     if self._stop_requested:
                         break
                     case_name = case.get("name", "未命名用例")
                     steps = case.get("steps") or []
+                    # 用例所在 APP 组 = 用例文件所在目录名
+                    group = os.path.basename(
+                        os.path.dirname(os.path.abspath(fp)))
 
-                    # 前置: 第 1 轮第 1 个用例按勾选项全量执行,后续用例只重启 APP
-                    if rnd == 0 and i == 0:
-                        self.status.emit(f"前置准备({case_name})...")
+                    # ★ 前置: 切到某组时按**该组**的配置全量执行一次(用户要求:
+                    #   前置条件与 APP 组绑定); 同组后续用例只重启 APP。
+                    if group != prepared_group:
+                        items = self.pre_by_group.get(group) or self.pre_items
+                        self.status.emit(
+                            f"前置准备[{group or '默认组'}]({case_name})...")
                         pre_results = session.prepare_items(
-                            d, cfg, self.pre_items,
+                            d, cfg, items,
                             on_progress=self.status.emit,
-                            should_cancel=lambda: self._stop_requested)
-                        # ★ 前置检查结果写入执行结果表与报告(用户要求可见);
-                        #   充电/电量行带机器实际电量
-                        try:
-                            batt = session.get_battery_level(d)
-                        except Exception:
-                            batt = -1
-                        for r in pre_results:
-                            desc = "前置-" + r["desc"]
-                            if ("电量" in desc or "充电" in desc) and batt >= 0:
-                                desc += f"(当前电量 {batt}%)"
-                            report.set_step_desc(module, desc)
-                            report.add_result(module, r["ok"],
-                                              "" if r["ok"] else "前置未通过(超时或失败)", "")
-                            self.step_done.emit({"desc": desc, "passed": r["ok"],
-                                                 "error": "" if r["ok"] else "前置未通过",
-                                                 "screenshot": ""})
+                            should_cancel=lambda: self._stop_requested,
+                            # ★ 每完成一条立刻落表(用户要求: 一条一条显示结果和耗时)
+                            on_item_done=lambda r, m=module:
+                            self._emit_pre_result(d, m, report, r))
+                        prepared_group = group
                         # ★ 任一前置项未通过 → 阻断:本轮不再执行任何用例(用户要求)
                         failed = [r["desc"] for r in pre_results if not r["ok"]]
                         if failed:
@@ -158,7 +177,8 @@ class RunWorker(QThread):
                     _vision.set_template_app_group(
                         os.path.basename(os.path.dirname(fp)))   # 模板按 APP 组子目录
                     runner = ActionRunner(d, cfg["runner"],
-                                          case_wait=case.get("wait"), case_name=case_name)
+                                          case_wait=case.get("wait"), case_name=case_name,
+                                          device_name=cfg.get("target_device", ""))
                     # 包装结果回调: 计算每步耗时(相对上一步完成时刻)
                     import time as _time
                     last_ts = {"t": _time.time()}

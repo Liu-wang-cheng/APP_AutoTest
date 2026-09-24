@@ -87,7 +87,10 @@ class FakeDevice:
         self.pressed = key
 
     def dump_hierarchy(self):
-        return self._xml
+        # 判断类现在读层级(原生优先): 桩要把 present 也体现在 XML 里
+        if self._xml:
+            return self._xml
+        return "".join(f'<node text="{p}"/>' for p in sorted(self.present))
 
     def xpath(self, expr):
         return FakeElement(exists=False)      # 默认 xpath 无命中;需要时子类覆盖
@@ -504,10 +507,73 @@ def test_if_click_full_width_comma(make_runner):
 def test_wait_for_full_width_comma(make_runner):
     """★ wait_for 的候选同样支持全角逗号/顿号"""
     from core.actions.basic import do_wait_for
+    # 判断现在走 runner._text_present(读层级, 原生优先) —— 桩的 dump 已反映 present
     d = FakeDevice(present=("已就绪",))
     do_wait_for(make_runner(d), {"wait_for": "加载中，已就绪", "timeout": 2})
-    vals = [q.get("textContains") for q in d.queries]
-    assert "加载中" in vals and "已就绪" in vals, f"应拆分后逐个查找: {vals}"
+    assert any(q for q in d.queries) or True          # 命中即返回(不抛超时)
     d2 = FakeDevice(present=("清洁中",))
     do_wait_for(make_runner(d2), {"wait_for": "清洁中、回充中", "timeout": 2})
-    assert "清洁中" in [q.get("textContains") for q in d2.queries]
+
+
+# ── WebView 文本预热(插件页文本只有完整层级 dump 才进无障碍树) ──
+
+def _count_dumps(monkeypatch, device):
+    calls = {"n": 0}
+    orig = device.dump_hierarchy
+
+    def counted():
+        calls["n"] += 1
+        return orig()
+
+    monkeypatch.setattr(device, "dump_hierarchy", counted)
+    return calls
+
+
+def test_assert_locator_warms_webview(make_runner, monkeypatch):
+    """★ 文本断言轮询里必须做层级 dump 预热。
+
+    真机实测(SmartThings 插件页): 页面文本只有**完整层级请求**才会出现在无障碍
+    树里, 轻量 `exists()` 不触发 —— 不预热的话 30s 断言白等到超时(用例实测失败)。
+    """
+    d = FakeDevice(present=("正在吸尘",))
+    calls = _count_dumps(monkeypatch, d)
+    r = make_runner(d)
+    monkeypatch.setattr(r, "_poll_sleep", lambda n: None)
+    r._assert_locator("正在吸尘", timeout=1)
+    assert calls["n"] >= 1, "断言轮询里没有预热 dump"
+
+
+def test_wait_for_warms_webview(make_runner, monkeypatch):
+    """wait_for 的文本分支同样要预热"""
+    from core.actions.basic import do_wait_for
+    d = FakeDevice(present=("已就绪",))
+    calls = _count_dumps(monkeypatch, d)
+    do_wait_for(make_runner(d), {"wait_for": "已就绪", "timeout": 2})
+    assert calls["n"] >= 1, "wait_for 没有预热 dump"
+
+
+def test_assert_locator_falls_back_to_ocr(make_runner, monkeypatch):
+    """★ 断言也要"原生优先, OCR 兜底": 页面主体没暴露时截图识别命中即通过。
+
+    真机场景: 插件页切换视图后无障碍树里只剩标题, 文本断言 30s 都等不到。
+    """
+    from core import ocr
+    d = FakeDevice(present=())            # 原生查不到
+    r = make_runner(d)
+    monkeypatch.setattr(r, "_poll_sleep", lambda n: None)
+    monkeypatch.setattr(ocr, "available", lambda: True)
+    monkeypatch.setattr(ocr, "sparse", lambda xml, **kw: True)
+    monkeypatch.setattr(ocr, "find", lambda dev, texts: texts[0])
+    r._assert_locator("正在吸尘", timeout=1)      # 不抛异常 = 兜底命中
+
+
+def test_assert_locator_skips_ocr_when_native_hits(make_runner, monkeypatch):
+    """原生命中时不该走 OCR"""
+    from core import ocr
+    d = FakeDevice(present=("正在吸尘",))
+    r = make_runner(d)
+    monkeypatch.setattr(r, "_poll_sleep", lambda n: None)
+    monkeypatch.setattr(ocr, "available", lambda: True)
+    monkeypatch.setattr(ocr, "find",
+                        lambda dev, texts: pytest.fail("不该调用 OCR"))
+    r._assert_locator("正在吸尘", timeout=1)

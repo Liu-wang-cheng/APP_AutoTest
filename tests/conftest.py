@@ -49,6 +49,25 @@ def _isolate_config_file(monkeypatch, tmp_path):
     yield
 
 
+@pytest.fixture(autouse=True)
+def _isolate_group_preconditions(monkeypatch, tmp_path):
+    """APP 组的前置条件落盘路径默认指向临时目录。
+
+    ★ 事故(2026-09-24): 组前置条件先是放在 Test_cases/<组>/(被用例列表当用例扫出来),
+      挪到 Test_preconditions/ 之后, 有个测试的隔离点没跟着改(patch 的是
+      vision.BASE_DIR, 而路径已改成基于 driver.BASE_DIR) → 它把 2 条测试值写进了
+      用户真实的 Test_preconditions/三星.yaml, 覆盖了用户的 7 条配置。
+    这里直接钉住 group_preconditions_path 这个**唯一出口**: 测试里无论怎么写,
+    都落临时目录(除非测试自己显式覆盖)。结构性保证, 不依赖"记得 mock"。
+    """
+    import core.driver as driver
+    sandbox = tmp_path / "Test_preconditions"
+    sandbox.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(driver, "group_preconditions_path",
+                        lambda g: str(sandbox / f"{g}.yaml"), raising=False)
+    yield
+
+
 @pytest.fixture(scope="session", autouse=True)
 def _isolate_log_file(tmp_path_factory):
     """测试期日志写到临时文件, 不污染用户的 reports/test.log。

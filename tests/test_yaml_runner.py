@@ -9,7 +9,8 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from core.driver import BASE_DIR, load_config, load_yaml_file  # noqa: E402
+from core.driver import (BASE_DIR, is_case_file, load_config,  # noqa: E402
+                         load_yaml_file)
 from core.runner import ActionRunner  # noqa: E402
 
 
@@ -61,9 +62,9 @@ def collect_cases(name_filter=""):
 
     def _scan(scan_dir, group_name):
         for fn in sorted(os.listdir(scan_dir)):
-            if not fn.endswith((".yaml", ".yml")):
-                continue
             full = os.path.join(scan_dir, fn)
+            if not is_case_file(full):      # 前置条件等非用例 yaml 不算用例
+                continue
             if not os.path.isfile(full):
                 continue
             try:
@@ -107,7 +108,9 @@ def test_yaml_case(device, report, module, case_name, steps, priority, case_wait
     cfg = load_config()
     from core import vision as _vision
     _vision.set_template_app_group(os.path.basename(os.path.dirname(case_path)))
-    runner = ActionRunner(device, cfg["runner"], case_wait=case_wait, case_name=case_name)
+    runner = ActionRunner(device, cfg["runner"], case_wait=case_wait,
+                          case_name=case_name,
+                          device_name=cfg.get("target_device", ""))
     passed = runner.run_steps(steps)
 
     # 失败自动截图

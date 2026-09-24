@@ -989,6 +989,23 @@ def test_case_lamp_rerun_resets(qapp, monkeypatch, tmp_path):
 
 # ── RunWorker.run 全链路冒烟(2026-09-21 审查补充:线程主体+前置可见性从未被测) ──
 
+def _fake_prepare_items(results):
+    """模拟 session.prepare_items: **逐条**回调 on_item_done(带耗时)。
+
+    真实实现是每执行完一条就回调一次(用户要求前置结果一条一条落表), 所以桩也要回调,
+    否则 RunWorker 收不到任何前置行。
+    """
+    def _f(d_, cfg_, items, on_progress=None, should_cancel=None, on_item_done=None):
+        out = []
+        for r in results:
+            r = dict(r)
+            r.setdefault("elapsed", 0.1)
+            out.append(r)
+            if on_item_done:
+                on_item_done(r)
+        return out
+    return _f
+
 def test_runworker_run_smoke(qapp, monkeypatch, tmp_path):
     """不碰真机跑通 RunWorker.run:前置行(带电量)→ 步骤行 → 完成信号 → 报告落盘"""
     import types
@@ -1015,12 +1032,11 @@ def test_runworker_run_smoke(qapp, monkeypatch, tmp_path):
     monkeypatch.setattr(u2, "connect", lambda dev: fake_d)
 
     # 3) mock session 与配置
-    monkeypatch.setattr(rt.session, "prepare_items",
-                        lambda d_, cfg_, items, **kw: [
+    monkeypatch.setattr(rt.session, "prepare_items", _fake_prepare_items([
                             {"key": "pre0", "desc": "重启 APP", "ok": True},
                             {"key": "pre1", "desc": "等待充电", "ok": True},
                             {"key": "pre2", "desc": "地图加载", "ok": True},
-                            {"key": "pre3", "desc": "电量门槛≥50%", "ok": True}])
+                            {"key": "pre3", "desc": "电量门槛≥50%", "ok": True}]))
     monkeypatch.setattr(rt.session, "restart_app", lambda d_, cfg, enter_page=True: None)
     monkeypatch.setattr(rt.session, "get_battery_level", lambda d_: 78)
     monkeypatch.setattr(rt, "load_config",
@@ -1120,12 +1136,11 @@ def test_runworker_precondition_failure_blocks(qapp, monkeypatch, tmp_path):
     import uiautomator2 as u2
     fake_d = types.SimpleNamespace(implicitly_wait=lambda t: None)
     monkeypatch.setattr(u2, "connect", lambda dev: fake_d)
-    monkeypatch.setattr(rt.session, "prepare_items",
-                        lambda d_, cfg_, items, **kw: [
+    monkeypatch.setattr(rt.session, "prepare_items", _fake_prepare_items([
                             {"key": "pre0", "desc": "重启 APP", "ok": True},
                             {"key": "pre1", "desc": "等待充电", "ok": False},
                             {"key": "pre2", "desc": "地图加载", "ok": True},
-                            {"key": "pre3", "desc": "电量门槛≥50%", "ok": False}])
+                            {"key": "pre3", "desc": "电量门槛≥50%", "ok": False}]))
     monkeypatch.setattr(rt.session, "get_battery_level", lambda d_: 20)
     monkeypatch.setattr(rt, "load_config",
                         lambda: {"runner": {"step_interval": 0}, "app": {"package": "p"},
@@ -2650,7 +2665,8 @@ def test_preconditions_save_and_stop_hints_go_to_run_log(qapp, monkeypatch, tmp_
         w.on_edit_preconditions()
         qapp.processEvents()
         assert saved.get("items"), "真实入口要保存前置条件"
-        assert w.status_label.text() == "前置条件已保存", "界面提示要更新"
+        assert w.status_label.text().startswith("前置条件已保存"), \
+            f"界面提示要更新(现在会带组名): {w.status_label.text()}"
         assert "前置条件已保存" in w.log_view.toPlainText(), "前置条件保存也要进运行日志"
 
         w.log_view.clear()
@@ -2662,4 +2678,203 @@ def test_preconditions_save_and_stop_hints_go_to_run_log(qapp, monkeypatch, tmp_
         assert fake.stop_called, "停止请求要真的发给 worker"
     finally:
         w.worker = None          # 避免 closeEvent 弹模态框阻塞离屏测试
+        w.close()
+
+
+def test_runworker_preconditions_follow_app_group(qapp, monkeypatch, tmp_path):
+    """★ 用户要求: 前置条件与 APP 组绑定, 切到某组用例时执行那组的前置。
+
+    队列 三星A → 三星C → 涂鸦B → 三星A:
+      组序列 三星(跑) → 三星(同组, 只重启) → 涂鸦(切组, 跑) → 三星(切回, 跑)
+    """
+    import types
+    from gui import runner_thread as rt
+    from gui.runner_thread import RunWorker
+
+    def write_case(group, name):
+        d = tmp_path / "Test_cases" / group
+        d.mkdir(parents=True, exist_ok=True)
+        f = d / f"{name}.yaml"
+        f.write_text(f"module: {name}\ncases:\n  - name: {name}\n    steps:\n"
+                     "      - desc: 等一下\n        wait: 0.05\n", encoding="utf-8")
+        return str(f)
+
+    f_a = write_case("三星", "用例A")
+    f_c = write_case("三星", "用例C")
+    f_b = write_case("涂鸦智能T4", "用例B")
+
+    import uiautomator2 as u2
+    fake_d = types.SimpleNamespace(
+        implicitly_wait=lambda t: None,
+        dump_hierarchy=lambda: '<node text="100%"/>',
+        screenshot=lambda path=None, format=None: None)
+    monkeypatch.setattr(u2, "connect", lambda dev: fake_d)
+
+    seen, restarts = [], []
+    monkeypatch.setattr(rt.session, "prepare_items",
+                        lambda d_, cfg_, items, **kw:
+                        (seen.append(items), [{"key": "p", "desc": "重启 APP", "ok": True}])[1])
+    monkeypatch.setattr(rt.session, "restart_app",
+                        lambda d_, cfg, enter_page=True: restarts.append(1))
+    monkeypatch.setattr(rt.session, "get_battery_level", lambda d_: 80)
+    monkeypatch.setattr(rt, "load_config",
+                        lambda: {"runner": {"step_interval": 0, "default_timeout": 1,
+                                            "click_timeout": 1},
+                                 "app": {"package": "p", "name": "x"},
+                                 "target_device": "SE3L"})
+    monkeypatch.setattr(rt, "ExcelReport",
+                        lambda: __import__("core.excel_report", fromlist=["ExcelReport"])
+                        .ExcelReport(path=str(tmp_path / "rep.xlsx")))
+
+    sx = [{"type": "tap_blank", "enabled": True, "point": "1,1"}]
+    ty = [{"type": "battery", "enabled": True, "min_level": 60}]
+    worker = RunWorker("fake-dev", [f_a, f_c, f_b, f_a], sx, 1,
+                       pre_by_group={"三星": sx, "涂鸦智能T4": ty})
+    worker.run()
+
+    assert seen == [sx, ty, sx], f"应按组切换执行对应前置: {[i[0]['type'] for i in seen]}"
+    assert len(restarts) == 1, f"同组第二个用例只该重启 APP: {len(restarts)} 次"
+
+
+def test_runworker_preconditions_fall_back_when_group_missing(qapp, monkeypatch, tmp_path):
+    """没给某组配置时回退默认前置项(不能什么都不跑)"""
+    import types
+    from gui import runner_thread as rt
+    from gui.runner_thread import RunWorker
+
+    d = tmp_path / "Test_cases" / "未知组"
+    d.mkdir(parents=True)
+    f = d / "用例.yaml"
+    f.write_text("module: 用例\ncases:\n  - name: x\n    steps:\n"
+                 "      - desc: 等一下\n        wait: 0.05\n", encoding="utf-8")
+
+    import uiautomator2 as u2
+    monkeypatch.setattr(u2, "connect", lambda dev: types.SimpleNamespace(
+        implicitly_wait=lambda t: None, dump_hierarchy=lambda: "<node/>",
+        screenshot=lambda path=None, format=None: None))
+
+    seen = []
+    monkeypatch.setattr(rt.session, "prepare_items",
+                        lambda d_, cfg_, items, **kw:
+                        (seen.append(items), [{"key": "p", "desc": "重启 APP", "ok": True}])[1])
+    monkeypatch.setattr(rt.session, "restart_app", lambda d_, cfg, enter_page=True: None)
+    monkeypatch.setattr(rt.session, "get_battery_level", lambda d_: 80)
+    monkeypatch.setattr(rt, "load_config",
+                        lambda: {"runner": {"step_interval": 0, "default_timeout": 1,
+                                            "click_timeout": 1},
+                                 "app": {"package": "p", "name": "x"}, "target_device": "D"})
+    monkeypatch.setattr(rt, "ExcelReport",
+                        lambda: __import__("core.excel_report", fromlist=["ExcelReport"])
+                        .ExcelReport(path=str(tmp_path / "rep.xlsx")))
+
+    fallback = [{"type": "charging", "enabled": True}]
+    RunWorker("fake-dev", [str(f)], fallback, 1, pre_by_group={}).run()
+    assert seen == [fallback], "组没配置时应回退默认前置项"
+
+
+# ── 用例列表「全选」优先服务于当前所选 APP 组 ──
+
+def _cases_window(qapp, monkeypatch, tmp_path):
+    """造两个组的用例, 返回窗口(组内用例文件名 a/b/c)"""
+    import gui.main_window as mw
+    root = tmp_path / "Test_cases"
+    for g in ("三星", "涂鸦智能T4"):
+        d = root / g
+        d.mkdir(parents=True)
+        for n in ("a", "b"):
+            (d / f"{n}.yaml").write_text(
+                f"module: {n}\ncases:\n  - name: {n}\n    steps: []\n", encoding="utf-8")
+    monkeypatch.setattr(mw, "CASES_DIR", str(root), raising=False)
+    monkeypatch.setattr(mw, "load_config", lambda: {"app": {}, "device": {}}, raising=False)
+    monkeypatch.setattr(mw, "update_config", lambda d: None, raising=False)
+    w = mw.MainWindow()
+    w._fill_case_list()
+    qapp.processEvents()
+    return w
+
+
+def _checked_groups(w):
+    """当前勾选的用例分别属于哪些组"""
+    import os
+    out = {}
+    for i in range(w.case_list.count()):
+        it = w.case_list.item(i)
+        p = it.data(mw_qt_userrole())
+        if p and it.checkState() == mw_qt_checked():
+            g = os.path.basename(os.path.dirname(os.path.abspath(p)))
+            out[g] = out.get(g, 0) + 1
+    return out
+
+
+def mw_qt_userrole():
+    from PySide6.QtCore import Qt
+    return Qt.UserRole
+
+
+def mw_qt_checked():
+    from PySide6.QtCore import Qt
+    return Qt.Checked
+
+
+def test_select_all_scoped_to_selected_group(qapp, monkeypatch, tmp_path):
+    """★ 用户要求: 全选优先只作用于**当前所选 APP 组**, 不要把所有组都勾上"""
+    w = _cases_window(qapp, monkeypatch, tmp_path)
+    try:
+        # 选中"三星"组的一条用例(点开后它会成为当前行)
+        target = None
+        for i in range(w.case_list.count()):
+            it = w.case_list.item(i)
+            if it.data(mw_qt_userrole()) and "三星" in it.data(mw_qt_userrole()):
+                target = i
+                break
+        assert target is not None, "没找到三星组的用例行"
+        w.case_list.setCurrentRow(target)
+        qapp.processEvents()
+        w.on_select_all_cases()
+        qapp.processEvents()
+        assert _checked_groups(w) == {"三星": 2}, f"应只勾选三星组: {_checked_groups(w)}"
+    finally:
+        w.close()
+
+
+def test_select_all_from_group_header(qapp, monkeypatch, tmp_path):
+    """选中**组头**时, 全选作用于该组"""
+    w = _cases_window(qapp, monkeypatch, tmp_path)
+    try:
+        for i in range(w.case_list.count()):
+            it = w.case_list.item(i)
+            if it.data(mw_qt_userrole()) is None and "涂鸦" in (it.text() or ""):
+                w.case_list.setCurrentRow(i)
+                break
+        w.on_select_all_cases()
+        qapp.processEvents()
+        assert _checked_groups(w) == {"涂鸦智能T4": 2}, _checked_groups(w)
+    finally:
+        w.close()
+
+
+def test_select_all_falls_back_to_everything(qapp, monkeypatch, tmp_path):
+    """没有任何可判定的组(未选用例) → 退回"全部"(保持原行为)"""
+    w = _cases_window(qapp, monkeypatch, tmp_path)
+    try:
+        w.case_list.setCurrentRow(-1)      # 清除选择
+        w.case_path = None                 # 也没在选用例
+        w.on_select_all_cases()
+        qapp.processEvents()
+        assert _checked_groups(w) == {"三星": 2, "涂鸦智能T4": 2}, _checked_groups(w)
+    finally:
+        w.close()
+
+
+def test_clear_button_clears_all_groups(qapp, monkeypatch, tmp_path):
+    """「清空」仍是清掉全部组的勾选(与全选的范围语义不同, 按用户原话只改全选)"""
+    w = _cases_window(qapp, monkeypatch, tmp_path)
+    try:
+        from PySide6.QtCore import Qt as _Qt
+        w.on_select_all_cases()
+        qapp.processEvents()
+        w._set_cases_checked(_Qt.Unchecked)
+        qapp.processEvents()
+        assert _checked_groups(w) == {}, _checked_groups(w)
+    finally:
         w.close()

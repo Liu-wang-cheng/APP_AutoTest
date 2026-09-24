@@ -19,6 +19,51 @@ class YamlFileError(ValueError):
     pass
 
 
+# ★ 用例目录里不允许当作用例扫进来的文件(前置条件曾经放在组目录里, 结果被当成用例
+#   显示在列表里 —— 用户报过。现在前置条件挪到独立目录, 这里再兜一道, 防复发)
+NON_CASE_FILES = {"preconditions.yaml", "preconditions.yml"}
+
+
+def is_case_file(path):
+    """是不是用例文件 —— 组目录里可能混着前置条件等非用例 yaml, 别当用例扫出来"""
+    return (path.endswith((".yaml", ".yml"))
+            and os.path.basename(path).lower() not in NON_CASE_FILES)
+
+
+def group_preconditions_path(app_group):
+    """APP 组的前置条件文件: Test_preconditions/<组>.yaml(**独立目录**)
+
+    ★ 用户要求(2026-09-24): 前置条件与 APP 组绑定, 但要放在**单独目录**里 ——
+      放 Test_cases/<组>/ 下会被用例列表当成用例扫出来。
+    """
+    return os.path.join(BASE_DIR, "Test_preconditions", f"{app_group}.yaml")
+
+
+def load_group_preconditions(app_group):
+    """读该组的前置项列表; 没配过(文件不存在/为空)返回 None(调用方走兜底)"""
+    if not app_group:
+        return None
+    path = group_preconditions_path(app_group)
+    if not os.path.isfile(path):
+        return None
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = yaml.safe_load(f) or {}
+    except Exception:
+        return None
+    items = data.get("preconditions") if isinstance(data, dict) else data
+    return items or None
+
+
+def save_group_preconditions(app_group, items):
+    """写该组的前置条件(整体覆盖该文件); 返回写入路径"""
+    path = group_preconditions_path(app_group)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8", newline="\n") as f:
+        yaml.safe_dump({"preconditions": items}, f, allow_unicode=True, sort_keys=False)
+    return path
+
+
 def split_texts(value):
     """把一个文本字段拆成多个候选文本。
 

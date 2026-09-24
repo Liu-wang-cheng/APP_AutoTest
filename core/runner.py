@@ -13,6 +13,8 @@ import yaml
 from core import registry as reg
 import core.actions  # noqa: F401  导入即注册全部动作(见 core/actions/__init__.py)
 from core.driver import BASE_DIR, split_texts
+from core import ocr                          # 文本兜底: 原生读不到时截图识别
+from core.session import warm_webview        # WebView 文本预热(见 warm_webview 注释)
 from core.logger import get_logger
 from core.trace import TraceRecorder
 from vlm.backend import VisionRouter
@@ -84,16 +86,20 @@ class ActionRunner:
     # 所以必须是类属性而非纯模块级常量。
     _NUM_OPS = _NUM_OPS
 
-    def __init__(self, device, config: dict, case_wait=None, case_name=""):
+    def __init__(self, device, config: dict, case_wait=None, case_name="",
+                 device_name=""):
         self.d = device
         self._device_id = getattr(device, "serial", None)
         self.case_name = case_name
+        # 设备页名称(配置里的 target_device): 插件页整页文本读不出来时, 用它重进设备页
+        self.device_name = device_name
         # 用例级 wait 优先,否则用全局 step_interval
         self.interval = case_wait if case_wait is not None else config.get("step_interval", 3)
         self.timeout = config.get("default_timeout", 30)
         self.click_timeout = config.get("click_timeout", 10)
         self.results = []
         self.store = {}          # grab/match 数据暂存
+        self._recovered_plugin_page = False   # 插件页"整页读不到文本"只重进一次
         self.last_click = None   # (x, y, label) —— 供步骤截图叠加点击标记
         self.stopped = False     # 停止标志,GUI 停止按钮置位
         self.on_result = None    # 结果回调(GUI 实时推送用),签名 fn(result_dict)
@@ -253,6 +259,37 @@ class ActionRunner:
             return self.d(textContains=value if not value.startswith("=") else value[1:])[index]
         return el
 
+    def _text_present(self, *texts, timeout=None):
+        """页面上有没有这些文本 —— **判断类统一走这里**(原生优先, OCR 兜底)。
+
+        ★ 为什么要有这个入口(2026-09-24 真机实测): SmartThings 插件页切视图后
+          **主体内容不再提供可访问节点**(只剩标题和个别按钮), 此时 uiautomator 的
+          所有文本 API 都读不到 —— 只读无障碍树的判断(if 条件/wait_for/wait_loading/
+          地图状态…)会集体判错。这里统一: 先查树, 树稀疏时再用截图 OCR 认一次。
+
+        timeout: 给了就轮询等待(等价原 `d(textContains=..).exists(timeout=..)` 语义)
+        """
+        wanted = [t for t in texts if t]
+        if not wanted:
+            return False
+        end = time.time() + timeout if timeout else None
+        while True:
+            try:
+                xml = self.d.dump_hierarchy()
+            except Exception:
+                xml = ""
+            values = re.findall(r'text="([^"]*)"', xml)
+            if any(t in v for t in wanted for v in values):
+                return True
+            if ocr.sparse(xml) and ocr.available():
+                hit = ocr.find(self.d, wanted)
+                if hit:
+                    log.info(f"[OCR兜底] 无障碍树里没有, 截图识别命中「{hit}」")
+                    return True
+            if end is None or time.time() >= end:
+                return False
+            self._sleep(1)
+
     def _click_by_locator(self, value, timeout=None):
         """按定位串点击,超时内轮询。
 
@@ -268,6 +305,7 @@ class ActionRunner:
         while True:
             if end_time and time.time() >= end_time:
                 raise AssertionError(f"超时({timeout}s)未找到可点击元素: {value}")
+            warm_webview(self.d)     # ★ 同上: WebView 文本预热(见 _assert_locator)
             el = self._find_element(value)
             if el.exists(timeout=1):
                 try:
@@ -426,8 +464,17 @@ class ActionRunner:
         while True:
             if end_time and time.time() >= end_time:
                 raise AssertionError(f"超时({timeout}s)未找到: {value}")
+            # ★ WebView 内容预热: 插件页的文本要完整层级 dump 才会进无障碍树,
+            #   轻量 exists() 不触发 —— 不预热会一直读到空页(真机实测 30s 白等)
+            xml = warm_webview(self.d)
             for v in values:
                 if self._find_element(v).exists(timeout=1):
+                    return
+            # ★ 兜底(用户定的方向: 原生优先, OCR 兜底): 页面主体没暴露时截图识别
+            if ocr.sparse(xml) and ocr.available():
+                hit = ocr.find(self.d, values)
+                if hit:
+                    log.info(f"[OCR兜底] 无障碍树里没有, 截图识别命中「{hit}」")
                     return
             check_count += 1
             self._poll_sleep(check_count)

@@ -27,7 +27,7 @@ from PySide6.QtWidgets import (
 )
 
 from core import app_detect
-from core.driver import BASE_DIR, load_config, update_config
+from core.driver import BASE_DIR, load_config, update_config, is_case_file
 from core.logger import get_logger
 
 log = get_logger()
@@ -1256,13 +1256,15 @@ class PreconditionsDialog(QDialog):
         self._label = _item_label
         self.items = [dict(x) for x in items]
         v = QVBoxLayout(self)
-        self._hint_label = QLabel("按顺序依次执行; 取消勾选则不执行; 参数用「编辑」调整")
+        self._hint_label = QLabel(
+            "按顺序依次执行(用 ↑↓ 调整顺序); 取消勾选则不执行; 参数用「编辑」调整")
         v.addWidget(self._hint_label)
-        self.table = QTableWidget(0, 3)
-        self.table.setHorizontalHeaderLabels(["启用 / 前置条件", "编辑", "删除"])
+        self.table = QTableWidget(0, 4)
+        self.table.setHorizontalHeaderLabels(["启用 / 前置条件", "顺序", "编辑", "删除"])
         self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
-        self.table.setColumnWidth(1, 60)
+        self.table.setColumnWidth(1, 64)
         self.table.setColumnWidth(2, 60)
+        self.table.setColumnWidth(3, 60)
         self.table.verticalHeader().setVisible(False)
         # ★ 禁止选中: 点表格空白/行会高亮成蓝框(用户实测), 这里只用行内控件交互
         self.table.setSelectionMode(QAbstractItemView.NoSelection)
@@ -1304,14 +1306,32 @@ class PreconditionsDialog(QDialog):
             it.setFlags(Qt.ItemIsEnabled | Qt.ItemIsUserCheckable)
             it.setCheckState(Qt.Checked if item.get("enabled", True) else Qt.Unchecked)
             self.table.setItem(i, 0, it)
+            # ★ 顺序调整(用户要求可手动调整): 左右并排的 ↑↓, 列表顺序=执行顺序
+            order = QWidget()
+            oh = QHBoxLayout(order)
+            oh.setContentsMargins(0, 0, 0, 0)
+            oh.setSpacing(2)
+            for text, delta, tip in (("↑", -1, "上移(更早执行)"), ("↓", 1, "下移(更晚执行)")):
+                b = QPushButton(text)
+                b.setAutoDefault(False)      # QToolButton 没有这个方法(踩过)
+                b.setToolTip(tip)
+                # ★ 全局 QSS 给 QPushButton 设了 padding: 4px 12px —— 箭头按钮只有
+                #   26px 宽, 左右内边距就吃掉 24px, 字被整个截掉(用户实测"看不到箭头")。
+                #   小按钮必须内联覆盖 padding, 并固定尺寸放得下箭头。
+                b.setFixedSize(26, 22)
+                b.setStyleSheet("QPushButton { padding: 0px; font-weight: bold; }")
+                b.setEnabled(0 <= i + delta < len(self.items))   # 首/末行置灰
+                b.clicked.connect(lambda _=False, k=i, d=delta: self._move(k, d))
+                oh.addWidget(b)
+            self.table.setCellWidget(i, 1, order)
             eb = QPushButton("编辑")
             eb.setAutoDefault(False)      # ★ 否则回车/焦点变化会误触发
             eb.clicked.connect(lambda _=False, k=i: self._edit(k))
-            self.table.setCellWidget(i, 1, eb)
+            self.table.setCellWidget(i, 2, eb)
             db = QPushButton("删除")
             db.setAutoDefault(False)
             db.clicked.connect(lambda _=False, k=i: self._del(k))
-            self.table.setCellWidget(i, 2, db)
+            self.table.setCellWidget(i, 3, db)
         self.table.blockSignals(False)
 
     def _on_item_changed(self, item):
@@ -1343,6 +1363,14 @@ class PreconditionsDialog(QDialog):
         if 0 <= idx < len(self.items):
             self.items.pop(idx)
             self._render()
+
+    def _move(self, idx, delta):
+        """上移/下移一条前置条件 —— 列表顺序就是执行顺序(用户要求可手动调整)"""
+        new = idx + delta
+        if not (0 <= new < len(self.items)):
+            return
+        self.items[idx], self.items[new] = self.items[new], self.items[idx]
+        self._render()
 
     def _make_add_menu(self, parent):
         """添加菜单: 按类型分组列出(与「添加步骤」同风格), 选中即加入列表"""
@@ -2128,9 +2156,11 @@ class MainWindow(QMainWindow):
         head.addWidget(list_title)
         head.addStretch(1)
         all_btn = QPushButton("全选")
-        all_btn.clicked.connect(lambda: self._set_cases_checked(Qt.Checked))
+        all_btn.setToolTip("勾选当前所选 APP 组的全部用例(没选用例时才勾选全部)")
+        all_btn.clicked.connect(self.on_select_all_cases)
         head.addWidget(all_btn)
         none_btn = QPushButton("清空")
+        none_btn.setToolTip("取消所有组的勾选")
         none_btn.clicked.connect(lambda: self._set_cases_checked(Qt.Unchecked))
         head.addWidget(none_btn)
         del_btn = QPushButton("删除")
@@ -2207,6 +2237,8 @@ class MainWindow(QMainWindow):
             for g in self._list_group_dirs():
                 gdir = os.path.join(CASES_DIR, g)
                 for p in sorted(glob.glob(os.path.join(gdir, "*.yaml"))):
+                    if not is_case_file(p):
+                        continue        # 前置条件等非用例文件不进列表
                     infos.append((p, g, self._read_case_order(p)))
             extra = self.case_path
             if (extra and os.path.isfile(extra)
@@ -2226,6 +2258,8 @@ class MainWindow(QMainWindow):
             for g in self._list_group_dirs():
                 if g in self._collapsed_groups:
                     for p in _glob.glob(os.path.join(CASES_DIR, g, '*.yaml')):
+                        if not is_case_file(p):
+                            continue
                         if p not in paths:
                             paths.append(p)
             groups = {p: os.path.basename(os.path.dirname(p)) for p in paths}
@@ -2323,7 +2357,8 @@ class MainWindow(QMainWindow):
             gdir = os.path.join(CASES_DIR, group)
             if not os.path.isdir(gdir):
                 return
-            n = len([f for f in os.listdir(gdir) if f.endswith((".yaml", ".yml"))])
+            n = len([f for f in os.listdir(gdir)
+                     if is_case_file(os.path.join(gdir, f))])
             if QMessageBox.question(
                     self, "删除 APP 组",
                     f"确定删除组「{group}」及其全部 {n} 条用例文件?\n此操作不可恢复!"
@@ -2465,11 +2500,42 @@ class MainWindow(QMainWindow):
 
 
 
-    def _set_cases_checked(self, state):
+    def _target_group_for_bulk_check(self):
+        """批量勾选(全选)的作用组: 优先"当前所选", 判不出来返回 None(=全部)。
+
+        优先级(用户要求: **优先服务于所选的 APP 组**, 不要一次把各组全勾上):
+          1. 列表里当前选中的行 —— 选中组头 → 该组; 选中用例行 → 它所在组
+          2. 否则看正在编辑的用例属于哪组
+          3. 都没有(空列表/未选用例) → None, 退回"全部"
+        """
+        cur = self.case_list.currentItem()
+        if cur is not None:
+            path = cur.data(Qt.UserRole)
+            if path:
+                return os.path.basename(os.path.dirname(os.path.abspath(path)))
+            group = cur.data(CASE_STATE_ROLE)     # 组头行: 组名存在这里
+            if group:
+                return group
+        return self._current_app_group() or None
+
+    def _set_cases_checked(self, state, scope_group=None):
+        """勾选/取消勾选用例行。
+
+        scope_group: 只作用于该 APP 组(None=全部)。全选按钮传当前所选组 ——
+        用户要求"优先服务于所选的 APP 组, 不要全部生效"。
+        """
+        hit = 0
         for i in range(self.case_list.count()):
             item = self.case_list.item(i)
-            if item.data(Qt.UserRole):        # 组头行(UserRole=None)不参与勾选
-                item.setCheckState(state)
+            path = item.data(Qt.UserRole)
+            if not path:                      # 组头行(UserRole=None)不参与勾选
+                continue
+            if scope_group and os.path.basename(
+                    os.path.dirname(os.path.abspath(path))) != scope_group:
+                continue
+            item.setCheckState(state)
+            hit += 1
+        return hit
 
     def _checked_case_paths(self):
         """勾选的用例文件路径列表(勾选才参与批量执行;按列表顺序=执行顺序)"""
@@ -2480,6 +2546,15 @@ class MainWindow(QMainWindow):
             if path and item.checkState() == Qt.Checked:
                 out.append(path)
         return out
+
+    def on_select_all_cases(self):
+        """「全选」: **优先只勾选当前所选 APP 组**(用户要求), 并在状态栏说明范围"""
+        group = self._target_group_for_bulk_check()
+        n = self._set_cases_checked(Qt.Checked, scope_group=group)
+        if group:
+            self._set_status(f"已全选「{group}」的 {n} 条用例", self.status_label)
+        else:
+            self._set_status(f"已全选全部 {n} 条用例(未选中具体组)", self.status_label)
 
     def _current_device_id(self):
         return self.device_combo.currentData()
@@ -2566,22 +2641,50 @@ class MainWindow(QMainWindow):
 
     # ── 前置条件(可编辑/可新增) ──
 
-    def _load_preconditions(self):
-        """读配置里的前置项列表; 未配置用默认 4 项(行为与旧版一致)"""
-        from core.driver import load_preconditions
-        from core.session import DEFAULT_PRECONDITIONS
-        try:
-            items = load_preconditions()
-        except Exception:
-            items = None
-        if not items:
-            items = [dict(x) for x in DEFAULT_PRECONDITIONS]
+    def _load_preconditions(self, app_group=None):
+        """当前 APP 组的前置项; 同时记下来源(供菜单显示)。
+
+        ★ 用户要求(2026-09-24): 前置条件与 APP 组绑定 —— 切到某组用例就用那组的。
+          优先级(见 core.session.preconditions_for_group):
+            组目录 preconditions.yaml → config.yaml 全局 → 内置默认
+        """
+        from core.session import preconditions_for_group
+        group = self._current_app_group() if app_group is None else app_group
+        items, source = preconditions_for_group(group)
+        if source == "default":
+            # 全新环境: 把默认项落到 config(保持旧版行为, 用户能直接编辑)
             try:
                 from core.driver import save_preconditions
                 save_preconditions(items)
             except Exception:
                 pass
+        self._pre_source, self._pre_group = source, group
         return items
+
+    def _refresh_preconditions_for_case(self):
+        """切换用例后让前置条件跟随该用例的 APP 组(用户要求)"""
+        if not hasattr(self, "pre_menu"):
+            return
+        group = self._current_app_group()
+        if group == getattr(self, "_pre_group", None):
+            return                      # 同组不重载, 免得覆盖还没保存的勾选改动
+        self.preconditions = self._load_preconditions(group)
+        self._build_pre_menu()
+
+    def _save_preconditions(self):
+        """保存前置条件: 有当前组 → 写组目录; 没选用例 → 写 config.yaml"""
+        group = self._current_app_group()
+        try:
+            if group:
+                from core.driver import save_group_preconditions
+                save_group_preconditions(group, self.preconditions)
+            else:
+                from core.driver import save_preconditions
+                save_preconditions(self.preconditions)
+            return True
+        except Exception as e:
+            QMessageBox.critical(self, "保存失败", str(e))
+            return False
 
     def _current_app_group(self):
         """当前 APP 组 = 正在编辑的用例所在目录名(供模板下拉用)"""
@@ -2594,8 +2697,17 @@ class MainWindow(QMainWindow):
         return _item_label(item)
 
     def _build_pre_menu(self):
-        """按当前前置项列表重建菜单(勾选=启用; 底部「设置…」增删改)"""
+        """按当前前置项列表重建菜单(勾选=启用; 底部「设置…」增删改)
+
+        ★ 菜单顶部显示"这些前置条件属于哪个 APP 组 / 来源", 避免误以为全局共用。
+        """
         self.pre_menu.clear()
+        src = {"group": "本组配置", "global": "全局兜底(config.yaml)",
+               "default": "默认项"}.get(getattr(self, "_pre_source", ""), "")
+        group = self._current_app_group() or "(未选用例)"
+        head = self.pre_menu.addAction(f"当前组: {group} · {src}")
+        head.setEnabled(False)
+        self.pre_menu.addSeparator()
         self.pre_actions = {}
         for i, item in enumerate(self.preconditions):
             a = QAction(self._pre_label(item), self.pre_menu)
@@ -2609,27 +2721,43 @@ class MainWindow(QMainWindow):
         self.pre_menu.addAction("设置前置条件…", self.on_edit_preconditions)
 
     def _toggle_precondition(self, idx, on):
+        """勾选=启用; 立即落盘(按组存), 免得切组/重启后勾选状态丢失"""
         if 0 <= idx < len(self.preconditions):
             self.preconditions[idx]["enabled"] = bool(on)
+            self._save_preconditions()
 
     def on_edit_preconditions(self):
-        """打开设置对话框: 增删改前置条件并写回 config"""
+        """打开设置对话框: 增删改/排序前置条件, 保存到当前 APP 组"""
         dlg = PreconditionsDialog(self.preconditions, self,
                                   app_group=self._current_app_group())
         if dlg.exec() != QDialog.Accepted:
             return
         self.preconditions = dlg.values()
-        try:
-            from core.driver import save_preconditions
-            save_preconditions(self.preconditions)
-            self._set_status("前置条件已保存", self.status_label)
-        except Exception as e:
-            QMessageBox.critical(self, "保存失败", str(e))
+        if self._save_preconditions():
+            group = self._current_app_group()
+            self._pre_source = "group" if group else "global"
+            self._set_status(f"前置条件已保存({group or '全局'})", self.status_label)
         self._build_pre_menu()
 
     def _selected_preconditions(self):
         """当前启用中的前置项(执行时传给 RunWorker)"""
         return [dict(x) for x in self.preconditions if x.get("enabled", True)]
+
+    def _pre_items_by_group(self, case_files):
+        """执行前: 按要跑的用例收集每个 APP 组的前置项(用户要求: 前置随组)。
+
+        当前编辑的组直接用界面上这份(可能刚勾/去勾过); 其它组从磁盘读该组配置。
+        """
+        from core.session import preconditions_for_group
+        cur = self._current_app_group()
+        out = {}
+        for fp in case_files:
+            group = os.path.basename(os.path.dirname(os.path.abspath(fp)))
+            if group in out:
+                continue
+            items = self.preconditions if group == cur else preconditions_for_group(group)[0]
+            out[group] = [dict(x) for x in items if x.get("enabled", True)]
+        return out
 
     def _build_chip_strip(self):
         """测试步骤详情区标题 + 用例组/用例/优先级/步骤间隔/添加步骤(流式布局)"""
@@ -2917,6 +3045,8 @@ class MainWindow(QMainWindow):
             from core import vision as _vision
             _vision.set_template_app_group(
                 os.path.basename(os.path.dirname(os.path.abspath(self.case_path))))
+        # ★ 前置条件也跟随 APP 组(用户要求: 切到某组用例就用那组的前置条件)
+        self._refresh_preconditions_for_case()
         c = self.current_case
         self.module_edit.setText(str(self.data.get("module") or ""))
         self.case_name_edit.setText(str(c.get("name") or ""))
@@ -3205,12 +3335,14 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "提示", "请先在左侧勾选要执行的用例")
             return
         device_id = self.device_combo.currentData()
-        pre_items = self._selected_preconditions()   # 前置项列表(可编辑/可新增)
+        pre_items = self._selected_preconditions()   # 当前组的前置(兜底用)
+        pre_by_group = self._pre_items_by_group(case_files)   # ★ 每个 APP 组各自的前置
         repeat = self.repeat_spin.value()
         self.result_table.setRowCount(0)
         self._set_preview_placeholder("单击结果行显示对应截图\n点击图片可放大查看")
 
-        self.worker = RunWorker(device_id, case_files, pre_items, repeat)
+        self.worker = RunWorker(device_id, case_files, pre_items, repeat,
+                                pre_by_group=pre_by_group)
         self.worker.step_done.connect(self.on_step_done)
         # 注: 不再连接 log_line → 运行日志(执行期间的 core 日志已由全局
         #     handler 转发, 再连一次会每条显示两遍)

@@ -13,6 +13,7 @@ import time
 from core import registry as reg
 from core.driver import split_texts      # 多值文本拆分: 半角/全角逗号、顿号、分号、换行
 from core.logger import get_logger
+from core.session import warm_webview    # WebView 文本预热
 
 log = get_logger()
 
@@ -154,9 +155,9 @@ def do_wait_for(runner, step):
                                    vision.resolve_template(value), min_matches=4):
                 return
         else:
-            for v in (split_texts(value) or [value]):
-                if runner._find_element(v).exists(timeout=1):
-                    return
+            # ★ 判断走 runner._text_present: 原生优先 + 树稀疏时 OCR 兜底
+            if runner._text_present(*(split_texts(value) or [value])):
+                return
         n += 1
         runner._poll_sleep(n)
 
@@ -175,7 +176,9 @@ def do_wait_loading(runner, step):
     timeout = step.get("timeout", 30)
     end = time.time() + timeout
     while time.time() < end:
-        if not any(runner.d(textContains=t).exists(timeout=0.5) for t in _LOADING_TEXTS):
+        # ★ 判断走 runner._text_present —— 树稀疏时"看不到加载提示"是假象,
+        #   只读无障碍树会把"还在加载"误判成"已加载完"
+        if not runner._text_present(*_LOADING_TEXTS):
             return
         runner._sleep(1)
     log.warning(f"[wait_loading] {timeout}s 后加载提示仍在,继续执行")
@@ -236,8 +239,9 @@ def do_if_impl(runner, step, negate):
             # 多值(逗号/顿号/分号/换行分隔): 任一命中即条件成立(与 assert 的多值语义一致)。
             # v1.4 的 TextViewContentChecker(driver, ["充电中","充电完成"], t) 就是这个语义,
             # 转换后的用例大量依赖它。
-            passed = any(runner.d(textContains=c).exists(timeout=timeout)
-                         for c in (split_texts(condition) or [condition]))
+            # ★ 判断走 runner._text_present(原生优先 + OCR 兜底)
+            passed = runner._text_present(*(split_texts(condition) or [condition]),
+                                          timeout=timeout)
 
     if negate:
         passed = not passed

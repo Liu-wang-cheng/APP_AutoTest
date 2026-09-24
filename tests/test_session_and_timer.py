@@ -41,18 +41,25 @@ class FakeDevice:
         self.start_text = None
 
     def dump_hierarchy(self):
-        return self._xml
+        # 给了 xml 就用它; 否则按 present 生成 —— 多文本判定是读层级里 text 的子串
+        # (见 session._any_present), 所以桩也要能从层级里看到 present
+        if self._xml:
+            return self._xml
+        return "".join(f'<node text="{p}"/>' for p in sorted(self.present))
 
     def click(self, x, y):
         self.clicked_at = (x, y)
 
     def __call__(self, **kw):
-        for key in ("textContains", "text", "description"):
+        for key in ("textContains", "text", "textMatches", "description"):
             if key in kw:
                 # textContains 是**子串**匹配 —— 用相等判断会把 "充电" 这类
                 # 部分匹配误判为不存在
                 if key == "textContains":
                     return FakeElement(any(kw[key] in p for p in self.present))
+                if key == "textMatches":     # 多文本走正则(见 session._any_present)
+                    import re as _re
+                    return FakeElement(any(_re.search(kw[key], p) for p in self.present))
                 return FakeElement(kw[key] in self.present)
         return FakeElement(False)
 
@@ -360,7 +367,8 @@ def test_ensure_charging_not_charging_clicks_recharge(monkeypatch):
     monkeypatch.setattr(session, "click_template",
                         lambda d, name, timeout=10: clicks.append(name) or (10, 10))
     states = [False, True, True]      # 预检 False → 点击后变 True
-    monkeypatch.setattr(session, "is_charging", lambda d: states.pop(0) if states else True)
+    monkeypatch.setattr(session, "is_charging",
+                        lambda d, *a, **k: states.pop(0) if states else True)
 
     class D:
         def textContains(self, kw):
@@ -380,7 +388,7 @@ def test_ensure_charging_timeout_returns_false(monkeypatch):
     """始终不充电 → 超时返回 False(不无限等待;cancel 可提前退出)"""
     from core import session
     monkeypatch.setattr(session.time, "sleep", lambda s: None)
-    monkeypatch.setattr(session, "is_charging", lambda d: False)
+    monkeypatch.setattr(session, "is_charging", lambda d, *a, **k: False)
     monkeypatch.setattr(session, "click_template", lambda d, name, timeout=10: (1, 1))
 
     class D:
@@ -397,3 +405,108 @@ def test_ensure_charging_timeout_returns_false(monkeypatch):
             return ""               # 电量读取失败 → 跳过,不干扰超时路径
 
     assert session.ensure_charging(D(), timeout=0.1) is False
+
+
+# ── 电量: 插件的真实文案格式(用户报过"界面显示 -1%") ──
+
+def test_battery_reads_plugin_text_with_prefix_and_double_percent():
+    """★ SmartThings 插件页的电量文案是 `电池 100%%`(前缀 + 双百分号),
+    旧实现要求 text 以"数字%"开头 → 永远读不到, 一直 -1(真机实测)。"""
+    xml = '<node text="电池 100%%"/><node text="正在吸尘"/>'
+    assert session.get_battery_level(FakeDevice(xml=xml)) == 100
+    xml2 = '<node text="电量 87%"/>'
+    assert session.get_battery_level(FakeDevice(xml=xml2)) == 87
+
+
+def test_battery_prefers_battery_label_over_other_percent():
+    """页面上别的百分比(进度/功率)不能顶替电量: 优先认「电池/电量」那条"""
+    xml = ('<node text="电池 62%%"/><node text="拖布 90%"/>')
+    assert session.get_battery_level(FakeDevice(xml=xml)) == 62
+
+
+def test_battery_ignores_phone_battery_in_content_desc():
+    """⚠ 只认 text: 手机自己的电量在系统状态栏 content-desc 里, 不是插件电量"""
+    xml = '<node text="正在吸尘" content-desc="正在充电，已完成百分之 80。"/>'
+    assert session.get_battery_level(FakeDevice(xml=xml)) == -1
+
+
+# ── 充电判定文本可编辑 + 多文本 ──
+
+def test_is_charging_custom_and_multi_text():
+    """★ 用户要求: 充电判定文本可编辑, 且支持多文本(任一命中即算在充电)
+
+    (不 mock warm_webview —— 多文本是读层级的, 桩会按 present 生成 XML)
+    """
+    assert session.is_charging(FakeDevice(present=("已回充",)), "已回充") is True
+    # 多文本: 全角/半角逗号都行
+    assert session.is_charging(FakeDevice(present=("正在充电",)), "充电中,正在充电") is True
+    assert session.is_charging(FakeDevice(present=("正在充电",)), "充电中，正在充电") is True
+    assert session.is_charging(FakeDevice(present=("清扫中",)), "充电中，正在充电") is False
+    # 留空 → 回到默认「充电」
+    assert session.is_charging(FakeDevice(present=("充电中",)), "") is True
+
+
+def test_charging_type_has_editable_text_param():
+    """GUI「等待充电」里要能编辑判定文本"""
+    spec = session.PRECONDITION_TYPES["charging"]
+    keys = {p["key"]: p for p in spec["params"]}
+    assert "ready_text" in keys, spec
+    assert keys["ready_text"]["default"] == session.DEFAULT_CHARGING_TEXT
+    assert keys["ready_text"]["type"] == "text"
+
+
+def test_ensure_charging_passes_ready_text(monkeypatch):
+    """前置项里配的判定文本要真的传到 is_charging"""
+    monkeypatch.setattr(session.time, "sleep", lambda s: None)
+    seen = []
+    monkeypatch.setattr(session, "is_charging",
+                        lambda d, text=None: (seen.append(text), True)[1])
+    session.ensure_charging(FakeDevice(), timeout=1, ready_text="充电中,已回充")
+    assert seen and seen[0] == "充电中,已回充", seen
+
+
+# ── 设备页内容读不出来时的兜底(充电判定卡死的根因) ──
+
+def test_device_page_readable_counts_texts():
+    """插件页内容没暴露时 dump 只剩标题+时间 2 条 → 判为不可读"""
+    few = FakeDevice(xml='<node text="13:51"/><node text="扫地机器人0087"/>')
+    assert session.device_page_readable(few) is False
+    many = FakeDevice(xml="".join(f'<node text="房间 {i}"/>' for i in range(8)))
+    assert session.device_page_readable(many) is True
+
+
+# ── 多文本必须是**子串**语义(真机踩过的坑) ──
+
+class AndroidLikeDevice(FakeDevice):
+    """按 Android 真实语义实现 textMatches: **整串匹配**(Pattern.matches)"""
+
+    def __call__(self, **kw):
+        if "textMatches" in kw:
+            import re as _re
+            pat = kw["textMatches"]
+            return FakeElement(any(_re.fullmatch(pat, p) for p in self.present))
+        return super().__call__(**kw)
+
+
+def test_multi_text_uses_substring_not_textmatches(monkeypatch):
+    """★ 真机事故: 单值「满电」能命中「已充满电 仅真空吸尘器」, 而多值
+    「充电,满电」反而判不到 —— 因为 textMatches 是整串匹配(Pattern.matches)。
+
+    所以多值必须在层级 XML 里做子串查找, 不能把 OR 正则丢给 textMatches。
+    """
+    monkeypatch.setattr(session, "warm_webview",
+                        lambda d: '<node text="已充满电 仅真空吸尘器"/><node text="电池 100%%"/>')
+    dev = AndroidLikeDevice(present=("已充满电 仅真空吸尘器",))
+    assert session._any_present(dev, ["满电"]) is True, "单值: textContains 子串匹配"
+    assert session._any_present(dev, ["充电", "满电"]) is True, \
+        "多值必须也是子串语义(不能因为整串匹配而判 False)"
+    assert session._any_present(dev, ["充电", "回充"]) is False, "都没有时才 False"
+    assert session._any_present(dev, []) is False
+
+
+def test_is_charging_multi_text_matches_substring(monkeypatch):
+    """充电判定的多文本同样要是子串语义"""
+    monkeypatch.setattr(session, "warm_webview",
+                        lambda d: '<node text="已充满电 仅真空吸尘器"/>')
+    dev = AndroidLikeDevice(present=("已充满电 仅真空吸尘器",))
+    assert session.is_charging(dev, "充电,满电") is True

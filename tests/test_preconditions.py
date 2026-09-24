@@ -52,6 +52,10 @@ class FakeDev:
 
         return R()
 
+    def click(self, x, y):
+        """设备级点击(坐标直点, 如前置条件「点击空白处」)"""
+        self.clicked_at = (x, y)
+
     def press(self, key):
         self.pressed.append(key)
 
@@ -59,7 +63,8 @@ class FakeDev:
         pass
 
     def dump_hierarchy(self):
-        return ""
+        # 多文本判定是读层级里 text 的子串(见 session._any_present) → 桩要能"看见" present
+        return "".join(f'<node text="{p}"/>' for p in sorted(self.present))
 
 
 # ── 配置读写(注释/换行符保留) ──
@@ -265,7 +270,13 @@ def test_precondition_dialogs_do_not_auto_close(qapp, monkeypatch, tmp_path):
     dlg.show()
     try:
         qapp.processEvents()
-        for col in (1, 2):            # 编辑/删除按钮
+        from PySide6.QtWidgets import QPushButton as _PB
+        # 顺序列(第1列)是装着 ↑↓ 的容器, 里面两个按钮也不能是默认按钮
+        arrows = dlg.table.cellWidget(0, 1).findChildren(_PB)
+        assert len(arrows) == 2, f"顺序列应有 ↑↓ 两个按钮: {arrows}"
+        assert all(not b.autoDefault() and not b.isDefault() for b in arrows), \
+            "↑↓ 按钮不应是默认按钮"
+        for col in (2, 3):            # 编辑/删除按钮
             b = dlg.table.cellWidget(0, col)
             assert not b.autoDefault() and not b.isDefault(), \
                 f"表格第{col}列按钮不应是默认按钮"
@@ -523,5 +534,284 @@ def test_steps_editor_syncs_context_on_first_open(qapp, monkeypatch, tmp_path):
         assert ed.group_combo.currentText() == "组A", "应默认选中第一个组"
         assert vision.current_app_group() == "组A", "初始化就该同步模板上下文"
         assert "组A模板.png" in vision.list_templates(), "首次打开即可取到模板"
+    finally:
+        dlg.close()
+
+
+# ── 前置条件: 点击空白处(清掉悬浮通知) ──
+
+def test_tap_blank_uses_default_point_and_override():
+    """不填坐标 → 用实测默认空白点; 填了 → 用填的坐标"""
+    dev = FakeDev()
+    assert session.tap_blank(dev) is True
+    assert dev.clicked_at == session.DEFAULT_BLANK_POINT, dev.clicked_at
+    dev2 = FakeDev()
+    session.tap_blank(dev2, (100, 200))
+    assert dev2.clicked_at == (100, 200)
+
+
+def test_parse_point_accepts_full_and_half_width_comma():
+    """坐标分隔符与其它多值字段一致: 中文输入法打出的全角逗号也要认"""
+    assert session._parse_point("540,660") == (540, 660)
+    assert session._parse_point("540，660") == (540, 660)      # 全角
+    assert session._parse_point("540、660") == (540, 660)      # 顿号
+    assert session._parse_point(" 540 , 660 ") == (540, 660)
+    assert session._parse_point("") is None                    # 空 → 用默认点
+    assert session._parse_point("abc") is None
+    assert session._parse_point("1,2,3") is None               # 不是两个数 → 默认点
+    # 非法坐标不能静默失效: 走默认点
+    dev = FakeDev()
+    session.tap_blank(dev, session._parse_point("abc"))
+    assert dev.clicked_at == session.DEFAULT_BLANK_POINT
+
+
+def test_tap_blank_runs_as_precondition_item():
+    """★ 走前置条件列表执行: type=tap_blank → 点空白; 结果进 prepare_items 列表"""
+    dev = FakeDev()
+    items = [{"type": "tap_blank", "enabled": True, "point": "300，400"}]
+    results = session.prepare_items(dev, {}, items)
+    assert dev.clicked_at == (300, 400), dev.clicked_at
+    assert len(results) == 1 and results[0]["ok"] is True
+    assert "点击空白处" in results[0]["desc"], results[0]["desc"]
+    assert "300,400" in results[0]["desc"], results[0]["desc"]
+
+
+def test_tap_blank_type_is_editable_in_gui():
+    """GUI「添加前置条件」里能选到它, 并且坐标可编辑"""
+    assert "tap_blank" in session.PRECONDITION_TYPES
+    spec = session.PRECONDITION_TYPES["tap_blank"]
+    keys = [p["key"] for p in spec["params"]]
+    assert "point" in keys, spec
+
+
+# ── WebView 文本预热 ──
+
+def test_warm_webview_swallows_device_errors():
+    """dump 失败(设备抖动)不能拖垮判断"""
+    class Boom:
+        def dump_hierarchy(self):
+            raise RuntimeError("设备连接抖动")
+    assert session.warm_webview(Boom()) == ""
+
+
+def test_map_load_and_text_check_warm_webview(monkeypatch):
+    """前置的文本等待(地图加载/文本检查)同样要在轮询里预热 WebView"""
+    monkeypatch.setattr(session.time, "sleep", lambda s: None)
+    dev = FakeDev(present=("地图编辑",))
+    calls = {"n": 0}
+    dev.dump_hierarchy = lambda: calls.__setitem__("n", calls["n"] + 1) or ""
+    assert session.ensure_map_loaded(dev, timeout=0.01, rounds=1,
+                                     ready_text="地图编辑") is True
+    assert calls["n"] >= 1, "地图加载没有预热"
+
+    dev2 = FakeDev(present=("首页",))
+    calls2 = {"n": 0}
+    dev2.dump_hierarchy = lambda: calls2.__setitem__("n", calls2["n"] + 1) or ""
+    assert session.ensure_text_check(dev2, wait_text="首页", timeout=0.01) is True
+    assert calls2["n"] >= 1, "文本检查没有预热"
+
+
+# ── 前置条件: 进入设备页(文本确认 + 失败重进) ──
+
+class _SwitchDev(FakeDev):
+    """点设备名后"页面切换": present 从列表页文本变成设备页文本"""
+
+    def __init__(self, before=(), after=()):
+        super().__init__(present=before)
+        self._after = set(after)
+
+    def __call__(self, **kw):
+        r = super().__call__(**kw)
+        owner = self
+        orig_click = r.click
+
+        def click():
+            orig_click()
+            owner.present = set(owner._after)      # 模拟进入设备页
+
+        r.click = click
+        return r
+
+
+def test_enter_device_ok_when_already_on_device_page(monkeypatch):
+    """已经在设备页(判定文本命中) → 直接通过, 不该乱点/乱按返回"""
+    monkeypatch.setattr(session.time, "sleep", lambda s: None)
+    dev = _SwitchDev(before=("设备控制", "扫地机器人0087"))
+    assert session.ensure_device_page(dev, "扫地机器人0087",
+                                      ready_text="设备控制", timeout=1) is True
+    assert dev.pressed == [] and dev.clicked == [], "已在设备页不该再操作"
+
+
+def test_enter_device_clicks_name_then_confirms(monkeypatch):
+    """不在设备页 → 点设备名进入 → 用判定文本确认"""
+    monkeypatch.setattr(session.time, "sleep", lambda s: None)
+    dev = _SwitchDev(before=("主页", "收藏", "扫地机器人0087"),
+                     after=("设备控制", "扫地机器人0087"))
+    assert session.ensure_device_page(dev, "扫地机器人0087", ready_text="设备控制",
+                                      timeout=1, rounds=3) is True
+    assert "扫地机器人0087" in dev.clicked, f"应点击设备名进入: {dev.clicked}"
+
+
+def test_enter_device_retries_then_fails(monkeypatch):
+    """判定文本一直出现不了 → 每轮都重进, 用完轮数返回 False(会阻断本轮)"""
+    monkeypatch.setattr(session.time, "sleep", lambda s: None)
+    # 永远停在列表页(点完也不切换)
+    dev = _SwitchDev(before=("主页", "收藏", "扫地机器人0087"), after=("主页",))
+    assert session.ensure_device_page(dev, "扫地机器人0087", ready_text="设备控制",
+                                      timeout=1, rounds=2) is False
+    assert dev.clicked.count("扫地机器人0087") >= 1, "失败后必须再执行进入操作"
+
+
+def test_enter_device_does_not_click_webview_title(monkeypatch):
+    """⚠ 设备页上设备名是铺满全屏的 WebView 标题 —— 判定文本读不到时也不能去点它
+    (盲点会点到页面中央的按钮, 如「暂停」)"""
+    monkeypatch.setattr(session.time, "sleep", lambda s: None)
+    dev = _SwitchDev(before=("扫地机器人0087",))        # 既无列表页标志也无设备页标志
+    assert session.ensure_device_page(dev, "扫地机器人0087", ready_text="设备控制",
+                                      timeout=1, rounds=1) is False
+    assert dev.clicked == [], f"不确定在列表页时不能点设备名: {dev.clicked}"
+
+
+def test_enter_device_ready_text_is_editable_param():
+    """判定文本必须可编辑(GUI 前置条件里能改)"""
+    spec = session.PRECONDITION_TYPES["enter_device"]
+    keys = {p["key"]: p for p in spec["params"]}
+    assert "ready_text" in keys, spec
+    assert keys["ready_text"]["type"] == "text"
+    assert keys["ready_text"]["default"] == session.DEFAULT_DEVICE_READY_TEXT
+    # 自定义判定文本要真的生效
+    import inspect
+    assert "ready_text" in inspect.signature(session.ensure_device_page).parameters
+
+
+def test_default_preconditions_include_enter_device_first():
+    """★ 用户要求: 进设备页要在**默认执行项**里, 且排在 charging/map_load 之前
+    (那两项都要在设备页上操作); 判定文本用默认值"""
+    types = [it["type"] for it in session.DEFAULT_PRECONDITIONS]
+    assert "enter_device" in types, f"默认执行项缺少进设备页: {types}"
+    assert types.index("enter_device") < types.index("charging"), types
+    assert types.index("enter_device") < types.index("map_load"), types
+    item = next(it for it in session.DEFAULT_PRECONDITIONS if it["type"] == "enter_device")
+    assert item.get("ready_text") == session.DEFAULT_DEVICE_READY_TEXT, item
+    assert item.get("enabled", True) is True, "默认要启用"
+
+
+# ── 前置条件顺序可手动调整(↑↓) ──
+
+def test_precondition_dialog_reorder_updates_order(qapp):
+    """★ 用户要求: 前置条件的执行顺序可手动调整 —— 列表顺序就是执行顺序"""
+    from gui import main_window as mw
+    items = [{"type": "restart", "enabled": True},
+             {"type": "battery", "enabled": True, "min_level": 50},
+             {"type": "tap_blank", "enabled": True, "point": "1,2"}]
+    dlg = mw.PreconditionsDialog(items, None)
+    try:
+        assert [it["type"] for it in dlg.values()] == ["restart", "battery", "tap_blank"]
+        dlg._move(2, -1)          # 第三条上移
+        assert [it["type"] for it in dlg.values()] == ["restart", "tap_blank", "battery"]
+        dlg._move(0, 1)           # 第一条下移
+        assert [it["type"] for it in dlg.values()] == ["tap_blank", "restart", "battery"]
+        # 边界: 首行上移/末行下移 都是 no-op
+        dlg._move(0, -1)
+        dlg._move(2, 1)
+        assert [it["type"] for it in dlg.values()] == ["tap_blank", "restart", "battery"]
+    finally:
+        dlg.close()
+
+
+def test_precondition_dialog_arrows_enabled_by_position(qapp):
+    """首行的 ↑ 与末行的 ↓ 应置灰(避免点了没反应)"""
+    from PySide6.QtWidgets import QPushButton as _PB
+    from gui import main_window as mw
+    items = [{"type": "restart", "enabled": True},
+             {"type": "battery", "enabled": True, "min_level": 50}]
+    dlg = mw.PreconditionsDialog(items, None)
+    try:
+        first = dlg.table.cellWidget(0, 1).findChildren(_PB)
+        last = dlg.table.cellWidget(1, 1).findChildren(_PB)
+        assert not first[0].isEnabled() and first[1].isEnabled(), "首行↑应置灰"
+        assert last[0].isEnabled() and not last[1].isEnabled(), "末行↓应置灰"
+    finally:
+        dlg.close()
+
+
+# ── 前置条件与 APP 组绑定 ──
+
+def test_group_preconditions_saved_to_separate_dir(monkeypatch, tmp_path):
+    """★ 用户要求: 前置条件按 APP 组存放, 且放**独立目录**(不能落在用例目录里,
+    否则会被用例列表当成用例显示出来)"""
+    from core import driver
+    monkeypatch.setattr(driver, "BASE_DIR", str(tmp_path))
+    items = [{"type": "restart", "enabled": True},
+             {"type": "enter_device", "enabled": True, "ready_text": "设备控制"}]
+    p = driver.save_group_preconditions("三星", items)
+    assert p.endswith(os.path.join("Test_preconditions", "三星.yaml")), p
+    assert "Test_cases" not in p, f"不能写进用例目录: {p}"
+    assert driver.load_group_preconditions("三星") == items
+    assert driver.load_group_preconditions("没配过的组") is None
+
+
+def test_preconditions_file_never_counts_as_case():
+    """兜底: 组目录里若残留 preconditions.yaml, 不能被当作用例扫出来"""
+    from core.driver import is_case_file
+    assert is_case_file("/x/Test_cases/三星/全局清扫.yaml") is True
+    assert is_case_file("/x/Test_cases/三星/preconditions.yaml") is False
+    assert is_case_file("/x/Test_cases/三星/preconditions.yml") is False
+
+
+def test_preconditions_for_group_fallback_chain(monkeypatch, tmp_path):
+    """取值优先级: 组配置 → config.yaml 全局 → 内置默认"""
+    from core import driver
+    monkeypatch.setattr(driver, "BASE_DIR", str(tmp_path))   # ★ 组配置路径基于 driver.BASE_DIR
+    # ① 组里没配、全局也没配 → 内置默认项(注意要连全局一起隔离, 别读真实 config)
+    monkeypatch.setattr(driver, "load_preconditions", lambda: None)
+    items, src = session.preconditions_for_group("组A")
+    assert src == "default" and items, (src, items)
+    # ② 只有全局 → 用全局(老用户参数不丢)
+    global_items = [{"type": "charging", "enabled": True, "timeout": 1200}]
+    monkeypatch.setattr(driver, "load_preconditions", lambda: global_items)
+    items, src = session.preconditions_for_group("组A")
+    assert src == "global" and items == global_items
+    # ③ 组里有配置 → 优先用组里的
+    group_items = [{"type": "tap_blank", "enabled": True, "point": "9,9"}]
+    driver.save_group_preconditions("组A", group_items)
+    items, src = session.preconditions_for_group("组A")
+    assert src == "group" and items == group_items, (src, items)
+
+
+def test_group_preconditions_path_is_isolated_in_tests():
+    """守护: 测试里组配置的落盘路径必须指向临时目录。
+
+    conftest 的 `_isolate_group_preconditions` 钉住 group_preconditions_path 这个
+    唯一出口 —— 一旦那条 fixture 被删/失效, 测试就会写进用户真实的
+    Test_preconditions/(曾经因此覆盖过用户的 7 条配置), 这里当场报红。
+    """
+    from pathlib import Path as _P
+
+    from core.driver import group_preconditions_path
+    p = _P(group_preconditions_path("任意组")).resolve()
+    real = (_P(__file__).resolve().parent.parent / "Test_preconditions" / "任意组.yaml")
+    assert p != real.resolve(), "测试里指向了真实目录: conftest 的隔离失效了"
+    assert "Test_preconditions" in p.name or p.name.endswith(".yaml")
+
+
+def test_precondition_order_arrows_are_visible(qapp):
+    """★ 箭头按钮必须真的放得下箭头。
+
+    用户报过"顺序按钮没有箭头方向显示": 全局 QSS 给 QPushButton 设了
+    `padding: 4px 12px`, 而箭头按钮只有 26px 宽 —— 左右内边距吃掉 24px,
+    字被整个截掉。必须内联覆盖 padding + 固定尺寸。
+    """
+    from PySide6.QtWidgets import QPushButton as _PB
+    from gui import main_window as mw
+    dlg = mw.PreconditionsDialog([{"type": "restart", "enabled": True},
+                                  {"type": "battery", "enabled": True}], None)
+    try:
+        for b in dlg.table.cellWidget(0, 1).findChildren(_PB):
+            assert b.text() in ("↑", "↓"), b.text()
+            need = b.fontMetrics().horizontalAdvance(b.text()) + 4
+            assert b.width() >= need, \
+                f"'{b.text()}' 按钮太窄({b.width()} < {need}), 箭头会被全局 padding 截掉"
+            assert "padding" in b.styleSheet(), "小按钮必须内联覆盖全局 padding"
     finally:
         dlg.close()

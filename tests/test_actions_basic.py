@@ -41,6 +41,10 @@ class FakeDevice:
     def info(self):
         return {}
 
+    def dump_hierarchy(self):
+        # 判断类(if 条件/wait_for/wait_loading)现在读层级: 桩把 present 体现在 XML 里
+        return "".join(f'<node text="{p}"/>' for p in sorted(self.present))
+
     def window_size(self):
         return (1080, 1920)
 
