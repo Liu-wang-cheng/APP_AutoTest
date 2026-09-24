@@ -256,3 +256,85 @@ def test_check_never_raises(monkeypatch):
     cfg = {"update": {"enabled": True, "repository": "o/r"}}
     r = updater.check_for_update(cfg)
     assert r.status == "error" and "DNS" in r.message
+
+
+# ── 自替换(目录模式): 下载前缀 / 解包校验 / 生成替换脚本 ──
+
+def test_apply_download_prefix():
+    assert updater.apply_download_prefix("https://github.com/x/y.zip",
+                                         "https://ghfast.top/") == \
+        "https://ghfast.top/https://github.com/x/y.zip"
+    assert updater.apply_download_prefix("https://github.com/x/y.zip", "") == \
+        "https://github.com/x/y.zip"          # 空前缀 = 直连
+    assert updater.apply_download_prefix("https://github.com/x/y.zip", None) == \
+        "https://github.com/x/y.zip"
+    assert updater.apply_download_prefix("", "https://p/") == ""
+
+
+def _make_package(path, with_exe=True, slip=False):
+    """造一个更新包 zip: AutoTest.exe + _internal/...; slip=True 时夹带越界条目"""
+    import zipfile
+    with zipfile.ZipFile(path, "w") as zf:
+        if with_exe:
+            zf.writestr("AutoTest.exe", b"MZ fake exe")
+        zf.writestr("_internal/VERSION", "9.9\n")
+        zf.writestr("_internal/core/driver.py", b"#")
+        if slip:
+            zf.writestr("../evil.txt", "越界文件")
+
+
+def test_extract_package_ok_and_validates_layout(tmp_path):
+    import zipfile
+    z = tmp_path / "pkg.zip"
+    _make_package(str(z))
+    out = tmp_path / "out"
+    exe = updater.extract_package(str(z), str(out))
+    assert exe == "AutoTest.exe"
+    assert (out / "_internal" / "VERSION").read_text(encoding="utf-8").strip() == "9.9"
+
+
+def test_extract_package_rejects_zip_without_exe(tmp_path):
+    """包里没有 exe = 包坏了, 必须报错而不是装一个启动不了的东西"""
+    import zipfile
+    z = tmp_path / "bad.zip"
+    with zipfile.ZipFile(z, "w") as zf:
+        zf.writestr("_internal/VERSION", "9.9\n")
+    with pytest.raises(ValueError, match="exe"):
+        updater.extract_package(str(z), str(tmp_path / "out"))
+
+
+def test_extract_package_blocks_zip_slip(tmp_path):
+    """★ 恶意/损坏 zip 里的 ../ 条目不得被解到目标目录之外(zip-slip)"""
+    import zipfile
+    z = tmp_path / "evil.zip"
+    _make_package(str(z), slip=True)
+    with pytest.raises(ValueError, match="越界"):
+        updater.extract_package(str(z), str(tmp_path / "out"))
+    assert not (tmp_path / "evil.txt").exists(), "越界文件被写出来了!"
+
+
+def test_generate_update_bat_structure(tmp_path):
+    """★ bat 必须包含完整的替换与回滚流程, 且**不含绝对路径**(GBK 代码页下会被
+    cmd 读乱码, rename/robocopy 全部失效 —— 参考项目实战踩过)。"""
+    app_dir = tmp_path / "app"
+    extract = tmp_path / "app" / "_update_extracted"
+    app_dir.mkdir()
+    bat = updater.generate_update_bat(str(app_dir), str(extract), pid=12345,
+                                      exe_name="AutoTest.exe")
+    text = open(bat, encoding="utf-8").read()
+    # 完整流程的关键步骤
+    for must in ('tasklist /FI "PID eq 12345"',            # 等 PID 退出
+                 'rename "_internal" "_internal_old"',      # 原子改名
+                 "robocopy",                                # 空目录复制
+                 'rename "_internal_old" "_internal"',      # 失败回滚
+                 "start \"\"",                              # 启动新版本
+                 "del /f /q \"%~f0\""):                     # 自删
+        assert must in text, f"bat 缺少关键步骤: {must}"
+    # 用户数据绝不出现在替换范围里(bat 只碰 exe 与 _internal)
+    assert "Test_cases" not in text and "Test_preconditions" not in text
+    assert "config.yaml" not in text
+    # 不嵌绝对路径: app_dir 是含盘符的绝对路径, 不得出现在 bat 里(全用 %~dp0)
+    assert str(app_dir) not in text and "%~dp0" in text
+    # CRLF: cmd 对裸 LF 的 bat 兼容性差
+    raw = open(bat, "rb").read()
+    assert b"\r\n" in raw and b"\n" not in raw.replace(b"\r\n", b"")

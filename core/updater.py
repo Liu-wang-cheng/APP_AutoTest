@@ -321,3 +321,163 @@ def check_for_update(cfg, current=None):
                            info, mirror, force)
     except Exception as e:
         return CheckResult("error", f"检查更新失败: {e}")
+
+
+# ── 下载与自替换(目录模式: 只换 exe + _internal/, 用户数据绝不碰) ──
+
+def apply_download_prefix(url, prefix):
+    """按镜像前缀加速 Release 下载(前缀为空 = 直连)。"""
+    prefix = str(prefix or "").strip()
+    if not prefix or not url:
+        return url
+    return prefix + str(url)
+
+
+def extract_package(zip_path, dest_dir):
+    """把更新包(zip)解到 dest_dir, 并校验布局。
+
+    返回新版本 exe 的文件名; 布局不对(没有 exe)抛 ValueError。
+
+    ★ zip-slip 防护: 恶意/损坏的 zip 里可以有 `../` 条目, extractall 会把它解到
+      目标目录**之外**(覆盖任意文件)。逐条用 abspath 验证确实落在 dest_dir 里。
+    """
+    dest = os.path.abspath(dest_dir)
+    os.makedirs(dest, exist_ok=True)
+    import zipfile
+    with zipfile.ZipFile(zip_path) as zf:
+        for name in zf.namelist():
+            target = os.path.abspath(os.path.join(dest, name))
+            if os.path.commonpath([dest, target]) != dest:
+                raise ValueError(f"更新包里有越界路径条目: {name}")
+        zf.extractall(dest)
+    # 布局校验: 必须有一个 exe(PyInstaller 产物); 支持包内一层目录嵌套
+    for base, _dirs, files in os.walk(dest):
+        exes = [f for f in files if f.lower().endswith(".exe")]
+        if exes:
+            return os.path.basename(exes[0])
+    raise ValueError("更新包里没有找到 .exe(包坏了?)")
+
+
+def generate_update_bat(app_dir, extract_dir, pid, exe_name):
+    """生成目录模式的自替换 bat, 返回 bat 路径(写在 app_dir 下)。
+
+    流程: 等 PID 退出 -> rename _internal 为 _internal_old(原子, 被锁也能成功)
+          -> robocopy 复制到空出来的名字(往空目录复制必定成功)
+          -> 失败则回滚 -> 覆盖 exe -> 启动新版本 -> 清理 -> 自删。
+    只碰 exe 与 _internal/, 用户数据(config/ Test_cases/ 等)不在包里, 天然不碰。
+
+    ★ bat 里绝不嵌入绝对/中文路径 —— UTF-8 写入的 bat 在 GBK 代码页系统会被 cmd
+      读乱码, rename/robocopy 的路径就失效了(参考项目实战踩过)。全部用 %~dp0
+      (bat 自己所在目录 = app_dir)和动态遍历解析。
+    """
+    bat = f"""@echo off
+chcp 65001 >nul 2>&1
+title 正在更新 APP 自动化测试平台
+cd /d "%~dp0"
+
+echo ============================================
+echo   正在更新, 请勿关闭此窗口
+echo ============================================
+echo.
+
+REM 等待原进程退出(最多 30 秒)
+set WAITED=0
+:wait_loop
+tasklist /FI "PID eq {pid}" 2>nul | find "{pid}" >nul
+if %errorlevel% equ 0 (
+    set /a WAITED+=1
+    if %WAITED% geq 30 (
+        echo [ERROR] 原进程未能退出, 更新取消
+        goto :cleanup
+    )
+    timeout /t 1 /nobreak >nul
+    goto wait_loop
+)
+echo [OK] 原进程已退出
+timeout /t 2 /nobreak >nul
+echo.
+
+REM 动态定位新版本(不写死路径, 避免中文/绝对路径被 cmd 乱码)
+set "NEW_EXE="
+for /r "_update_extracted" %%f in (*.exe) do if not defined NEW_EXE set "NEW_EXE=%%f"
+if not defined NEW_EXE (
+    echo [ERROR] 未找到新版本程序文件, 更新取消
+    pause
+    goto :cleanup
+)
+for %%f in ("%NEW_EXE%") do set "NEW_DIR=%%~dpf"
+set "EXE_NAME="
+for %%f in ("%~dp0*.exe") do if not defined EXE_NAME set "EXE_NAME=%%~nxf"
+if not defined EXE_NAME (
+    echo [ERROR] 未找到当前程序文件, 更新取消
+    pause
+    goto :cleanup
+)
+
+REM 清理上次更新可能留下的残留
+if exist "_internal_old" rmdir /s /q "_internal_old" 2>nul
+
+REM rename 是原子操作, 即使文件被杀软等锁住也能成功
+echo 正在切换程序文件...
+rename "_internal" "_internal_old"
+if %errorlevel% neq 0 (
+    echo [ERROR] 无法重命名 _internal 目录(权限不足/杀毒锁定?)
+    pause
+    goto :cleanup
+)
+
+REM robocopy 到空出来的名字: 往空目录复制无锁, 必定成功
+robocopy "%NEW_DIR%_internal" "_internal" /e /r:3 /w:1 /njh /njs /ndl /nc /ns /np >nul
+if %errorlevel% geq 8 (
+    echo [ERROR] _internal 复制失败, 回滚
+    rename "_internal_old" "_internal"
+    pause
+    goto :cleanup
+)
+echo [OK] 新程序文件已就位
+
+copy /y "%NEW_DIR%%EXE_NAME%" "%EXE_NAME%" >nul
+if %errorlevel% neq 0 (
+    echo [ERROR] exe 复制失败(新 _internal 已就位, 可手动覆盖 exe)
+    pause
+    goto :cleanup
+)
+echo [OK] exe 已更新
+
+REM 验证版本文件(findstr 找不到只告警, 不回滚 —— 文件在但内容异常很罕见)
+findstr /r "^[0-9]" "_internal\\VERSION" >nul 2>&1
+if %errorlevel% equ 0 (
+    echo [OK] 更新完成
+) else (
+    echo [WARN] VERSION 文件异常, 但更新已执行
+)
+echo.
+
+echo 正在启动新版本...
+start "" "%EXE_NAME%"
+
+REM 清理旧目录: 杀软扫描可能短暂锁定, 重试几次; 仍删不掉就留给下次启动清
+timeout /t 3 /nobreak >nul
+set OLD_RETRY=0
+:old_cleanup_loop
+if not exist "_internal_old" goto :cleanup
+rmdir /s /q "_internal_old" 2>nul
+if exist "_internal_old" (
+    set /a OLD_RETRY+=1
+    if %OLD_RETRY% lss 5 (
+        timeout /t 3 /nobreak >nul
+        goto old_cleanup_loop
+    )
+    echo [WARN] _internal_old 残留, 将由新版本启动时清理
+)
+
+:cleanup
+if exist "_update_extracted" rmdir /s /q "_update_extracted"
+if exist "_update_download.zip" del /f /q "_update_download.zip"
+(goto) 2>nul & del /f /q "%~f0"
+"""
+    bat_path = os.path.join(os.path.abspath(app_dir), "_update.bat")
+    # newline="\r\n": cmd 对裸 LF 的 bat 兼容性差(块语句可能被吞), 统一 CRLF
+    with open(bat_path, "w", encoding="utf-8", newline="\r\n") as f:
+        f.write(bat)
+    return bat_path

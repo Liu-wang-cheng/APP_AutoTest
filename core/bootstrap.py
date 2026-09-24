@@ -31,6 +31,45 @@ _SEED_FILES = (
 _CONFIG_TEMPLATE = "config/config.example.yaml"
 _CONFIG_TARGET = "config/config.yaml"
 
+#: OTA 自替换可能留下的残留(更新 bat 删不掉时的兜底, 见 updater.generate_update_bat)
+_UPDATE_LEFTOVERS = ("_internal_old", "_update_extracted", "_update_download.zip")
+
+
+def cleanup_update_leftovers(app_dir=None):
+    """清掉上次更新中断留下的残留; 返回清理掉的条目。
+
+    ★ 正常情况下更新 bat 自己会清; 但杀软可能短暂锁定导致残留 —— 启动时再兜一道
+      (此刻新版本已在运行, 旧 _internal_old 必然没用了)。任何失败都吞掉。
+    """
+    import shutil
+    # ★ app_dir 必须单独判断 —— 写成 `app_dir or X if frozen else ""` 会被解析成
+    #   `(app_dir or X) if frozen else ""`: 未打包时 app_dir 被整个丢掉, 清理落空
+    if app_dir:
+        root = os.path.abspath(app_dir)
+    elif getattr(sys, "frozen", False):
+        root = os.path.dirname(os.path.abspath(sys.executable))
+    else:
+        return []
+    if not root or not os.path.isdir(root):
+        return []
+    cleaned = []
+    for name in _UPDATE_LEFTOVERS:
+        p = os.path.join(root, name)
+        if not os.path.exists(p):
+            continue
+        try:
+            if os.path.isdir(p):
+                shutil.rmtree(p, ignore_errors=True)
+            else:
+                os.remove(p)
+            if not os.path.exists(p):
+                cleaned.append(name)
+        except OSError:
+            pass
+    if cleaned:
+        log.info(f"[初始化] 已清理上次更新的残留: {', '.join(cleaned)}")
+    return cleaned
+
 
 def bundled_root():
     """随包资源所在目录: 打包后是 `<_internal>`, 开发环境是项目根。"""

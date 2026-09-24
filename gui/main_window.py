@@ -942,6 +942,52 @@ class UpdateCheckThread(QThread):
         self.done.emit(result)
 
 
+class UpdateDownloadThread(QThread):
+    """后台下载更新包 -> 校验 sha256 -> 解包 -> 生成替换脚本。
+
+    全程不碰界面; 进度经 progress 信号推送。
+    """
+    progress = Signal(int, int, str)   # (已下载字节, 总字节, 速度文本; 总未知=0)
+    done = Signal(str, str)            # (bat 路径, ""=成功 / 失败原因)
+
+    def __init__(self, cfg, info, mirror, parent=None):
+        super().__init__(parent)
+        self._cfg = cfg
+        self._info = info
+        self._mirror = mirror
+
+    def run(self):
+        from core import updater
+        from core.driver import DATA_DIR
+        try:
+            conf = updater.load_update_config(self._cfg)
+            mirrors = {m.get("name"): m for m in conf.get("mirrors") or []}
+            # 下载走镜像加速: 版本清单所在的镜像若配了 download_prefix 就用它
+            prefix = getattr(self._mirror, "download_prefix", "") or ""
+            url = updater.apply_download_prefix(self._info.download_url, prefix)
+            if not url:
+                self.done.emit("", "版本清单里没有 download_url")
+                return
+            zip_path = os.path.join(DATA_DIR, "_update_download.zip")
+            updater.download(url, zip_path,
+                             progress_cb=lambda d, t, s: self.progress.emit(d, t, s))
+            if not updater.verify_sha256(zip_path, self._info.sha256):
+                try:
+                    os.remove(zip_path)
+                except OSError:
+                    pass
+                self.done.emit("", "下载包校验失败(sha256 不符), 已删除")
+                return
+            extract_dir = os.path.join(DATA_DIR, "_update_extracted")
+            updater.extract_package(zip_path, extract_dir)
+            bat = updater.generate_update_bat(
+                DATA_DIR, extract_dir, os.getpid(),
+                "AutoTest.exe")          # exe 名实际由 bat 动态解析, 这里仅占位
+            self.done.emit(bat, "")
+        except Exception as e:
+            self.done.emit("", f"下载/准备更新失败: {e}")
+
+
 class _StepsHost(QObject):
     """前置条件里「步骤编辑」的迷你宿主 —— 让 StepCard 等用例编辑组件原样复用。
 
@@ -1836,7 +1882,76 @@ class MainWindow(QMainWindow):
             body += f"\n\n更新内容:\n{notes}"
         if result.force:
             body += "\n\n★ 此版本要求强制更新, 请尽快升级。"
-        QMessageBox.information(self, "发现新版本", body)
+        box = QMessageBox(self)
+        box.setWindowTitle("发现新版本")
+        box.setText(body)
+        download = box.addButton("立即更新", QMessageBox.AcceptRole)
+        if not result.force:
+            box.addButton("稍后再说", QMessageBox.RejectRole)
+        # 强制更新(min_version)只给「立即更新」一个选择 —— 既然标了强制,
+        # 就不能提供一个"点了却什么都不发生"的退出按钮
+        box.exec()
+        if box.clickedButton() is download:
+            self._start_update_download(result)
+
+    def _start_update_download(self, result):
+        """后台下载更新包(下载中再次触发直接忽略)"""
+        if getattr(self, "_update_download_thread", None) and \
+                self._update_download_thread.isRunning():
+            QMessageBox.information(self, "正在下载", "更新包正在下载, 请等待完成")
+            return
+        self._set_status(f"正在下载更新 {result.info.version}...", self.status_label)
+        self._update_download_thread = UpdateDownloadThread(
+            load_config(), result.info, result.mirror, self)
+        self._update_download_thread.progress.connect(self._on_download_progress)
+        self._update_download_thread.done.connect(self._on_download_done)
+        self._update_download_thread.start()
+
+    def _on_download_progress(self, got, total, speed):
+        if total > 0:
+            self._set_status(f"下载更新中 {got * 100 // total}%({speed})",
+                             self.status_label)
+        else:
+            self._set_status(f"下载更新中 {speed}", self.status_label)
+
+    def _on_download_done(self, bat_path, err):
+        if err:
+            self._set_status(f"更新失败: {err}", self.status_label)
+            QMessageBox.critical(self, "更新失败", err)
+            return
+        self._update_bat_path = bat_path
+        reply = QMessageBox.information(
+            self, "下载完成",
+            "新版本已下载并校验通过。\n"
+            "点击「确定」将重启应用以完成更新(界面会关闭, 请稍候)。",
+            QMessageBox.Ok | QMessageBox.Cancel, QMessageBox.Ok)
+        if reply == QMessageBox.Ok:
+            self._apply_update_and_restart()
+
+    def _apply_update_and_restart(self):
+        """启动替换脚本并立刻退出本进程。
+
+        ★ 必须 os._exit 而不是正常退出: _internal/ 里的 Qt/opencv DLL 句柄若不立刻
+          释放, bat 里的 rename/robocopy 会因文件被锁而失败(参考项目实战踩过)。
+        ★ 下载期间用户可能又点了「运行」—— 带着正在执行的用例退出会毁掉这一轮,
+          必须拦下(下次定时器到点再提示)。
+        """
+        if self.worker:
+            QMessageBox.warning(self, "无法更新",
+                                "用例正在执行, 不能现在重启更新。\n"
+                                "请等本轮跑完后再点菜单里的「检查更新」。")
+            return
+        bat = getattr(self, "_update_bat_path", "")
+        if not bat or not os.path.exists(bat):
+            QMessageBox.warning(self, "更新失败", "替换脚本不存在")
+            return
+        import subprocess
+        subprocess.Popen(
+            ["cmd", "/c", bat],
+            creationflags=subprocess.CREATE_NEW_CONSOLE | subprocess.CREATE_NEW_PROCESS_GROUP,
+            cwd=os.path.dirname(bat),
+        )
+        os._exit(0)
 
     def _set_status(self, msg, label=None):
         """同时更新界面提示并写运行日志。

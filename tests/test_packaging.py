@@ -280,38 +280,103 @@ def test_check_skipped_while_running_cases(win, monkeypatch):
     assert started == [1], "空闲时应该发起检查"
 
 
-def test_only_new_version_pops_dialog(win, monkeypatch):
-    """只有「有新版本」才弹窗; 已是最新/检查失败只写日志, 不打扰用户"""
+def test_only_new_version_pops_dialog(monkeypatch):
+    """只有「有新版本」才弹窗; 已是最新/检查失败只写日志, 不打扰用户。
+
+    ★ 用哑宿主 + 假 QMessageBox: _on_update_checked 现在弹的是**模态**对话框
+      (QMessageBox(self).exec) —— 真 exec 在 offscreen 下永远等不到输入, 一旦
+      没拦住就会把整个测试进程挂死(实测: 套件在此卡 200s+)。
+    """
     import gui.main_window as mw
     from core import updater
-    pops = []
-    monkeypatch.setattr(mw.QMessageBox, "information",
-                        lambda *a, **k: pops.append(a))
+    host = _update_host()
+    boxes = []
 
-    win._on_update_checked(updater.CheckResult("up_to_date", "已是最新(1.0)"))
-    win._on_update_checked(updater.CheckResult("error", "网络不通"))
-    win._on_update_checked(updater.CheckResult("skipped", "未配置仓库"))
-    assert pops == [], f"这些状态不该弹窗: {pops}"
+    class _FakeBox:
+        # _on_update_checked 里会查 QMessageBox.AcceptRole/RejectRole —— 替换了
+        # 整个类, 这两个常量也得补上
+        AcceptRole = "accept"
+        RejectRole = "reject"
+
+        def __init__(self, *a, **k):
+            boxes.append(self)
+            self.buttons = []
+            self._pressed = None
+
+        def setWindowTitle(self, *a):
+            pass
+
+        def setText(self, text):
+            self.text = text
+
+        def addButton(self, text, role):
+            token = ("btn", text, role)
+            self.buttons.append(token)
+            return token
+
+        def exec(self):
+            # 模拟用户点「稍后再说」(最后一个按钮) -> 不触发下载
+            self._pressed = self.buttons[-1] if self.buttons else None
+
+        def clickedButton(self):
+            return self._pressed
+
+    monkeypatch.setattr(mw, "QMessageBox", _FakeBox)
+
+    _checked = mw.MainWindow._on_update_checked
+    _checked(host, updater.CheckResult("up_to_date", "已是最新(1.0)"))
+    _checked(host, updater.CheckResult("error", "网络不通"))
+    _checked(host, updater.CheckResult("skipped", "未配置仓库"))
+    assert boxes == [], "这些状态不该弹窗"
 
     info = updater.parse_version_info({"version": "2.0", "release_notes": "修了 X",
                                        "release_date": "2026-10-01"})
-    win._on_update_checked(updater.CheckResult("has_update", "发现新版本 2.0",
-                                               info, None, False))
-    assert len(pops) == 1, "有新版本应该弹窗"
-    body = pops[0][2]
-    assert "2.0" in body and "修了 X" in body
+    _checked(host, updater.CheckResult("has_update", "发现新版本 2.0",
+                                       info, None, False))
+    assert len(boxes) == 1, "有新版本应该弹窗"
+    assert "2.0" in boxes[0].text and "修了 X" in boxes[0].text
 
 
-def test_force_update_mentions_mandatory(win, monkeypatch):
+def test_force_update_mentions_mandatory(monkeypatch):
     """低于 min_version 时弹窗要说明"需强制更新", 别让用户以为是可选"""
     import gui.main_window as mw
     from core import updater
-    pops = []
-    monkeypatch.setattr(mw.QMessageBox, "information",
-                        lambda *a, **k: pops.append(a))
+    host = _update_host()
+    made = []
+
+    class _FakeBox:
+        # _on_update_checked 里会查 QMessageBox.AcceptRole/RejectRole —— 替换了
+        # 整个类, 这两个常量也得补上
+        AcceptRole = "accept"
+        RejectRole = "reject"
+
+        def __init__(self, *a, **k):
+            made.append(self)
+            self.text = ""
+            self.buttons = []
+
+        def setWindowTitle(self, *a):
+            pass
+
+        def setText(self, text):
+            self.text = text
+
+        def addButton(self, text, role):
+            self.buttons.append((text, role))
+            return ("btn", text, role)
+
+        def exec(self):
+            pass
+
+        def clickedButton(self):
+            return None
+
+    monkeypatch.setattr(mw, "QMessageBox", _FakeBox)
     info = updater.parse_version_info({"version": "3.0", "min_version": "2.0"})
-    win._on_update_checked(updater.CheckResult("has_update", "x", info, None, True))
-    assert "强制" in pops[0][2], pops[0][2]
+    mw.MainWindow._on_update_checked(
+        host, updater.CheckResult("has_update", "x", info, None, True))
+    assert len(made) == 1
+    assert "强制" in made[0].text, made[0].text
 
 
 def test_check_update_never_raises_in_gui(win, monkeypatch):
@@ -384,4 +449,204 @@ def test_bootstrap_never_raises(tmp_path, monkeypatch):
 
     monkeypatch.setattr(bootstrap.shutil, "copy2", boom)
     bootstrap.ensure_data_dirs(app_dir=str(src), data_dir=str(dst))   # 不得抛
+
+
+def test_cleanup_update_leftovers(tmp_path):
+    """★ 上次更新被杀软打断留下的 _internal_old 必须在启动时清掉 ——
+    否则每次更新都先带上一份 400M 的旧程序目录。"""
+    from core import bootstrap
+    (tmp_path / "_internal_old").mkdir()
+    (tmp_path / "_internal_old" / "x.dll").write_bytes(b"old")
+    (tmp_path / "_update_extracted").mkdir()
+    (tmp_path / "_update_download.zip").write_bytes(b"partial")
+    cleaned = bootstrap.cleanup_update_leftovers(app_dir=str(tmp_path))
+    assert set(cleaned) == {"_internal_old", "_update_extracted", "_update_download.zip"}
+    assert not (tmp_path / "_internal_old").exists()
+    # 没有残留时是安静的无操作
+    assert bootstrap.cleanup_update_leftovers(app_dir=str(tmp_path)) == []
+
+
+# ── 下载与自替换的 GUI 流程 ──
+
+def _update_host():
+    """更新逻辑测试的哑宿主: 只提供 _apply_update_and_restart / _on_update_checked
+    用到的属性, 不构造 MainWindow —— 它的装配已由其他测试覆盖, 而且在部分 monkeypatch
+    组合下构造会卡死(实测), 没必要为验证更新逻辑再冒险。"""
+    class _Host:
+        worker = None
+        _update_bat_path = ""
+
+        def _start_update_download(self, r):
+            pass
+    return _Host()
+
+
+def test_download_done_flow(monkeypatch, tmp_path):
+    """确认更新 -> 启动替换脚本并 os._exit(0); bat 缺失/用例执行中则报错不退出"""
+    import gui.main_window as mw
+    import subprocess
+    host = _update_host()
+    called = {}
+    monkeypatch.setattr(mw.QMessageBox, "information",
+                        lambda *a, **k: mw.QMessageBox.Ok)
+    monkeypatch.setattr(mw.QMessageBox, "warning", lambda *a, **k: None)
+
+    def fake_popen(*a, **k):
+        called["popen"] = (a, k)
+
+    monkeypatch.setattr(subprocess, "Popen", fake_popen)
+
+    # os._exit 是真实退进程 —— 用哨兵异常拦截, 验证确实以 0 退出
+    class _Exit(Exception):
+        pass
+
+    def fake_exit(code):
+        called["exit"] = code
+        raise _Exit()
+
+    monkeypatch.setattr(mw.os, "_exit", fake_exit)
+
+    bat = tmp_path / "_update.bat"
+    bat.write_text("@echo off\r\n", encoding="utf-8")
+    host._update_bat_path = str(bat)
+    with pytest.raises(_Exit):
+        mw.MainWindow._apply_update_and_restart(host)
+    assert called.get("exit") == 0, \
+        "必须以 os._exit(0) 退出 —— 否则 DLL 句柄不释放, 替换会失败"
+    assert called.get("popen"), "没有启动替换脚本"
+    assert called["popen"][1].get("creationflags") is not None, \
+        "更新窗口必须独立可见(CREATE_NEW_CONSOLE), 藏起来用户会以为没反应"
+    assert called["popen"][1]["cwd"] == str(tmp_path), "bat 必须在自己的目录里执行"
+
+    # bat 不存在时: 报错而不是退进程
+    host._update_bat_path = str(tmp_path / "不存在.bat")
+
+    def no_exit(_code):
+        raise AssertionError("bat 不存在却退出了进程")
+
+    monkeypatch.setattr(mw.os, "_exit", no_exit)
+    mw.MainWindow._apply_update_and_restart(host)      # 不得退出
+
+    # 用例执行中: 拒绝重启更新(带着正在跑的用例 os._exit 会毁掉这一轮)
+    def never(_code):
+        raise AssertionError("执行用例时仍退出了进程")
+
+    monkeypatch.setattr(mw.os, "_exit", never)
+    monkeypatch.setattr(mw.QMessageBox, "warning",
+                        lambda *a, **k: called.setdefault("blocked", True))
+    host.worker = object()
+    host._update_bat_path = str(bat)       # bat 存在, 但必须被 worker 守卫拦住
+    mw.MainWindow._apply_update_and_restart(host)
+    assert called.get("blocked"), "执行用例时应弹窗拒绝而不是退出"
+    host.worker = None
+
+
+def test_download_worker_emits_bat(monkeypatch, tmp_path):
+    """UpdateDownloadThread: mock 掉下载/解包/bat 生成, 验证成功路径发 (bat, "")"""
+    import gui.main_window as mw
+    from core import updater
+
+    monkeypatch.setattr(updater, "apply_download_prefix",
+                        lambda u, p: u or "https://e/pkg.zip")
+    monkeypatch.setattr(updater, "download", lambda url, dest, progress_cb=None: None)
+    monkeypatch.setattr(updater, "verify_sha256", lambda f, s: True)
+    monkeypatch.setattr(updater, "extract_package", lambda z, d: "AutoTest.exe")
+    monkeypatch.setattr(updater, "generate_update_bat",
+                        lambda app, ext, pid, exe: str(tmp_path / "_update.bat"))
+    # run() 里是 from core.driver import DATA_DIR(调用时才取), 钉住它
+    monkeypatch.setattr("core.driver.DATA_DIR", str(tmp_path), raising=False)
+
+    th = mw.UpdateDownloadThread(
+        {"update": {}},
+        updater.VersionInfo(version="2.0", download_url="https://e/pkg.zip"),
+        None)
+    results = []
+    th.done.connect(lambda bat, err: results.append((bat, err)))
+    th.run()      # 直接调 run(QThread.start 会真开线程, 时序不好控制)
+    assert results == [(str(tmp_path / "_update.bat"), "")], results
+
+
+def test_download_worker_reports_sha_mismatch(monkeypatch, tmp_path):
+    """校验失败必须报错并删掉坏包, 不能让坏包流入替换流程"""
+    import gui.main_window as mw
+    from core import updater
+
+    removed = []
+    monkeypatch.setattr(updater, "apply_download_prefix",
+                        lambda u, p: u or "https://e/pkg.zip")
+
+    def fake_download(url, dest, progress_cb=None):
+        open(dest, "wb").close()
+
+    monkeypatch.setattr(updater, "download", fake_download)
+    monkeypatch.setattr(updater, "verify_sha256", lambda f, s: False)
+
+    real_remove = os.remove
+
+    def spy_remove(p):
+        removed.append(p)
+        real_remove(p)
+
+    monkeypatch.setattr(mw.os, "remove", spy_remove)
+    monkeypatch.setattr("core.driver.DATA_DIR", str(tmp_path), raising=False)
+
+    th = mw.UpdateDownloadThread(
+        {"update": {}},
+        updater.VersionInfo(version="2.0", download_url="https://e/pkg.zip"),
+        None)
+    results = []
+    th.done.connect(lambda bat, err: results.append((bat, err)))
+    th.run()
+    assert results and results[0][0] == "" and "校验失败" in results[0][1]
+    assert removed, "坏包没被删除"
+
+
+def test_force_update_single_choice(monkeypatch):
+    """强制更新只给「立即更新」一个按钮 —— 不能有"点了却什么都不发生"的退出项"""
+    import gui.main_window as mw
+    from core import updater
+    host = _update_host()
+    boxes = []
+
+    class _FakeBox:
+        # _on_update_checked 里会查 QMessageBox.AcceptRole/RejectRole —— 替换了
+        # 整个类, 这两个常量也得补上
+        AcceptRole = "accept"
+        RejectRole = "reject"
+
+        def __init__(self, *a, **k):
+            boxes.append(self)
+            self.buttons = []
+            self._pressed = None
+
+        def setWindowTitle(self, *a):
+            pass
+
+        def setText(self, *a):
+            pass
+
+        def addButton(self, text, role):
+            token = ("btn", text, role)
+            self.buttons.append(token)
+            return token
+
+        def exec(self):
+            self._pressed = self.buttons[0] if self.buttons else None
+
+        def clickedButton(self):
+            return self._pressed
+
+    monkeypatch.setattr(mw, "QMessageBox", _FakeBox)
+
+    info = updater.parse_version_info({"version": "3.0", "min_version": "2.0"})
+    mw.MainWindow._on_update_checked(host,
+                                     updater.CheckResult("has_update", "x", info, None, True))
+    assert [t for _tok, t, _r in boxes[0].buttons] == ["立即更新"], boxes[0].buttons
+
+    # 非强制: 有"稍后再说"
+    info2 = updater.parse_version_info({"version": "2.0"})
+    mw.MainWindow._on_update_checked(host,
+                                     updater.CheckResult("has_update", "x", info2, None, False))
+    texts = [_tok2[1] for _tok2 in boxes[1].buttons]
+    assert texts == ["立即更新", "稍后再说"], texts
 

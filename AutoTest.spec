@@ -57,6 +57,7 @@ datas = [
     ("gui/assets", "gui/assets"),
     ("config/locators.yaml", "config"),        # 定位器配置(可被更新覆盖)
     ("config/config.example.yaml", "config"),  # 配置模板: 首次运行据此生成 config.yaml
+    ("VERSION", "."),                          # 落在 _internal/VERSION, 更新 bat 用它验证
     ("CHANGELOG.md", "."),
     ("README.md", "."),
 ]

@@ -51,11 +51,12 @@ def main():
 
     from PySide6.QtWidgets import QApplication
 
-    from core.bootstrap import ensure_data_dirs
+    from core.bootstrap import cleanup_update_leftovers, ensure_data_dirs
     from core.logger import setup_logger
     from gui.main_window import MainWindow
 
     ensure_data_dirs()      # 首次运行: 把 config/locators.yaml 等程序资源铺到数据目录
+    cleanup_update_leftovers(os.path.dirname(os.path.abspath(sys.argv[0])))
     setup_logger()
     _run_backup_async()
     app = QApplication(sys.argv)
