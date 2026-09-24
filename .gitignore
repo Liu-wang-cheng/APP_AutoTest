@@ -11,3 +11,8 @@ Test_img/screenshots/
 Test_cases/*/screenshots/
 # 调试图(执行时生成: 分区标注/点击标记/失败截图)
 Test_img/debug/
+
+# 打包产物(PyInstaller)
+build/
+dist/
+*.spec.bak

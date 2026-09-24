@@ -1,0 +1,86 @@
+# -*- coding: utf-8 -*-
+"""首次运行的初始化: 把随包的程序资源铺到用户数据目录。
+
+★ 为什么需要它(打包后才会暴露的问题)
+  打包时 `config/locators.yaml` 与 `config/config.example.yaml` 作为**程序资源**进了包里
+  (在 `_internal/config/` 下), 而程序运行期读的是 `DATA_DIR/config/...`(exe 旁边的用户
+  数据目录)。不铺一次就找不到 —— 定位器配置缺失会让 click/assert 的 `${段.键}` 引用
+  全部失效, 这种失败还很安静(报"找不到元素", 不像"配置没读到")。
+
+★ 为什么 config.yaml 只"生成"不"复制"
+  它含设备序列号等, 是**用户数据**、不进包、也绝不能被更新覆盖。首次运行从
+  config.example.yaml 生成一份, 用户照着填 —— 比让程序读不到配置时报一堆错友好。
+
+★ 幂等
+  已存在的一律不动(用户改过的配置不能被覆盖)。开发环境下源与目标同目录, 直接跳过。
+"""
+import os
+import shutil
+import sys
+
+from core.logger import get_logger
+
+log = get_logger()
+
+#: (包内相对路径, 目标相对 DATA_DIR 的路径) —— 首次运行需要铺出去的程序资源
+_SEED_FILES = (
+    ("config/locators.yaml", "config/locators.yaml"),
+    ("config/config.example.yaml", "config/config.example.yaml"),
+)
+#: 用户配置的模板(只生成, 之后由用户在 GUI 里改)
+_CONFIG_TEMPLATE = "config/config.example.yaml"
+_CONFIG_TARGET = "config/config.yaml"
+
+
+def bundled_root():
+    """随包资源所在目录: 打包后是 `<_internal>`, 开发环境是项目根。"""
+    if getattr(sys, "frozen", False):
+        return getattr(sys, "_MEIPASS", "") or os.path.dirname(
+            os.path.abspath(sys.executable))
+    return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def ensure_data_dirs(app_dir=None, data_dir=None):
+    """铺出首次运行所需的程序资源; 返回铺出去的文件列表(便于日志/测试)。
+
+    任何失败都只记日志、不抛 —— 初始化不该拦住程序启动。
+    """
+    from core.driver import DATA_DIR
+    src_root = os.path.abspath(app_dir or bundled_root())
+    dst_root = os.path.abspath(data_dir or DATA_DIR)
+    seeded = []
+
+    # 开发环境: 源就是目标所在目录, 没什么可铺的
+    if os.path.normcase(src_root) == os.path.normcase(dst_root):
+        return seeded
+
+    for rel_src, rel_dst in _SEED_FILES:
+        src = os.path.join(src_root, rel_src)
+        dst = os.path.join(dst_root, rel_dst)
+        if not os.path.isfile(src) or os.path.exists(dst):
+            continue                     # 源没有 / 目标已存在(用户可能改过) -> 不动
+        try:
+            os.makedirs(os.path.dirname(dst), exist_ok=True)
+            shutil.copy2(src, dst)
+            seeded.append(rel_dst)
+        except OSError as e:
+            log.warning(f"[初始化] 复制 {rel_dst} 失败(忽略): {e}")
+
+    # 没有用户配置时, 从模板生成一份, 免得程序一上来就读不到配置
+    cfg_dst = os.path.join(dst_root, _CONFIG_TARGET)
+    if not os.path.exists(cfg_dst):
+        tpl = os.path.join(dst_root, _CONFIG_TEMPLATE)
+        if not os.path.isfile(tpl):
+            tpl = os.path.join(src_root, _CONFIG_TEMPLATE)
+        if os.path.isfile(tpl):
+            try:
+                os.makedirs(os.path.dirname(cfg_dst), exist_ok=True)
+                shutil.copy2(tpl, cfg_dst)
+                seeded.append(_CONFIG_TARGET)
+                log.info(f"[初始化] 已从模板生成 {_CONFIG_TARGET}(请在界面里填好设备与 APP)")
+            except OSError as e:
+                log.warning(f"[初始化] 生成 {_CONFIG_TARGET} 失败: {e}")
+
+    if seeded:
+        log.info(f"[初始化] 首次运行, 已铺出: {', '.join(seeded)}")
+    return seeded

@@ -324,3 +324,64 @@ def test_check_update_never_raises_in_gui(win, monkeypatch):
     monkeypatch.setattr(mw, "UpdateCheckThread", boom)
     win._check_update_now()          # 不得抛
 
+
+# ── 首次运行的资源铺出(打包后才会暴露的问题) ──
+
+def _seed_src(root):
+    """造一份"包内资源"(模拟 _internal/ 里的样子)"""
+    os.makedirs(root / "config", exist_ok=True)
+    (root / "config" / "locators.yaml").write_text(
+        "预约清扫:\n  添加按钮: 添加预约.png\n", encoding="utf-8")
+    (root / "config" / "config.example.yaml").write_text(
+        "app:\n  name: 示例\n", encoding="utf-8")
+
+
+def test_bootstrap_seeds_program_resources(tmp_path):
+    """★ config/locators.yaml 在包里(程序资源), 程序却读 exe 旁的数据目录 ——
+    不铺一次就找不到, 而定位器缺失会让 ${段.键} 引用**安静地**全部失效。"""
+    from core import bootstrap
+    src, dst = tmp_path / "pkg", tmp_path / "data"
+    _seed_src(src)
+    dst.mkdir()
+
+    seeded = bootstrap.ensure_data_dirs(app_dir=str(src), data_dir=str(dst))
+    assert "config/locators.yaml" in seeded
+    assert (dst / "config" / "locators.yaml").is_file()
+    # 没有用户配置时, 从模板生成一份, 免得程序一上来就读不到配置
+    assert (dst / "config" / "config.yaml").is_file()
+
+
+def test_bootstrap_never_overwrites_user_data(tmp_path):
+    """★ 已存在的文件一律不动 —— 用户改过的定位器/配置不能被初始化覆盖"""
+    from core import bootstrap
+    src, dst = tmp_path / "pkg", tmp_path / "data"
+    _seed_src(src)
+    os.makedirs(dst / "config", exist_ok=True)
+    (dst / "config" / "locators.yaml").write_text("用户改过的\n", encoding="utf-8")
+    (dst / "config" / "config.yaml").write_text("target_device: 我的扫地机\n",
+                                                encoding="utf-8")
+    bootstrap.ensure_data_dirs(app_dir=str(src), data_dir=str(dst))
+    assert (dst / "config" / "locators.yaml").read_text(encoding="utf-8") == "用户改过的\n"
+    assert "我的扫地机" in (dst / "config" / "config.yaml").read_text(encoding="utf-8")
+
+
+def test_bootstrap_noop_in_dev_env(tmp_path):
+    """开发环境源与目标同目录 -> 不做任何事(不能把项目里的文件复制一遍)"""
+    from core import bootstrap
+    _seed_src(tmp_path)
+    assert bootstrap.ensure_data_dirs(app_dir=str(tmp_path), data_dir=str(tmp_path)) == []
+
+
+def test_bootstrap_never_raises(tmp_path, monkeypatch):
+    """初始化失败不能拦住启动"""
+    from core import bootstrap
+    src, dst = tmp_path / "pkg", tmp_path / "data"
+    _seed_src(src)
+    dst.mkdir()
+
+    def boom(*_a, **_k):
+        raise OSError("模拟: 目录只读")
+
+    monkeypatch.setattr(bootstrap.shutil, "copy2", boom)
+    bootstrap.ensure_data_dirs(app_dir=str(src), data_dir=str(dst))   # 不得抛
+
