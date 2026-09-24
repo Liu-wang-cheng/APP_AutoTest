@@ -2177,8 +2177,15 @@ class MainWindow(QMainWindow):
         self.case_list.setFixedWidth(200)    # 宽度与设备下拉框视觉对齐;高度随步骤详情区填满右列
         self._case_states = {}               # path → 'running'/'passed'/'failed'(状态灯)
         self._collapsed_groups = set()       # 折叠的组目录名
+        # ★ 勾选态的**模型层**表示(路径集合)。不能只依赖 QListWidget 的 checkState:
+        #   折叠组的用例行根本不生成, 每次重建列表都会把它们的勾选丢掉(用户实测:
+        #   勾好用例 → 收起该组整理视图 → 点运行, 那些用例不会跑, 而折叠态下连
+        #   "没勾上"都看不见)。勾选是"将要执行什么"的唯一依据, 必须独立于视图。
+        self._checked = set()
+        self._all_case_paths = []            # 最近一次填充的用例顺序(含折叠组)
         self._fill_case_list()
         self.case_list.itemClicked.connect(self._on_case_item_clicked)
+        self.case_list.itemChanged.connect(self._on_case_check_changed)
         self.case_list.moved.connect(self.on_case_rows_dropped)
         v.addWidget(self.case_list)
         return panel
@@ -2263,7 +2270,10 @@ class MainWindow(QMainWindow):
                         if p not in paths:
                             paths.append(p)
             groups = {p: os.path.basename(os.path.dirname(p)) for p in paths}
-        checked = set(self._checked_case_paths())
+        # ★ 勾选态从**模型层**取, 不是从可见行采集 —— 折叠组的用例行不存在,
+        #   从行采集会把它们的勾选丢掉(见 __init__ 里 self._checked 的说明)。
+        checked = set(self._checked)
+        self._all_case_paths = list(paths)   # 供 _checked_case_paths 使用(含折叠组)
         cur_item = self.case_list.currentItem()
         cur = cur_item.data(Qt.UserRole) if cur_item else None
         self.case_list.clear()
@@ -2291,8 +2301,10 @@ class MainWindow(QMainWindow):
             #   不要用 setItemWidget 做行内控件 —— 会盖 indicator/拦事件/断拖拽
             item = QListWidgetItem(name)
             item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
-            item.setCheckState(Qt.Checked if path in checked else Qt.Unchecked)
+            # ★ 先设路径再设勾选: setCheckState 会触发 itemChanged, 槽要靠 UserRole
+            #   认出这是哪条用例(置反了槽就只能忽略)
             item.setData(Qt.UserRole, path)
+            item.setCheckState(Qt.Checked if path in checked else Qt.Unchecked)
             item.setToolTip(f"{path} | 勾选参与批量执行;点右侧箭头或拖拽调整执行顺序")
             item.setSizeHint(QSize(0, 26))   # 略高于文字行,箭头绘制/命中更从容
             state = self._case_states.get(path, "idle")
@@ -2404,6 +2416,9 @@ class MainWindow(QMainWindow):
 
     def _move_case(self, path, delta):
         """用例行上移/下移一行,并把新顺序 1..N 写回各用例 YAML 的 case_order"""
+        if self.worker:
+            return      # 运行中禁止排序: 它会把 case_order 重写进每个用例 YAML,
+                        # 而 worker 是逐条 open() 读盘的 —— 时间窗内有概率读到半截文件
         paths = [self.case_list.item(i).data(Qt.UserRole)
                  for i in range(self.case_list.count())
                  if self.case_list.item(i).data(Qt.UserRole)]
@@ -2420,6 +2435,9 @@ class MainWindow(QMainWindow):
 
     def on_case_rows_dropped(self):
         """拖拽排序松手后:行控件已被 InternalMove 甩掉,重建并写回顺序"""
+        if self.worker:
+            self._fill_case_list()   # 运行中不允许改顺序: 把列表重建回原样
+            return
         paths = [self.case_list.item(i).data(Qt.UserRole)
                  for i in range(self.case_list.count())
                  if self.case_list.item(i).data(Qt.UserRole)]
@@ -2489,17 +2507,6 @@ class MainWindow(QMainWindow):
         self._refresh_case_selector()
         self._fill_case_list()   # 打开的用例必须在左侧列表可见
 
-    def on_precondition_failed(self, detail):
-        """前置检查未通过(本轮已阻断):弹窗提醒 + 用例灯重置灰(未真正执行)"""
-        if self.worker:
-            for fp in self.worker.case_files:
-                self.set_case_state(fp, "idle")
-        QMessageBox.warning(self, "前置检查未通过",
-                            f"已阻断本轮执行,后续用例不再运行:\n{detail}\n\n"
-                            "请处理设备状态(充电/网络/APP)后重新运行。")
-
-
-
     def _target_group_for_bulk_check(self):
         """批量勾选(全选)的作用组: 优先"当前所选", 判不出来返回 None(=全部)。
 
@@ -2524,28 +2531,52 @@ class MainWindow(QMainWindow):
         scope_group: 只作用于该 APP 组(None=全部)。全选按钮传当前所选组 ——
         用户要求"优先服务于所选的 APP 组, 不要全部生效"。
         """
+        def _group_of(p):
+            return os.path.basename(os.path.dirname(os.path.abspath(p)))
+
+        # ★ 以模型层为准更新 —— 必须覆盖**折叠组**的用例(它们的行根本不存在,
+        #   只存在 self._checked 里)。原先只遍历可见行, 于是折叠的组既全选不上、
+        #   也清空不掉。
         hit = 0
+        for path in self._all_case_paths or []:
+            if scope_group and _group_of(path) != scope_group:
+                continue
+            if state == Qt.Checked:
+                self._checked.add(path)
+            else:
+                self._checked.discard(path)
+            hit += 1
+        # 反射到可见行(折叠组的行不存在, 靠 self._checked 在下次填充列表时恢复)
         for i in range(self.case_list.count()):
             item = self.case_list.item(i)
-            path = item.data(Qt.UserRole)
-            if not path:                      # 组头行(UserRole=None)不参与勾选
-                continue
-            if scope_group and os.path.basename(
-                    os.path.dirname(os.path.abspath(path))) != scope_group:
-                continue
-            item.setCheckState(state)
-            hit += 1
+            p = item.data(Qt.UserRole)
+            if p:
+                item.setCheckState(Qt.Checked if p in self._checked else Qt.Unchecked)
         return hit
 
     def _checked_case_paths(self):
-        """勾选的用例文件路径列表(勾选才参与批量执行;按列表顺序=执行顺序)"""
-        out = []
-        for i in range(self.case_list.count()):
-            item = self.case_list.item(i)
-            path = item.data(Qt.UserRole)
-            if path and item.checkState() == Qt.Checked:
+        """勾选的用例文件路径列表(勾选才参与批量执行;按列表顺序=执行顺序)
+
+        ★ 以模型层 `self._checked` 为准, 并**包含折叠组**里已勾选的用例 ——
+          折叠只是视图整理, 不该改变"将要执行什么"。原先遍历可见行, 折叠组的勾选
+          既看不见也不执行(用户实测: 收起组后点运行, 那些用例被静默跳过)。
+        """
+        out, seen = [], set()
+        for path in self._all_case_paths:          # 顺序 = 列表顺序(含折叠组在组内位置)
+            if path in self._checked and path not in seen:
                 out.append(path)
+                seen.add(path)
         return out
+
+    def _on_case_check_changed(self, item):
+        """用户勾选/取消 → 同步到模型层(唯一真源)"""
+        path = item.data(Qt.UserRole)
+        if not path:                    # 组头行/占位行
+            return
+        if item.checkState() == Qt.Checked:
+            self._checked.add(path)
+        else:
+            self._checked.discard(path)
 
     def on_select_all_cases(self):
         """「全选」: **优先只勾选当前所选 APP 组**(用户要求), 并在状态栏说明范围"""
@@ -2722,12 +2753,19 @@ class MainWindow(QMainWindow):
 
     def _toggle_precondition(self, idx, on):
         """勾选=启用; 立即落盘(按组存), 免得切组/重启后勾选状态丢失"""
+        if self.worker:
+            return      # 运行中不让改前置: 本轮用的是启动时导出的那份, 改了只会让
+                        # 界面显示与实际执行对不上
         if 0 <= idx < len(self.preconditions):
             self.preconditions[idx]["enabled"] = bool(on)
             self._save_preconditions()
 
     def on_edit_preconditions(self):
         """打开设置对话框: 增删改/排序前置条件, 保存到当前 APP 组"""
+        if self.worker:
+            return      # 运行中不让改前置(本轮已用启动时导出的那份)。另外对话框里的
+                        # 步骤编辑器会改 vision 的模块级模板上下文, 运行中打开会把
+                        # 正在跑的用例的模板解析指向别的 APP 组。
         dlg = PreconditionsDialog(self.preconditions, self,
                                   app_group=self._current_app_group())
         if dlg.exec() != QDialog.Accepted:
@@ -3048,13 +3086,32 @@ class MainWindow(QMainWindow):
         # ★ 前置条件也跟随 APP 组(用户要求: 切到某组用例就用那组的前置条件)
         self._refresh_preconditions_for_case()
         c = self.current_case
-        self.module_edit.setText(str(self.data.get("module") or ""))
-        self.case_name_edit.setText(str(c.get("name") or ""))
-        pri = str(c.get("priority") or "P1")
-        self.priority_combo.setCurrentIndex(max(0, self.priority_combo.findText(pri)))
-        self.case_wait_edit.setText("" if c.get("wait") is None else str(c["wait"]))
+        # ★ 装填期间必须屏蔽 _sync_header —— 它把控件的**当前值**回写进 self.data,
+        #   而此刻控件里还是上一个用例的残留文本。四个控件里 module/用例名/间隔用
+        #   setText(不发 editingFinished), 但 priority_combo.setCurrentIndex 在优先级
+        #   不同时会**立刻发 currentTextChanged** → _sync_header 读到上一个用例的"间隔"
+        #   文本, 把刚加载用例的 wait 覆盖掉。
+        #   实测: 用例甲 P1/wait=5 → 切到用例乙 P0/wait=3, 乙的 wait 变成 5, 而且间隔框
+        #   随后也显示 5(用户完全看不出异常); 300ms 后 _autosave_timer 直接写进磁盘。
+        self._loading = True
+        try:
+            self.module_edit.setText(str(self.data.get("module") or ""))
+            self.case_name_edit.setText(str(c.get("name") or ""))
+            pri = str(c.get("priority") or "P1")
+            self.priority_combo.setCurrentIndex(max(0, self.priority_combo.findText(pri)))
+            self.case_wait_edit.setText("" if c.get("wait") is None else str(c["wait"]))
+        finally:
+            self._loading = False
+        # 这两步原本是 _sync_header 的副作用, 屏蔽之后要显式补上, 否则切用例后
+        # YAML 视图不刷新(回归)
+        self._refresh_case_item_text()
+        self._refresh_yaml_text()
 
     def _sync_header(self):
+        if getattr(self, "_loading", False):
+            # 正在把数据装填进控件, 此时控件里还是上一个用例的残留文本 ——
+            # 回写会把刚加载的数据覆盖掉(见 _load_case_into_ui 的说明)
+            return
         self.data["module"] = self.module_edit.text().strip() or "未命名"
         c = self.current_case
         c["name"] = self.case_name_edit.text().strip() or "未命名用例"

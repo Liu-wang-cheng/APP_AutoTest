@@ -13,7 +13,6 @@ import time
 from core import registry as reg
 from core.driver import split_texts      # 多值文本拆分: 半角/全角逗号、顿号、分号、换行
 from core.logger import get_logger
-from core.session import warm_webview    # WebView 文本预热
 
 log = get_logger()
 
@@ -247,6 +246,12 @@ def do_if_impl(runner, step, negate):
         passed = not passed
 
     if passed:
+        # ★ 必须清掉上一次尝试可能留下的子结果 —— if 步骤带 retry 时, 第 1 次走 else
+        #   失败会往 _pending_sub_results 里塞失败子行; 重试成功走这里直接 return,
+        #   残留的子行会被 _execute 当成"本次结果"追加进结果表 → 幽灵 FAIL 行。
+        #   后果不只是显示: report.add_result(module, False, ...) 让该用例 failed>=1,
+        #   Excel 汇总于是把这条**整体通过**的用例标成 FAIL。
+        runner._pending_sub_results = None
         return
     else_branch = step.get("else", [])
     runner._pending_sub_results = []

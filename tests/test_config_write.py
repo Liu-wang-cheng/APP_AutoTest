@@ -82,3 +82,73 @@ def test_crlf_preserved(tmp_path):
     raw = p.read_bytes()
     assert b"\r\n" in raw
     assert b"\n" not in raw.replace(b"\r\n", b"")   # 没有残留的裸 LF
+
+
+# ── 值里含 '#' : 与"行内注释"的区分(2026-09-24 审查修复) ──
+
+def test_hash_value_idempotent(tmp_path):
+    """值里含 # 时, 同值回写必须字节不变。
+
+    ★ 回归守护: 取"值"的正则曾用 `[^\n#]*?`, 分不清「引号内的 #」与「行内注释」,
+      于是把 `"Robot #1"` 的尾巴 ` #1"` 当成注释原样保留 —— 每次回写都多累积一份
+      (`"Robot #1" #1" #1"`)。真机场景: 设备名/APP 名带 # 号时, 每保存一次脏一分。
+    """
+    p = tmp_path / "config.yaml"
+    p.write_text("app:\n  name: 旧\n  package: com.a\n", encoding="utf-8", newline="\n")
+    update_config({"app.name": "Sweeper #2"}, path=p)
+    first = p.read_bytes()
+    assert b'name: "Sweeper #2"' in first
+    for _ in range(2):                     # 再写两次同值
+        update_config({"app.name": "Sweeper #2"}, path=p)
+    assert p.read_bytes() == first, (
+        f"同值回写累积了垃圾: {p.read_text(encoding='utf-8')!r}")
+
+
+def test_hash_value_and_real_comment_coexist(tmp_path):
+    """含 # 的值 + 真实行内注释并存: 注释保留, 值不被截断"""
+    import yaml
+    p = tmp_path / "config.yaml"
+    p.write_text("app:\n  name: 旧  # 备注\n", encoding="utf-8", newline="\n")
+    update_config({"app.name": "A #1"}, path=p)
+    out = p.read_text(encoding="utf-8")
+    assert "# 备注" in out, out
+    assert yaml.safe_load(out)["app"]["name"] == "A #1", out
+
+
+def test_hash_value_top_scalar_idempotent(tmp_path):
+    """顶层键(如 target_device)同样要能处理含 # 的值"""
+    import yaml
+    p = _write(tmp_path)
+    update_config({"target_device": "Floor #3"}, path=p)
+    first = p.read_bytes()
+    update_config({"target_device": "Floor #3"}, path=p)
+    assert p.read_bytes() == first, p.read_text(encoding="utf-8")
+    assert yaml.safe_load(p.read_text(encoding="utf-8"))["target_device"] == "Floor #3"
+    assert "# APP内设备名" in p.read_text(encoding="utf-8")   # 真注释仍在
+
+
+# ── 原子写: 失败不得破坏原文件 ──
+
+def test_write_failure_leaves_file_intact(tmp_path, monkeypatch):
+    """写入阶段失败(磁盘满/被占用/中断)时, 原文件必须完好。
+
+    ★ 回归守护: 原实现直接 `open(path, "w")` —— 该模式**立即截断**目标文件,
+      之后才写入; 中途出错就只剩半截甚至 0 字节。用户的 config.yaml 被 gitignore
+      忽略、没有版本保护, 丢了只能手工重建。
+    """
+    import os
+    import pytest
+    p = tmp_path / "config.yaml"
+    original = "app:\n  name: 原值\n"
+    p.write_text(original, encoding="utf-8", newline="\n")
+
+    def boom(src, dst):
+        raise OSError("模拟: 落盘阶段失败")
+
+    monkeypatch.setattr(os, "replace", boom)
+    with pytest.raises(OSError):
+        update_config({"app.name": "新值"}, path=p)
+
+    assert p.read_text(encoding="utf-8") == original, "写入失败后原文件被破坏了"
+    leftovers = [f for f in os.listdir(tmp_path) if f.startswith(".tmp_")]
+    assert not leftovers, f"临时文件未清理: {leftovers}"

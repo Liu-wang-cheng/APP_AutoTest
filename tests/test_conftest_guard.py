@@ -56,3 +56,55 @@ def test_yaml_runner_skipped_without_real_mode():
     # 不应有任何 passed/failed —— 真机用例必须一个都没跑
     assert " passed" not in out, out
     assert " failed" not in out, out
+
+
+def test_每个BASE_DIR绑定都被隔离():
+    """★ 结构性守护: 凡绑定 BASE_DIR 的模块都必须被钉到临时目录。
+
+    事故(2026-09-24 审查发现): 项目里普遍写 `from core.driver import BASE_DIR`,
+    这把名字绑定到**各自模块**; patch `core.driver.BASE_DIR` 对它们完全无效。
+    tests/test_room_zones.py 就是这么以为隔离好了, 实际每跑一次单测都把假的分区
+    标注图写进用户真实的 Test_img/debug/。
+
+    这个测试让"漏隔离"在新增模块时**立刻被测出来**, 而不是等到发现用户数据被写脏。
+    """
+    import ast
+    import importlib
+    sys.path.insert(0, str(ROOT))
+    from tests.conftest import BASE_DIR_MODULES
+    from core.driver import BASE_DIR as REAL_ROOT
+
+    # ① 静态扫描: 有没有模块绑定了 BASE_DIR 却不在隔离清单里
+    found = set()
+    for sub in ("core", "gui", "vlm"):
+        base = ROOT / sub
+        if not base.is_dir():
+            continue
+        for p in base.rglob("*.py"):
+            tree = ast.parse(p.read_text(encoding="utf-8"))
+            for node in ast.walk(tree):
+                if (isinstance(node, ast.ImportFrom)
+                        and node.module == "core.driver"
+                        and any(a.name == "BASE_DIR" for a in node.names)):
+                    found.add(".".join(p.relative_to(ROOT).with_suffix("").parts))
+    missing = sorted(found - set(BASE_DIR_MODULES))
+    assert not missing, (
+        f"这些模块绑定了 BASE_DIR 却没进 tests/conftest.py 的 BASE_DIR_MODULES, "
+        f"跑测试会往真实仓库写产物: {missing}")
+
+    # ② 运行时: 清单里的模块确实被钉到临时目录(而不是仓库根)
+    for name in BASE_DIR_MODULES:
+        try:
+            mod = importlib.import_module(name)
+        except ImportError:
+            continue                    # 可选依赖缺失
+        val = getattr(mod, "BASE_DIR", None)
+        if val is not None:
+            assert not str(val).startswith(str(REAL_ROOT)), (
+                f"{name}.BASE_DIR 仍指向真实仓库({val}), 隔离夹具没生效")
+
+    # ③ vision.TEMPLATE_DIR 是模块级常量, patch BASE_DIR 对它无效 —— 必须单独钉
+    import core.vision as vision
+    if hasattr(vision, "TEMPLATE_DIR"):
+        assert not str(vision.TEMPLATE_DIR).startswith(str(REAL_ROOT)), (
+            "vision.TEMPLATE_DIR 未被隔离(它是 import 时就拼好的模块级常量)")

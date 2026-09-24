@@ -5,6 +5,7 @@
 默认路径 reports/test_report_YYYYMMDD_HHMMSS.xlsx(时间戳命名防覆盖)。
 """
 import os
+import re
 from datetime import datetime
 
 from openpyxl import Workbook
@@ -115,7 +116,12 @@ class ExcelReport:
         cell.border = self.BORDER
 
     def _create_case_sheet(self, case_name):
-        safe_name = case_name.replace("/", "_").replace("\\", "_")[:31]
+        # ★ openpyxl 的 sheet 名不允许 [ ] : * ? / \ 这几个字符(实测: 传「温度: 设置」
+        #   直接抛 ValueError: Invalid character : found in sheet title)。原实现只替换了
+        #   / 和 \, 于是组名带「:」「[」「?」时 create_sheet 抛错 → 冒到 RunWorker.run
+        #   的兜底 except → **整轮**以"执行异常"中断, 设备侧已跑的部分白跑。
+        #   组名(module)是 GUI 里可自由编辑的文本, 很容易踩到。
+        safe_name = re.sub(r'[\\*?:/\[\]]', "_", str(case_name))[:31] or "用例"
         ws = self.wb.create_sheet(title=safe_name)
         for c, w in zip("ABCD", [28, 8, 28, 20]):
             ws.column_dimensions[c].width = w

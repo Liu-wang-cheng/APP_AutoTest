@@ -505,14 +505,23 @@ def test_if_click_full_width_comma(make_runner):
 
 
 def test_wait_for_full_width_comma(make_runner):
-    """★ wait_for 的候选同样支持全角逗号/顿号"""
+    """★ wait_for 的候选同样支持全角逗号/顿号(命中任一即通过)"""
     from core.actions.basic import do_wait_for
     # 判断现在走 runner._text_present(读层级, 原生优先) —— 桩的 dump 已反映 present
     d = FakeDevice(present=("已就绪",))
-    do_wait_for(make_runner(d), {"wait_for": "加载中，已就绪", "timeout": 2})
-    assert any(q for q in d.queries) or True          # 命中即返回(不抛超时)
+    # 全角逗号: 候选 = 加载中 / 已就绪, 页面上只有"已就绪" -> 应命中(不抛超时)
+    do_wait_for(make_runner(d), {"wait_for": "加载中，已就绪", "timeout": 1})
     d2 = FakeDevice(present=("清洁中",))
-    do_wait_for(make_runner(d2), {"wait_for": "清洁中、回充中", "timeout": 2})
+    # 顿号: 候选 = 清洁中 / 回充中, 页面上只有"清洁中" -> 应命中
+    do_wait_for(make_runner(d2), {"wait_for": "清洁中、回充中", "timeout": 1})
+    # ★ 反向对照: 候选都不在页面上时必须超时报错 —— 用它可以证明上面两次"通过"
+    #   确实来自拆分后的命中, 而不是实现什么都没查就返回。
+    #   (原先这里写的是 `assert any(q for q in d.queries) or True` —— 恒真;
+    #    而 do_wait_for 早已改走层级判断、不再产生 queries, 左半边还是假的;
+    #    d2 那段更是连断言都没有, 等于只验证了"不抛异常"。)
+    d3 = FakeDevice(present=("完全无关的文本",))
+    with pytest.raises(AssertionError, match="超时"):
+        do_wait_for(make_runner(d3), {"wait_for": "清洁中、回充中", "timeout": 1})
 
 
 # ── WebView 文本预热(插件页文本只有完整层级 dump 才进无障碍树) ──
@@ -577,3 +586,56 @@ def test_assert_locator_skips_ocr_when_native_hits(make_runner, monkeypatch):
     monkeypatch.setattr(ocr, "find",
                         lambda dev, texts: pytest.fail("不该调用 OCR"))
     r._assert_locator("正在吸尘", timeout=1)
+
+
+# ── 2026-09-24 审查修复: 每次文本判断只 dump 一次层级 ──
+
+def test_text_checks_dump_once_per_round():
+    """★ is_charging / ensure_map_loaded / ensure_text_check 每轮只 dump 一次。
+
+    回归守护: 这几个函数原先先 `warm_webview(d)` 预热, 再调 `_any_present`(而它
+    内部又会 dump 一次), 实测 2 / 3 / 2 次。`ensure_map_loaded` 是每 2s 一轮的
+    循环, 3 次 dump 等于把设备 I/O 翻三倍 —— 而 dump 在真机上是慢操作(插件页要
+    靠它把文本构建进无障碍树)。统一入口的 `xml=` 参数就是为复用而加的。
+    """
+    from core import session
+    # 6 条文本 => ocr.sparse 为假, 不会触发 OCR 兜底(保持测试快)
+    xml = ('<hierarchy><node text="充电"/><node text="a"/><node text="b"/>'
+           '<node text="c"/><node text="d"/><node text="e"/></hierarchy>')
+    calls = {"n": 0}
+
+    class D:
+        @property
+        def info(self):
+            return {}
+
+        def dump_hierarchy(self):
+            calls["n"] += 1
+            return xml
+
+        def press(self, *_a):
+            pass
+
+        def click(self, *a, **k):
+            pass
+
+        def __call__(self, **kw):
+            class _E:
+                def exists(self, timeout=None):
+                    return False
+            return _E()
+
+    d = D()
+
+    calls["n"] = 0
+    assert session.is_charging(d) is True
+    assert calls["n"] == 1, f"is_charging 应 dump 1 次, 实际 {calls['n']} 次"
+
+    calls["n"] = 0
+    assert session.ensure_text_check(d, wait_text="充电", timeout=3) is True
+    assert calls["n"] == 1, f"ensure_text_check 应 dump 1 次, 实际 {calls['n']} 次"
+
+    calls["n"] = 0
+    assert session.ensure_map_loaded(d, timeout=3, rounds=1,
+                                     ready_text="充电", loading_text="加载中") is True
+    assert calls["n"] == 1, f"ensure_map_loaded 应 dump 1 次, 实际 {calls['n']} 次"

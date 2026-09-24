@@ -153,3 +153,70 @@ def test_resolve_locator_ref(runner):
     runner._locators = {"预约清扫": {"添加按钮": "添加预约.png"}}
     step = runner._resolve_step({"click": "${预约清扫.添加按钮}"})
     assert step["click"] == "添加预约.png"
+
+
+# ── 2026-09-24 审查修复: if + retry 不得留下"幽灵 FAIL 行" ──
+
+def test_if_retry_success_leaves_no_ghost_failure():
+    """★ if 步骤 retry 后成功, 上一次走 else 留下的失败子行不得混进结果表。
+
+    回归守护: `do_if_impl` 只在**失败分支**重置 `_pending_sub_results`; 重试成功时
+    直接 return, 上一次的失败子行仍在 → `_execute` 把它当"本次结果"追加进结果表。
+    后果不只是显示: report.add_result(module, False, ...) 让该用例 failed≥1,
+    Excel 汇总于是把这条**整体通过**的用例标成 FAIL。
+    """
+    from core import registry as reg
+    from core.actions.basic import do_if
+    # ★ 必须显式注册: 本文件的 _clean_registry fixture 会把 ACTIONS 清空, 而
+    #   `import core.actions` 是幂等的(不会重新执行注册) —— 不补这一步, `if` 动作
+    #   根本没注册, _execute 找不到命中键就静默不做任何事, 测试会"假通过"。
+    reg.action("if", priority=30)(do_if)
+    without = '<hierarchy><node text="别的文本"/></hierarchy>'
+    with_ = ('<hierarchy><node text="别的文本"/>'
+             '<node text="目标文本"/></hierarchy>')
+    state = {"went_else": False}
+
+    class Dev:
+        serial = "d"
+
+        @property
+        def info(self):
+            return {}
+
+        def dump_hierarchy(self):
+            # 第一次尝试(含其内部轮询)全程不满足条件 → 走 else; 之后满足 → 重试成功
+            return with_ if state["went_else"] else without
+
+        def screenshot(self, *a, **k):
+            return b""
+
+        def __call__(self, **kw):
+            class _E:
+                def exists(self, timeout=None):
+                    return False
+
+                @property
+                def info(self):
+                    return {"bounds": {"left": 0, "top": 0, "right": 1, "bottom": 1},
+                            "clickable": True, "text": ""}
+
+                def click(self, *a, **k):
+                    pass
+            return _E()
+
+    @reg.action("probe_else_step", priority=1)
+    def _else_step(runner_, step_):
+        state["went_else"] = True
+        raise AssertionError("else 步骤故意失败")
+
+    cfg = {"step_interval": 0, "default_timeout": 1, "click_timeout": 1}
+    r = ActionRunner(Dev(), cfg, case_wait=None, case_name="幽灵行")
+    r._sleep = lambda s: None
+    r.interval = 0
+    step = {"desc": "条件步骤", "if": "目标文本", "timeout": 1, "retry": 1,
+            "else": [{"desc": "else分支步骤", "probe_else_step": True}]}
+
+    ok = r.run_steps([step])
+    assert ok is True, f"该用例整体应通过: {r.results}"
+    ghosts = [x for x in r.results if not x["passed"]]
+    assert not ghosts, f"整体通过却留下 FAIL 行(会让 Excel 把该用例标 FAIL): {ghosts}"

@@ -24,6 +24,7 @@
     QSettings(历史记录)不在此处理: 相关测试统一用 `fake_settings` 内存替身,
     且 tests/test_gui.py 里已有「测试前后真实历史必须一致」的验证。
 """
+import importlib
 import os
 import shutil
 import sys
@@ -32,6 +33,21 @@ from pathlib import Path
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+# 用 `from core.driver import BASE_DIR` 把名字绑定到**自己模块**的那批模块。
+# ★ 必须逐个钉: from-import 绑定的是各自独立的模块全局, patch `core.driver.BASE_DIR`
+#   对它们完全无效(见 _isolate_base_dir 的事故记录)。
+# 这份清单由 test_conftest_guard.test_每个 BASE_DIR 绑定都被隔离 扫描守护。
+BASE_DIR_MODULES = (
+    "core.actions.asserts",
+    "core.actions.map_ops",
+    "core.excel_report",
+    "core.runner",
+    "core.trace",
+    "core.vision",
+    "gui.main_window",
+    "gui.runner_thread",
+)
 
 
 @pytest.fixture(autouse=True)
@@ -65,6 +81,38 @@ def _isolate_group_preconditions(monkeypatch, tmp_path):
     sandbox.mkdir(parents=True, exist_ok=True)
     monkeypatch.setattr(driver, "group_preconditions_path",
                         lambda g: str(sandbox / f"{g}.yaml"), raising=False)
+    yield
+
+
+@pytest.fixture(autouse=True)
+def _isolate_base_dir(monkeypatch, tmp_path):
+    """把各模块的 BASE_DIR 钉到临时目录 —— 跑测试绝不往仓库里写产物。
+
+    ★ 事故(2026-09-24 审查发现)
+      项目里普遍写 `from core.driver import BASE_DIR`, 这是把名字**绑定到各自模块**;
+      patch `core.driver.BASE_DIR` 对它们**完全无效**。`tests/test_room_zones.py`
+      就是这么以为隔离好了, 结果每跑一次单测都把假的分区标注图写进用户真实的
+      `Test_img/debug/`(实测: 跑 test_room_zones + test_runner_core 后真实目录多出
+      map_screen/roi/mask/zone.png)。而根 conftest 模块级的 `_clean_debug_dir()` 又会
+      把用户真机刚生成的诊断图删掉 —— 一个写、一个删, 用户无法分辨哪些是真机结果。
+
+    这里逐模块钉住(sandbox 下自带 config/ 以免个别模块 makedirs 失败),
+    并由 `test_conftest_guard` 扫描守护: 将来谁新增模块漏进清单会被测出来。
+    """
+    sandbox = tmp_path / "repo"
+    (sandbox / "config").mkdir(parents=True, exist_ok=True)
+    for name in BASE_DIR_MODULES:
+        try:
+            mod = importlib.import_module(name)
+        except ImportError:
+            continue                # 未安装的可选依赖(如无 PySide6)跳过
+        if hasattr(mod, "BASE_DIR"):
+            monkeypatch.setattr(mod, "BASE_DIR", str(sandbox), raising=False)
+    # vision.TEMPLATE_DIR 是**模块级常量**(import 时就拼好), 不受 BASE_DIR patch 影响
+    import core.vision as vision
+    if hasattr(vision, "TEMPLATE_DIR"):
+        monkeypatch.setattr(vision, "TEMPLATE_DIR",
+                            str(sandbox / "Test_img" / "templates"), raising=False)
     yield
 
 

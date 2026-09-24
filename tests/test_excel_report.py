@@ -76,3 +76,28 @@ def test_case_name_sanitized(tmp_path):
     from openpyxl import load_workbook
     wb = load_workbook(p)
     assert "清扫_记录" in wb.sheetnames
+
+
+def test_sheet_name_sanitizes_all_openpyxl_forbidden_chars(tmp_path):
+    """★ sheet 名要清掉 openpyxl 全部非法字符([ ] : * ? / \\), 不能让整轮挂掉。
+
+    回归守护: 原实现只替换了 / 和 \\ —— 组名写「温度: 设置」时 create_sheet 直接抛
+    `ValueError: Invalid character : found in sheet title`, 冒到 RunWorker.run 的
+    兜底 except → **整轮**以"执行异常"中断, 设备侧已跑的部分白跑。
+    组名(module)是 GUI 里可自由编辑的文本, 很容易踩到。
+    """
+    from openpyxl import load_workbook
+
+    from core.excel_report import ExcelReport
+    p = tmp_path / "r.xlsx"
+    r = ExcelReport(path=p)
+    names = ["温度: 设置", "模式[夜间]", "速度?快", "a*b", "a\\b", "a/b", "全局清扫"]
+    for n in names:
+        r.add_result(n, True)          # 关键: 这里不得抛异常
+    r.save()
+    wb = load_workbook(p)
+    # 「汇总」是报告自带的汇总页; a\b 与 a/b 清洗后同名, openpyxl 会自己加后缀
+    case_sheets = [s for s in wb.sheetnames if s != "汇总"]
+    assert len(case_sheets) == len(names)
+    for sn in wb.sheetnames:
+        assert not (set(sn) & set('[]:*?/\\')), f"sheet 名仍含非法字符: {sn!r}"

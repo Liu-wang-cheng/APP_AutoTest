@@ -86,7 +86,10 @@ def test_识别成功重置游标(tmp_path, monkeypatch):
 
     runner = make_runner(screen)
     runner._next_room_idx = 5
-    monkeypatch.setattr("core.driver.BASE_DIR", str(tmp_path))
+    # 调试图的落盘位置由 tests/conftest.py::_isolate_base_dir 统一钉到临时目录。
+    # ★ 这里曾写 `monkeypatch.setattr("core.driver.BASE_DIR", str(tmp_path))` —— 那是
+    #   空操作: map_ops 用 `from core.driver import BASE_DIR` 绑的是自己的模块全局,
+    #   patch core.driver 影响不到它, 于是标注图被写进用户真实的 Test_img/debug/。
 
     runner._execute({"room_zones": True})
     assert runner._stored_zones, "应识别出至少一个分区"

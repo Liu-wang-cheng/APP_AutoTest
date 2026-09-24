@@ -249,7 +249,7 @@ def test_restart_app_self_heals_on_startup_crash(monkeypatch):
     calls = {"stop": 0, "start": 0}
     results = iter([False, False, True])          # 前两次疑似闪退,第三次成功
     monkeypatch.setattr(session, "_wait_foreground",
-                        lambda d, p, timeout=20: next(results))
+                        lambda d, p, timeout=20, should_cancel=None:next(results))
     monkeypatch.setattr(session.time, "sleep", lambda s: None)
 
     class D:
@@ -268,7 +268,7 @@ def test_restart_app_normal_start_no_extra_restart(monkeypatch):
     """正常启动:一次到位,不触发多余的重启"""
     from core import session
     calls = {"stop": 0, "start": 0}
-    monkeypatch.setattr(session, "_wait_foreground", lambda d, p, timeout=20: True)
+    monkeypatch.setattr(session, "_wait_foreground", lambda d, p, timeout=20, should_cancel=None:True)
     monkeypatch.setattr(session.time, "sleep", lambda s: None)
 
     class D:
@@ -286,7 +286,7 @@ def test_restart_app_normal_start_no_extra_restart(monkeypatch):
 def test_restart_app_raises_when_never_starts(monkeypatch):
     """连续 3 次都闪退:明确报错,不让用例在坏状态里继续跑"""
     from core import session
-    monkeypatch.setattr(session, "_wait_foreground", lambda d, p, timeout=20: False)
+    monkeypatch.setattr(session, "_wait_foreground", lambda d, p, timeout=20, should_cancel=None:False)
     monkeypatch.setattr(session.time, "sleep", lambda s: None)
 
     class D:
@@ -465,14 +465,11 @@ def test_ensure_charging_passes_ready_text(monkeypatch):
     assert seen and seen[0] == "充电中,已回充", seen
 
 
-# ── 设备页内容读不出来时的兜底(充电判定卡死的根因) ──
-
-def test_device_page_readable_counts_texts():
-    """插件页内容没暴露时 dump 只剩标题+时间 2 条 → 判为不可读"""
-    few = FakeDevice(xml='<node text="13:51"/><node text="扫地机器人0087"/>')
-    assert session.device_page_readable(few) is False
-    many = FakeDevice(xml="".join(f'<node text="房间 {i}"/>' for i in range(8)))
-    assert session.device_page_readable(many) is True
+# ★ 原先这里的 test_device_page_readable_counts_texts 测的是 session.device_page_readable,
+#   但那个函数全项目零调用方(死代码), 已连同 plugin_page_unreadable 一起删除。
+#   同一个判据("可见文本 < 5 条 ⇒ 页面主体没暴露")现在活在 core/ocr.py::sparse(),
+#   由 text_present 在原生读不到时用来决定要不要走 OCR 兜底 ——
+#   覆盖它的是 tests/test_ocr_fallback.py 里 sparse() 相关的用例。
 
 
 # ── 多文本必须是**子串**语义(真机踩过的坑) ──
@@ -510,3 +507,114 @@ def test_is_charging_multi_text_matches_substring(monkeypatch):
                         lambda d: '<node text="已充满电 仅真空吸尘器"/>')
     dev = AndroidLikeDevice(present=("已充满电 仅真空吸尘器",))
     assert session.is_charging(dev, "充电,满电") is True
+
+
+# ── 2026-09-24 审查修复: "停止"必须能中断前置阶段的长等待 ──
+# 背景: restart_app / _wait_foreground / ensure_device_page / ensure_map_loaded
+# 四个函数原先**完全没有** should_cancel, 点停止后最坏要等 1~2 分钟才响应
+# (restart_app 90s+、ensure_device_page 110s+、ensure_map_loaded 150s+)。
+
+class _BusyDevice:
+    """一直就绪不了、也点不动任何设备的桩(用于验证取消能立刻退出)"""
+
+    @property
+    def info(self):
+        return {}
+
+    def dump_hierarchy(self):
+        # 6 条文本 => ocr.sparse 为假, 不会走 OCR 兜底(保持测试快)
+        return ('<hierarchy><node text="a"/><node text="b"/><node text="c"/>'
+                '<node text="d"/><node text="e"/><node text="f"/></hierarchy>')
+
+    def app_current(self):
+        return {"package": "com.other", "activity": "Other"}
+
+    def app_stop(self, *_a):
+        pass
+
+    def app_start(self, *_a):
+        pass
+
+    def press(self, *_a):
+        pass
+
+    def click(self, *a, **k):
+        pass
+
+    def __call__(self, **kw):
+        class _E:
+            def exists(self, timeout=None):
+                return False
+
+            def click(self):
+                pass
+        return _E()
+
+
+def test_sleep_is_cancellable():
+    """★ _sleep 收到取消请求要立刻返回; 不传取消时保持原样(裸 sleep 睡满)"""
+    import time
+    t0 = time.time()
+    assert session._sleep(0.3) is True
+    assert time.time() - t0 >= 0.2, "无取消时应睡满"
+
+    t0 = time.time()
+    assert session._sleep(30, should_cancel=lambda: True) is False
+    assert time.time() - t0 < 1.0, "收到取消后没有立刻返回"
+
+
+def test_wait_foreground_cancellable():
+    """★ _wait_foreground 单次 timeout 20s, 收到停止要立刻退出"""
+    import time
+    t0 = time.time()
+    assert session._wait_foreground(_BusyDevice(), "com.target", timeout=30,
+                                    should_cancel=lambda: True) is False
+    assert time.time() - t0 < 2.0, "取消后仍在轮询前台"
+
+
+def test_ensure_map_loaded_cancellable():
+    """★ 地图加载最坏为 rounds × timeout(默认 6×10s), 收到停止要立刻退出"""
+    import time
+    t0 = time.time()
+    r = session.ensure_map_loaded(_BusyDevice(), timeout=300, rounds=6,
+                                  should_cancel=lambda: True)
+    assert r is False
+    assert time.time() - t0 < 3.0, "取消后没有退出(会跑满 6 轮 × 300s)"
+
+
+def test_ensure_device_page_cancellable():
+    """★ 进设备页最坏 3 轮 × (30s + 进页耗时), 收到停止要立刻退出"""
+    import time
+    t0 = time.time()
+    r = session.ensure_device_page(_BusyDevice(), device_name="设备",
+                                   timeout=30, rounds=3,
+                                   should_cancel=lambda: True)
+    assert r is False
+    assert time.time() - t0 < 3.0, "取消后没有退出"
+
+
+def test_restart_app_cancellable(monkeypatch):
+    """★ 重启 APP 最坏 90s+(3 次自愈 + 进设备页), 收到停止要立刻退出"""
+    import time
+    monkeypatch.setattr(session, "_wait_foreground",
+                        lambda d, p, timeout=20, should_cancel=None: False)
+    cfg = {"app": {"package": "pkg", "main_activity": "act"}, "target_device": "SE3L"}
+    t0 = time.time()
+    session.restart_app(_BusyDevice(), cfg, should_cancel=lambda: True)
+    assert time.time() - t0 < 3.0, "取消后没有退出(会跑满 3 次自愈)"
+
+
+def test_prepare_items_passes_cancel_to_restart(monkeypatch):
+    """★ prepare_items 要把 should_cancel 传给各个前置项(否则停止对前置无效)"""
+    seen = {}
+
+    def _fake_restart(d, cfg, enter_page=True, should_cancel=None):
+        seen["cancel"] = should_cancel
+
+    monkeypatch.setattr(session, "restart_app", _fake_restart)
+    # 不取消(返回 False) —— 只为验证参数被传下去; 一开始就取消的话该项会被跳过
+    flag = lambda: False                                 # noqa: E731
+    session.prepare_items(_BusyDevice(), {"target_device": "x"},
+                          [{"type": "restart", "enabled": True}],
+                          should_cancel=flag)
+    assert seen["cancel"] is flag, "restart 前置没拿到 should_cancel"

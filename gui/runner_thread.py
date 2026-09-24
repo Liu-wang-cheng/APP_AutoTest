@@ -12,6 +12,9 @@ from core import session
 from core.runner import ActionRunner, UserStopped
 from core.driver import BASE_DIR, load_config
 from core.excel_report import ExcelReport
+from core.logger import get_logger
+
+log = get_logger()
 
 # 前置检查项 → 执行结果/报告里的步骤描述
 _PRE_LABELS = {"restart": "前置-重启APP",
@@ -26,6 +29,17 @@ def pre_step_desc(key, batt=-1):
     if key in ("battery", "charging") and batt >= 0:
         desc += f"(当前电量 {batt}%)"
     return desc
+
+
+def resolve_group_preconditions(pre_by_group, group, fallback):
+    """按 APP 组取该组的前置项。
+
+    ★ 必须按"键是否存在"判断, 不能用 `pre_by_group.get(group) or fallback`:
+      空列表是 falsy, 会把「该组前置**全部取消勾选**」(= 这组有意不做前置)误判成
+      「没配过」, 于是回退去执行 fallback(= 当前界面组的前置)。
+      实测: ZZZ 组界面显示 0 条前置, 实际跑了 1 条(可能是重启 APP / 等充电这类重动作)。
+    """
+    return pre_by_group[group] if group in (pre_by_group or {}) else fallback
 
 
 class _QtLogHandler(logging.Handler):
@@ -90,8 +104,13 @@ class RunWorker(QThread):
             if batt >= 0:
                 desc += f"(当前电量 {batt}%)"
         err = "" if r["ok"] else "前置未通过(超时或失败)"
-        report.set_step_desc(module, desc)
-        report.add_result(module, r["ok"], err, "")
+        # ★ 报告写入失败不能拖垮执行: 组名(module)里出现非法字符曾让 create_sheet
+        #   抛错 → 冒到 run() 兜底 except → 整轮以"执行异常"中断
+        try:
+            report.set_step_desc(module, desc)
+            report.add_result(module, r["ok"], err, "")
+        except Exception as e:
+            log.warning(f"[report] 前置结果写入报告失败(忽略, 不影响执行): {e}")
         self.step_done.emit({"desc": desc, "passed": r["ok"], "error": err,
                              "screenshot": "", "elapsed": r.get("elapsed")})
 
@@ -141,7 +160,8 @@ class RunWorker(QThread):
                     # ★ 前置: 切到某组时按**该组**的配置全量执行一次(用户要求:
                     #   前置条件与 APP 组绑定); 同组后续用例只重启 APP。
                     if group != prepared_group:
-                        items = self.pre_by_group.get(group) or self.pre_items
+                        items = resolve_group_preconditions(
+                            self.pre_by_group, group, self.pre_items)
                         self.status.emit(
                             f"前置准备[{group or '默认组'}]({case_name})...")
                         pre_results = session.prepare_items(
@@ -197,9 +217,13 @@ class RunWorker(QThread):
 
                     # 与 pytest 相同结构写入 Excel 报告
                     for r2 in runner.results:
-                        report.set_step_desc(module, r2.get("desc", ""))
-                        report.add_result(module, r2["passed"], r2.get("error", ""),
-                                          r2.get("screenshot", ""))
+                        try:
+                            report.set_step_desc(module, r2.get("desc", ""))
+                            report.add_result(module, r2["passed"], r2.get("error", ""),
+                                              r2.get("screenshot", ""))
+                        except Exception as e:
+                            # 同上: 报告写入问题不该让整轮跑不下去
+                            log.warning(f"[report] 步骤结果写入报告失败(忽略): {e}")
 
                     if not passed:
                         all_passed = False

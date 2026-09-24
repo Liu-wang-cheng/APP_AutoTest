@@ -13,7 +13,6 @@ import yaml
 from core import registry as reg
 import core.actions  # noqa: F401  导入即注册全部动作(见 core/actions/__init__.py)
 from core.driver import BASE_DIR, split_texts
-from core import ocr                          # 文本兜底: 原生读不到时截图识别
 from core.session import text_present, warm_webview   # 判断统一入口 + WebView 预热
 from core.logger import get_logger
 from core.trace import TraceRecorder
@@ -87,7 +86,7 @@ class ActionRunner:
     _NUM_OPS = _NUM_OPS
 
     def __init__(self, device, config: dict, case_wait=None, case_name="",
-                 device_name=""):
+                 device_name="", cancel_check=None):
         self.d = device
         self._device_id = getattr(device, "serial", None)
         self.case_name = case_name
@@ -99,9 +98,13 @@ class ActionRunner:
         self.click_timeout = config.get("click_timeout", 10)
         self.results = []
         self.store = {}          # grab/match 数据暂存
-        self._recovered_plugin_page = False   # 插件页"整页读不到文本"只重进一次
         self.last_click = None   # (x, y, label) —— 供步骤截图叠加点击标记
-        self.stopped = False     # 停止标志,GUI 停止按钮置位
+        self._stopped = False    # 停止标志,GUI 停止按钮置位(对外经 stopped 属性读)
+        # ★ 外部取消信号(如前置阶段的 should_cancel 回调): 与自身停止标志等效。
+        #   前置里的「自定义步骤」会新建一个 ActionRunner, 它拿不到主 runner 的
+        #   stop() —— 于是用户点停止后那串前置会一路跑完(实测: 4s 的等待步骤在
+        #   0.5s 请求停止后仍跑满 4.0s)。用回调把取消意图穿透进来。
+        self._cancel_check = cancel_check
         self.on_result = None    # 结果回调(GUI 实时推送用),签名 fn(result_dict)
         self.trace = TraceRecorder(case_name, config.get("trace_limit", 8))
         self.router = VisionRouter(config)
@@ -145,6 +148,19 @@ class ActionRunner:
             self._sleep(POLL_MID)
         else:
             self._sleep(POLL_MAX)
+
+    @property
+    def stopped(self):
+        """停止标志: 自身标志 **或** 外部取消信号(cancel_check)任一为真。
+
+        做成属性是为了让"停止"能穿透到前置里新建的 runner —— 它们有自己的
+        实例状态, 拿不到主 runner 的 stop()。
+        """
+        return self._stopped or bool(self._cancel_check and self._cancel_check())
+
+    @stopped.setter
+    def stopped(self, value):
+        self._stopped = bool(value)
 
     def stop(self):
         self.stopped = True

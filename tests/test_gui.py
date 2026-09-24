@@ -1,5 +1,13 @@
 # -*- coding: utf-8 -*-
-"""GUI 离屏测试: 窗体装配 / 新建 / 添加步骤 / 卡片渲染 / YAML 往返,不碰真机。"""
+"""GUI 离屏测试: 窗体装配 / 新建 / 添加步骤 / 卡片渲染 / YAML 往返,不碰真机。
+
+★ 隔离说明: 配置文件(CONFIG_PATH)与各模块的 BASE_DIR 一律由 `tests/conftest.py`
+  的 autouse fixture 统一钉到临时目录 —— 这里**不需要**、也不应该再写
+  `monkeypatch.setattr(mw, "CONFIG_PATH", ...)`: `gui.main_window` 模块根本没有
+  CONFIG_PATH 这个属性, 那种 patch 是**空操作**, 只会给人"已经隔离好了"的错觉
+  (曾经 46 处都是这样)。要真正隔离某个模块, 见 conftest 的 BASE_DIR_MODULES 清单
+  与 test_conftest_guard 里的扫描守护。
+"""
 import os
 import sys
 from pathlib import Path
@@ -23,7 +31,6 @@ def qapp():
 def win(qapp, monkeypatch, tmp_path):
     from gui import main_window as mw
     monkeypatch.setattr(mw, "CASES_DIR", str(tmp_path / "Test_cases"), raising=False)
-    monkeypatch.setattr(mw, "CONFIG_PATH", str(tmp_path / "config.yaml"), raising=False)
     w = mw.MainWindow()
     yield w
     w.close()
@@ -424,7 +431,6 @@ def win_with_cases(qapp, monkeypatch, tmp_path):
     (cases_dir / "划区清扫.yaml").write_text(
         "module: 划区清扫\ncases:\n  - name: 完整流程\n    steps: []\n", encoding="utf-8")
     monkeypatch.setattr(mw, "CASES_DIR", str(tmp_path / "Test_cases"), raising=False)
-    monkeypatch.setattr(mw, "CONFIG_PATH", str(tmp_path / "config.yaml"), raising=False)
     w = mw.MainWindow()
     yield w
     w.close()
@@ -487,7 +493,6 @@ def test_case_order_sorts_list_on_load(qapp, monkeypatch, tmp_path):
     (d / "甲.yaml").write_text("case_order: 2\nmodule: 甲\ncases:\n  - name: a\n    steps: []\n", encoding="utf-8")
     (d / "丙.yaml").write_text("module: 丙\ncases:\n  - name: a\n    steps: []\n", encoding="utf-8")
     monkeypatch.setattr(mw, "CASES_DIR", str(tmp_path / "Test_cases"), raising=False)
-    monkeypatch.setattr(mw, "CONFIG_PATH", str(tmp_path / "config.yaml"), raising=False)
     w = mw.MainWindow()
     try:
         paths = [w.case_list.item(i).data(0x0100) for i in range(w.case_list.count())
@@ -525,7 +530,6 @@ def test_move_case_writes_order_and_keeps_check(qapp, monkeypatch, tmp_path):
         (d / f"{n}.yaml").write_text(
             f"module: {n}\ncases:\n  - name: 完整流程\n    steps: []\n", encoding="utf-8")
     monkeypatch.setattr(mw, "CASES_DIR", str(tmp_path / "Test_cases"), raising=False)
-    monkeypatch.setattr(mw, "CONFIG_PATH", str(tmp_path / "config.yaml"), raising=False)
     w = mw.MainWindow()
     try:
         assert w.case_list.count() == 4      # 3 用例 + 1 组头(未分组)
@@ -566,7 +570,6 @@ def test_case_drag_drop_rebuild_and_persist(qapp, monkeypatch, tmp_path):
         (d / f"{n}.yaml").write_text(
             f"module: {n}\ncases:\n  - name: 完整流程\n    steps: []\n", encoding="utf-8")
     monkeypatch.setattr(mw, "CASES_DIR", str(tmp_path / "Test_cases"), raising=False)
-    monkeypatch.setattr(mw, "CONFIG_PATH", str(tmp_path / "config.yaml"), raising=False)
     w = mw.MainWindow()
     try:
         # 模拟拖拽后的 model 状态:第 3 行(选区清扫, 组头占第 0 行)移到组头之后第 1 位
@@ -654,7 +657,6 @@ def test_case_arrows_real_click(qapp, monkeypatch, tmp_path):
         (d / f"{n}.yaml").write_text(
             "module: %s\ncases: [{name: a, steps: []}]\n" % n, encoding="utf-8")
     monkeypatch.setattr(mw, "CASES_DIR", str(tmp_path / "Test_cases"), raising=False)
-    monkeypatch.setattr(mw, "CONFIG_PATH", str(tmp_path / "config.yaml"), raising=False)
     w = mw.MainWindow()
     w.resize(900, 700)
     w.show()
@@ -682,7 +684,6 @@ def test_case_row_name_click_selects(qapp, monkeypatch, tmp_path):
         (d / f"{n}.yaml").write_text(
             "module: %s\ncases: [{name: a, steps: []}]\n" % n, encoding="utf-8")
     monkeypatch.setattr(mw, "CASES_DIR", str(tmp_path / "Test_cases"), raising=False)
-    monkeypatch.setattr(mw, "CONFIG_PATH", str(tmp_path / "config.yaml"), raising=False)
     w = mw.MainWindow()
     w.resize(900, 700)
     w.show()
@@ -712,7 +713,6 @@ def test_arrow_move_then_drag_coexist(qapp, monkeypatch, tmp_path):
         (d / f"{n}.yaml").write_text(
             "module: %s\ncases: [{name: a, steps: []}]\n" % n, encoding="utf-8")
     monkeypatch.setattr(mw, "CASES_DIR", str(tmp_path / "Test_cases"), raising=False)
-    monkeypatch.setattr(mw, "CONFIG_PATH", str(tmp_path / "config.yaml"), raising=False)
     w = mw.MainWindow()
     try:
         # 第一步:箭头把第一行下移(全局清扫 → 2号位)
@@ -759,7 +759,6 @@ def test_preview_label_does_not_grow(qapp, monkeypatch, tmp_path):
     from PIL import Image
     from gui import main_window as mw
     monkeypatch.setattr(mw, "CASES_DIR", str(tmp_path / "Test_cases"), raising=False)
-    monkeypatch.setattr(mw, "CONFIG_PATH", str(tmp_path / "config.yaml"), raising=False)
     shot = tmp_path / "shot.png"
     Image.new("RGB", (800, 600), "blue").save(shot)
     w = mw.MainWindow()
@@ -965,7 +964,6 @@ def test_case_lamp_rerun_resets(qapp, monkeypatch, tmp_path):
         (d / f"{n}.yaml").write_text(
             "module: %s\ncases: [{name: a, steps: []}]\n" % n, encoding="utf-8")
     monkeypatch.setattr(mw, "CASES_DIR", str(tmp_path / "Test_cases"), raising=False)
-    monkeypatch.setattr(mw, "CONFIG_PATH", str(tmp_path / "config.yaml"), raising=False)
     w = mw.MainWindow()
     try:
         paths = [w.case_list.item(i).data(Qt.UserRole) for i in range(w.case_list.count())
@@ -1210,7 +1208,6 @@ def test_group_header_click_collapses(qapp, monkeypatch, tmp_path):
         (d / f"{n}.yaml").write_text(
             "module: %s\ncases: [{name: a, steps: []}]\n" % n, encoding="utf-8")
     monkeypatch.setattr(mw, "CASES_DIR", str(tmp_path / "Test_cases"), raising=False)
-    monkeypatch.setattr(mw, "CONFIG_PATH", str(tmp_path / "config.yaml"), raising=False)
     w = mw.MainWindow()
     w.resize(900, 700)
     w.show()
@@ -1248,7 +1245,6 @@ def test_collapse_group_unloads_editor(qapp, monkeypatch, tmp_path):
         "module: 全局清扫\ncases: [{name: a, steps: [{desc: s1, click: x}]}]\n",
         encoding="utf-8")
     monkeypatch.setattr(mw, "CASES_DIR", str(tmp_path / "Test_cases"), raising=False)
-    monkeypatch.setattr(mw, "CONFIG_PATH", str(tmp_path / "config.yaml"), raising=False)
     w = mw.MainWindow()
     w.resize(900, 700)
     w.show()
@@ -1258,8 +1254,8 @@ def test_collapse_group_unloads_editor(qapp, monkeypatch, tmp_path):
         # 单击用例行加载到编辑区
         w._on_case_item_clicked(lst.item(case_row_index(lst, 0)))
         assert w.case_path and w.data["module"] == "全局清扫"
-        # chip 条: 标题在前,字段顺序 用例组→用例→优先级→间隔→添加步骤
-        texts = [lst.parentWidget()] and None   # 占位避免空行
+        # chip 条的字段顺序由 test_chip_strip_field_order 做运行时断言, 这里只确认
+        # 标题区块存在
         from PySide6.QtWidgets import QLabel, QPushButton
         labels = [c for c in w.findChildren(QLabel) if c.text() == "测试步骤详情"]
         assert labels, "缺少「测试步骤详情」区块标题"
@@ -1278,31 +1274,43 @@ def test_collapse_group_unloads_editor(qapp, monkeypatch, tmp_path):
 
 
 def test_chip_strip_field_order(win):
-    """测试步骤详情区字段顺序: 标题→用例组→用例→优先级→间隔s→添加步骤"""
-    from PySide6.QtWidgets import QLabel, QLineEdit, QComboBox, QPushButton
-    import gui.main_window as mw
-    # chip 条内控件按添加顺序: 找 chipStrip 的 FlowLayout 子控件
-    chip_labels = [c.text() for c in win._quick_btns]  # 仅确保快捷按钮存在
-    assert win.module_edit and win.case_name_edit
-    assert win.add_btn.text() == "＋ 添加步骤"
-    # 标题与标签顺序验证(QSS 结构)
-    assert 'QLabel("测试步骤详情")' not in mw.STYLESHEET  # 标题在代码里不在QSS,此行防呆
-    order_check = [
-        ("测试步骤详情", True),
-        ("用例组", True),
-        ("用例", True),
-        ("优先级", True),
-        ("间隔s", True),
-    ]
-    src = open(mw.__file__, encoding="utf-8").read()
-    pos = -1
-    for text, _ in order_check:
-        p = src.find(f'QLabel("{text}")')
-        assert p > pos, f"「{text}」标签顺序不正确"
-        pos = p
-    p_add = src.find('self.add_btn = QPushButton("＋ 添加步骤")')
-    p_wait = src.find('lay.addWidget(self.case_wait_edit)')
-    assert pos < p_add and p_wait < p_add, "添加步骤应排在间隔s之后"
+    """测试步骤详情区字段顺序: 标题→用例组→用例→优先级→间隔s→添加步骤
+
+    ★ 用**运行时**的控件顺序断言(遍历 FlowLayout 里的子控件), 而不是去扫源码文本。
+      扫源码那种写法在 UI 顺序真的错了时照样通过, 而改个书写方式/加个空格又会假红。
+      (原先这里取出的 `chip_labels` 是个僵尸变量, 真正的顺序验证全靠下面那段扫源码。)
+    """
+    from PySide6.QtWidgets import QLabel
+    strip = win.add_btn.parentWidget()
+    assert strip is not None and strip.objectName() == "chipStrip", \
+        f"没有找到 chip 条容器: {strip}"
+    lay = strip.layout()
+    seq = []
+    for i in range(lay.count()):
+        wd = lay.itemAt(i).widget()
+        if wd is None:
+            continue
+        if wd is win.module_edit:
+            seq.append("<用例组输入>")
+        elif wd is win.case_name_edit:
+            seq.append("<用例输入>")
+        elif wd is win.case_combo:
+            seq.append("<多用例切换>")
+        elif wd is win.priority_combo:
+            seq.append("<优先级>")
+        elif wd is win.case_wait_edit:
+            seq.append("<间隔输入>")
+        elif wd is win.add_btn:
+            seq.append(wd.text())
+        elif isinstance(wd, QLabel):
+            seq.append(wd.text())
+    # 只校验字段部分(chip 条尾部还有 "|" / 提示语 / "共 N 步", 不属于字段顺序)
+    expected = ["测试步骤详情", "用例组", "<用例组输入>",
+                "用例", "<用例输入>", "<多用例切换>",
+                "优先级", "<优先级>",
+                "间隔s", "<间隔输入>",
+                "＋ 添加步骤"]
+    assert seq[:len(expected)] == expected, f"chip 条字段顺序不对: {seq}"
 
 
 def test_empty_group_dir_still_shown(qapp, monkeypatch, tmp_path):
@@ -1315,7 +1323,6 @@ def test_empty_group_dir_still_shown(qapp, monkeypatch, tmp_path):
         "module: a\ncases: [{name: x, steps: []}]\n", encoding="utf-8")
     (root / "三星").mkdir()          # 空组目录
     monkeypatch.setattr(mw, "CASES_DIR", str(root), raising=False)
-    monkeypatch.setattr(mw, "CONFIG_PATH", str(tmp_path / "config.yaml"), raising=False)
     w = mw.MainWindow()
     try:
         texts = [w.case_list.item(i).text() for i in range(w.case_list.count())]
@@ -1336,7 +1343,6 @@ def test_new_case_dialog_creates_in_group(qapp, monkeypatch, tmp_path):
     (root / "涂鸦智能T4" / "a.yaml").write_text(
         "module: a\ncases: [{name: x, steps: []}]\n", encoding="utf-8")
     monkeypatch.setattr(mw, "CASES_DIR", str(root), raising=False)
-    monkeypatch.setattr(mw, "CONFIG_PATH", str(tmp_path / "config.yaml"), raising=False)
     w = mw.MainWindow()
     try:
         # mock 对话框: 名称=新用例A, 组=三星
@@ -1369,7 +1375,6 @@ def test_save_button_dirty_flow(qapp, monkeypatch, tmp_path):
     (root / "a.yaml").write_text(
         "module: a\ncases: [{name: x, steps: []}]\n", encoding="utf-8")
     monkeypatch.setattr(mw, "CASES_DIR", str(tmp_path / "Test_cases"), raising=False)
-    monkeypatch.setattr(mw, "CONFIG_PATH", str(tmp_path / "config.yaml"), raising=False)
     w = mw.MainWindow()
     try:
         qapp.processEvents()
@@ -1407,7 +1412,6 @@ def test_collapsed_group_not_marked_empty(qapp, monkeypatch, tmp_path):
         (d / f"{n}.yaml").write_text(
             "module: %s\ncases: [{name: a, steps: []}]\n" % n, encoding="utf-8")
     monkeypatch.setattr(mw, "CASES_DIR", str(tmp_path / "Test_cases"), raising=False)
-    monkeypatch.setattr(mw, "CONFIG_PATH", str(tmp_path / "config.yaml"), raising=False)
     w = mw.MainWindow()
     try:
         # 触发一次箭头移动(order_paths 分支)
@@ -1428,7 +1432,6 @@ def test_truly_empty_group_shows_placeholder(qapp, monkeypatch, tmp_path):
     root = tmp_path / "Test_cases"
     (root / "三星").mkdir(parents=True)          # 空组目录
     monkeypatch.setattr(mw, "CASES_DIR", str(root), raising=False)
-    monkeypatch.setattr(mw, "CONFIG_PATH", str(tmp_path / "config.yaml"), raising=False)
     w = mw.MainWindow()
     try:
         texts = [w.case_list.item(i).text() for i in range(w.case_list.count())]
@@ -1450,7 +1453,6 @@ def test_collapse_via_real_click_after_reorder(qapp, monkeypatch, tmp_path):
         (root / "涂鸦智能T4" / f"{n}.yaml").write_text(
             "module: %s\ncases: [{name: a, steps: []}]\n" % n, encoding="utf-8")
     monkeypatch.setattr(mw, "CASES_DIR", str(root), raising=False)
-    monkeypatch.setattr(mw, "CONFIG_PATH", str(tmp_path / "config.yaml"), raising=False)
     w = mw.MainWindow()
     w.resize(900, 700)
     w.show()
@@ -1495,7 +1497,6 @@ def test_collapse_empty_group_hides_placeholder(qapp, monkeypatch, tmp_path):
     root = tmp_path / "Test_cases"
     (root / "三星").mkdir(parents=True)          # 空组
     monkeypatch.setattr(mw, "CASES_DIR", str(root), raising=False)
-    monkeypatch.setattr(mw, "CONFIG_PATH", str(tmp_path / "config.yaml"), raising=False)
     w = mw.MainWindow()
     w.resize(900, 700)
     w.show()
@@ -1548,7 +1549,6 @@ def test_screenshot_switch_and_auto_name(qapp, monkeypatch, tmp_path):
     """截图字段 = 开关(True 自动命名), 旧字符串路径兼容保留"""
     from types import SimpleNamespace
     from core import runner as cr
-    root = tmp_path / "Test_img"
     monkeypatch.setattr(cr, "BASE_DIR", str(tmp_path), raising=False)
     saved = {"path": None}
 
@@ -1564,6 +1564,9 @@ def test_screenshot_switch_and_auto_name(qapp, monkeypatch, tmp_path):
     p1 = saved["path"].replace("\\", "/")
     assert "冒烟用例" in p1 and "step01" in p1, f"自动命名: {p1}"
     assert "点击_主界面_按钮" in p1, "自动命名应含描述"
+    # ★ 落盘位置也要验证(原先只断言了路径字符串, 位置写错也看不出来):
+    #   必须落在 BASE_DIR 之下(测试里已把它钉到 tmp_path)
+    assert p1.startswith(str(tmp_path).replace("\\", "/")), f"落盘位置不对: {p1}"
     # 旧字符串路径兼容(screenshots/ 前缀补 Test_img/)
     r._execute({"desc": "d", "screenshot": "screenshots/manual.png"})
     p2 = saved["path"].replace("\\", "/")
@@ -1581,7 +1584,6 @@ def test_compare_baseline_step_dropdown(qapp, monkeypatch, tmp_path):
     (root / "a.yaml").write_text(
         "module: a\ncases: [{name: x, steps: []}]\n", encoding="utf-8")
     monkeypatch.setattr(mw, "CASES_DIR", str(root), raising=False)
-    monkeypatch.setattr(mw, "CONFIG_PATH", str(tmp_path / "config.yaml"), raising=False)
     w = mw.MainWindow()
     try:
         # 步骤: 1 开截图, 2 不开, 3 开截图, 4 compare
@@ -1617,8 +1619,7 @@ def test_runner_compare_resolves_step_ref(qapp, tmp_path):
     class _Dev:
         def screenshot(self, path=None, format=None):
             if format == "opencv":
-                import numpy as np
-                return np.zeros((32, 32, 3), dtype=np.uint8)
+                return np.zeros((32, 32, 3), dtype=np.uint8)   # np 已在上面导入
             saved["path"] = path
             return path
 
@@ -1649,7 +1650,6 @@ def test_delete_selected_case_and_group(qapp, monkeypatch, tmp_path):
         (root / "涂鸦智能T4" / f"{n}.yaml").write_text(
             "module: %s\ncases: [{name: a, steps: []}]\n" % n, encoding="utf-8")
     monkeypatch.setattr(mw, "CASES_DIR", str(root), raising=False)
-    monkeypatch.setattr(mw, "CONFIG_PATH", str(tmp_path / "config.yaml"), raising=False)
     boxes = []
     monkeypatch.setattr(mw.QMessageBox, "question",
                         staticmethod(lambda *a, **k: boxes.append(a) or
@@ -1696,7 +1696,6 @@ def test_delete_current_case_unloads_editor(qapp, monkeypatch, tmp_path):
         "module: a\ncases: [{name: x, steps: [{desc: s, click: y}]}]\n",
         encoding="utf-8")
     monkeypatch.setattr(mw, "CASES_DIR", str(root), raising=False)
-    monkeypatch.setattr(mw, "CONFIG_PATH", str(tmp_path / "config.yaml"), raising=False)
     w = mw.MainWindow()
     w.resize(900, 700)
     w.show()
@@ -1724,13 +1723,21 @@ def test_click_and_click_template_split(qapp, monkeypatch, tmp_path):
     click → 目标 QLineEdit; click_template → 模板下拉(当前 APP 组自动列出)"""
     from PySide6.QtWidgets import QLineEdit, QComboBox
     import gui.main_window as mw
-    root = tmp_path / "Test_cases"
-    gdir = root / "涂鸦智能T4"
-    tdir = gdir / "templates"
+    import core.vision as vision
+    # ★ 模板列表由 vision.BASE_DIR 决定(不是 mw.CASES_DIR) —— 两个都要钉, 否则
+    #   下拉会去读用户真实的 Test_cases/<组>/templates/(依赖用户数据: 删了模板
+    #   这个测试就会挂)。原先只 patch 了 mw.CASES_DIR, 属"以为隔离了"。
+    root = tmp_path / "fake_repo"
+    tdir = root / "Test_cases" / "涂鸦智能T4" / "templates"
     tdir.mkdir(parents=True)
     (tdir / "涂鸦_开始清扫.png").write_bytes(b"fake")
-    monkeypatch.setattr(mw, "CASES_DIR", str(root), raising=False)
-    monkeypatch.setattr(mw, "CONFIG_PATH", str(tmp_path / "config.yaml"), raising=False)
+    # 模板前缀来自 config.yaml 的 app.template_prefix(解析时去掉它) —— 也要自备,
+    # 否则会去读用户真实配置的前缀
+    (root / "config").mkdir(parents=True, exist_ok=True)
+    (root / "config" / "config.yaml").write_text(
+        "app:\n  template_prefix: 涂鸦\n", encoding="utf-8")
+    monkeypatch.setattr(vision, "BASE_DIR", str(root), raising=False)
+    monkeypatch.setattr(mw, "CASES_DIR", str(root / "Test_cases"), raising=False)
     w = mw.MainWindow()
     w.resize(900, 700)
     w.show()
@@ -1790,7 +1797,6 @@ def test_name_combo_history_and_clear_button(qapp, monkeypatch, tmp_path, fake_s
     fake_settings.store["hist/app_name"] = ["涂鸦智能", "SmartThings"]
     fake_settings.store["hist/device_name"] = ["SE3L"]
     monkeypatch.setattr(mw, "CASES_DIR", str(tmp_path / "Test_cases"), raising=False)
-    monkeypatch.setattr(mw, "CONFIG_PATH", str(tmp_path / "config.yaml"), raising=False)
     w = mw.MainWindow()
     try:
         from PySide6.QtWidgets import QComboBox
@@ -1815,7 +1821,6 @@ def test_history_item_delete_real_click(qapp, monkeypatch, tmp_path, fake_settin
     from PySide6.QtTest import QTest
     import gui.main_window as mw
     monkeypatch.setattr(mw, "CASES_DIR", str(tmp_path / "Test_cases"), raising=False)
-    monkeypatch.setattr(mw, "CONFIG_PATH", str(tmp_path / "config.yaml"), raising=False)
     monkeypatch.setattr(mw, "load_config", lambda: {"app": {}, "device": {}}, raising=False)
     fake_settings.store["hist/app_name"] = ["涂鸦智能", "SmartThings", "米家"]
     w = mw.MainWindow()
@@ -1847,7 +1852,6 @@ def test_name_combo_width_adapts_to_content(qapp, monkeypatch, tmp_path, fake_se
     """输入框宽度随内容自适应(长名称不被截断)"""
     import gui.main_window as mw
     monkeypatch.setattr(mw, "CASES_DIR", str(tmp_path / "Test_cases"), raising=False)
-    monkeypatch.setattr(mw, "CONFIG_PATH", str(tmp_path / "config.yaml"), raising=False)
     w = mw.MainWindow()
     try:
         w.app_name_edit.setCurrentText("短")
@@ -1895,7 +1899,6 @@ def test_name_save_writes_config_and_history(qapp, monkeypatch, tmp_path, fake_s
     saved = {}
     monkeypatch.setattr(mw, "update_config", lambda d: saved.update(d), raising=False)
     monkeypatch.setattr(mw, "CASES_DIR", str(tmp_path / "Test_cases"), raising=False)
-    monkeypatch.setattr(mw, "CONFIG_PATH", str(tmp_path / "config.yaml"), raising=False)
     w = mw.MainWindow()
     try:
         w.app_name_edit.setCurrentText("新APP名")
@@ -1916,7 +1919,6 @@ def test_detect_app_restores_cursor_and_button(qapp, monkeypatch, tmp_path, fake
     from PySide6.QtGui import QGuiApplication
     import gui.main_window as mw
     monkeypatch.setattr(mw, "CASES_DIR", str(tmp_path / "Test_cases"), raising=False)
-    monkeypatch.setattr(mw, "CONFIG_PATH", str(tmp_path / "config.yaml"), raising=False)
     w = mw.MainWindow()
     try:
         # 清空可能存在的光标覆盖(Qt 全局状态)
@@ -1953,7 +1955,6 @@ def test_history_popup_width_adapts_and_recomputes(qapp, monkeypatch, tmp_path, 
     from PySide6.QtTest import QTest
     import gui.main_window as mw
     monkeypatch.setattr(mw, "CASES_DIR", str(tmp_path / "Test_cases"), raising=False)
-    monkeypatch.setattr(mw, "CONFIG_PATH", str(tmp_path / "config.yaml"), raising=False)
     monkeypatch.setattr(mw, "load_config", lambda: {"app": {}, "device": {}}, raising=False)
     fake_settings.store["hist/app_name"] = ["短", "中等长度的应用名",
                                            "超级无敌长的应用名称测试用例ABCDEF"]
@@ -1997,7 +1998,6 @@ def test_detect_failure_purges_history(qapp, monkeypatch, tmp_path, fake_setting
     其他历史项保留; 输入框内容不被改动"""
     import gui.main_window as mw
     monkeypatch.setattr(mw, "CASES_DIR", str(tmp_path / "Test_cases"), raising=False)
-    monkeypatch.setattr(mw, "CONFIG_PATH", str(tmp_path / "config.yaml"), raising=False)
     monkeypatch.setattr(mw, "load_config", lambda: {"app": {}, "device": {}}, raising=False)
     fake_settings.store["hist/app_name"] = ["不存在的APP", "涂鸦智能"]
     w = mw.MainWindow()
@@ -2038,7 +2038,6 @@ def test_history_delete_resizes_open_popup(qapp, monkeypatch, tmp_path, fake_set
     from PySide6.QtTest import QTest
     import gui.main_window as mw
     monkeypatch.setattr(mw, "CASES_DIR", str(tmp_path / "Test_cases"), raising=False)
-    monkeypatch.setattr(mw, "CONFIG_PATH", str(tmp_path / "config.yaml"), raising=False)
     monkeypatch.setattr(mw, "load_config", lambda: {"app": {}, "device": {}}, raising=False)
     fake_settings.store["hist/app_name"] = ["甲", "乙", "丙",
                                            "超级无敌长的应用名称测试用例ABCDEF"]
@@ -2082,7 +2081,6 @@ def test_history_add_keeps_popup_full_height(qapp, monkeypatch, tmp_path, fake_s
     """
     import gui.main_window as mw
     monkeypatch.setattr(mw, "CASES_DIR", str(tmp_path / "Test_cases"), raising=False)
-    monkeypatch.setattr(mw, "CONFIG_PATH", str(tmp_path / "config.yaml"), raising=False)
     monkeypatch.setattr(mw, "load_config", lambda: {"app": {}, "device": {}}, raising=False)
     fake_settings.store["hist/app_name"] = ["甲", "乙", "丙"]
     fake_settings.store["hist/device_name"] = ["甲", "乙", "丙"]   # 设备名称框读这个键
@@ -2100,18 +2098,21 @@ def test_history_add_keeps_popup_full_height(qapp, monkeypatch, tmp_path, fake_s
         combo.showPopup()
         qapp.processEvents()
         popup = combo.view().window()
-        view = combo.view()
-        # ★ 高度必须 = 行高 × 项数(delegate 真实行高, 低估会出滚动条)
+        # ★ 高度必须容得下全部项(delegate 真实行高 × 项数)。原先只断言 height() > 0,
+        #   于是"下拉被压成一行高 + 滚动条"——正是用户报的那个 bug——也照样通过;
+        #   取出来备用的 rh 反倒成了僵尸变量(注释写着"高度必须 = 行高 × 项数")。
         rh = combo._row_height()
         assert popup.width() >= combo.lineEdit().fontMetrics().horizontalAdvance(
             "超级无敌长的应用名称测试用例ABCDEF") + 40, "宽度应容纳最长项"
-        assert popup.height() > 0, "高度不能为零"
+        assert popup.height() >= rh * combo.count(), (
+            f"下拉高 {popup.height()}px 装不下 {combo.count()} 项(每项 {rh}px) —— 会出现滚动条")
         # 打开状态下再新增 → 项数即时增加, 下拉仍完整(不全压在单行)
         combo.setCurrentText("又一个新的名字")
         w._save_env_field_of(combo)
         qapp.processEvents()
         assert combo.count() == 5
-        assert combo.view().window().height() > 0, "新增后下拉要有正常高度"
+        assert combo.view().window().height() >= rh * combo.count(), (
+            f"新增后下拉高度不足: {combo.view().window().height()} < {rh * combo.count()}")
     finally:
         w.close()
 
@@ -2121,16 +2122,19 @@ def test_all_fit_combos_adapt_width(qapp, monkeypatch, tmp_path, fake_settings):
     只读下拉(基准图)也不能因无 lineEdit 而崩"""
     from PySide6.QtWidgets import QComboBox
     import gui.main_window as mw
-    root = tmp_path / "Test_cases"
-    gdir = root / "涂鸦智能T4"
-    tdir = gdir / "templates"
+    import core.vision as vision
+    # ★ 同 test_click_and_click_template_split: 模板列表看的是 vision.BASE_DIR,
+    #   只 patch mw.CASES_DIR 会去读用户真实模板目录(依赖用户数据)
+    repo = tmp_path / "fake_repo"
+    root = repo / "Test_cases"
+    tdir = root / "涂鸦智能T4" / "templates"
     tdir.mkdir(parents=True)
     # 一个很长的模板名, 验证宽度能容纳
     LONG_TPL = "涂鸦_超级长的模板名称用于测试宽度自适应ABCDEF.png"
     (tdir / LONG_TPL).write_bytes(b"fake")
     (tdir / "涂鸦_开始清扫.png").write_bytes(b"fake")
+    monkeypatch.setattr(vision, "BASE_DIR", str(repo), raising=False)
     monkeypatch.setattr(mw, "CASES_DIR", str(root), raising=False)
-    monkeypatch.setattr(mw, "CONFIG_PATH", str(tmp_path / "config.yaml"), raising=False)
     monkeypatch.setattr(mw, "load_config", lambda: {"app": {}, "device": {}}, raising=False)
     w = mw.MainWindow()
     w.resize(1200, 700)
@@ -2181,7 +2185,6 @@ def test_app_history_only_on_detect_success(qapp, monkeypatch, tmp_path, fake_se
     """★ APP 名称: 编辑不记历史; 只有「检测成功」才写入(用户要求)"""
     import gui.main_window as mw
     monkeypatch.setattr(mw, "CASES_DIR", str(tmp_path / "Test_cases"), raising=False)
-    monkeypatch.setattr(mw, "CONFIG_PATH", str(tmp_path / "config.yaml"), raising=False)
     monkeypatch.setattr(mw, "load_config", lambda: {"app": {}, "device": {}}, raising=False)
     monkeypatch.setattr(mw, "update_config", lambda d: None, raising=False)
     fake_settings.store["hist/app_name"] = ["涂鸦智能"]
@@ -2220,7 +2223,6 @@ def test_both_name_combos_popup_equal_width(qapp, monkeypatch, tmp_path, fake_se
     from PySide6.QtTest import QTest
     import gui.main_window as mw
     monkeypatch.setattr(mw, "CASES_DIR", str(tmp_path / "Test_cases"), raising=False)
-    monkeypatch.setattr(mw, "CONFIG_PATH", str(tmp_path / "config.yaml"), raising=False)
     monkeypatch.setattr(mw, "load_config", lambda: {"app": {}, "device": {}}, raising=False)
     monkeypatch.setattr(mw, "update_config", lambda d: None, raising=False)
     fake_settings.store["hist/app_name"] = ["涂鸦智能", "SmartThings"]
@@ -2260,7 +2262,6 @@ def test_popup_no_scrollbar_no_extra_gap(qapp, monkeypatch, tmp_path, fake_setti
     """
     import gui.main_window as mw
     monkeypatch.setattr(mw, "CASES_DIR", str(tmp_path / "Test_cases"), raising=False)
-    monkeypatch.setattr(mw, "CONFIG_PATH", str(tmp_path / "config.yaml"), raising=False)
     monkeypatch.setattr(mw, "load_config", lambda: {"app": {}, "device": {}}, raising=False)
     fake_settings.store["hist/device_name"] = ["SE3L", "L10", "扫地机器0087"]
     fake_settings.store["hist/app_name"] = ["涂鸦智能", "SmartThings"]
@@ -2295,7 +2296,6 @@ def test_numeric_config_values_do_not_crash(qapp, monkeypatch, tmp_path, fake_se
     """
     import gui.main_window as mw
     monkeypatch.setattr(mw, "CASES_DIR", str(tmp_path / "Test_cases"), raising=False)
-    monkeypatch.setattr(mw, "CONFIG_PATH", str(tmp_path / "config.yaml"), raising=False)
     # 模拟用户的配置: 纯数字被 YAML 解析为 int
     monkeypatch.setattr(mw, "load_config",
                         lambda: {"app": {"name": 123, "package": "com.x"},
@@ -2332,7 +2332,6 @@ def test_chipbtn_has_visible_border_and_list_title(qapp, monkeypatch, tmp_path):
     assert "border: 1px solid #d9dee6; border-radius: 12px;" in mw.STYLESHEET, \
         "chipBtn 边框应常驻(不是 transparent)"
     monkeypatch.setattr(mw, "CASES_DIR", str(tmp_path / "Test_cases"), raising=False)
-    monkeypatch.setattr(mw, "CONFIG_PATH", str(tmp_path / "config.yaml"), raising=False)
     w = mw.MainWindow()
     try:
         from PySide6.QtWidgets import QLabel
@@ -2355,7 +2354,6 @@ def test_log_view_wraps_and_no_duplicate_handler(qapp, monkeypatch, tmp_path):
     import gui.main_window as mw
     import gui.runner_thread as rt
     monkeypatch.setattr(mw, "CASES_DIR", str(tmp_path / "Test_cases"), raising=False)
-    monkeypatch.setattr(mw, "CONFIG_PATH", str(tmp_path / "config.yaml"), raising=False)
     w = mw.MainWindow()
     try:
         assert w.log_view.lineWrapMode() == QPlainTextEdit.WidgetWidth, \
@@ -2376,7 +2374,6 @@ def test_ui_hints_also_go_to_run_log(qapp, monkeypatch, tmp_path):
     """★ 界面提示(保存配置/APP检测/删除等)必须同时进运行日志(用户反馈看不到)"""
     import gui.main_window as mw
     monkeypatch.setattr(mw, "CASES_DIR", str(tmp_path / "Test_cases"), raising=False)
-    monkeypatch.setattr(mw, "CONFIG_PATH", str(tmp_path / "config.yaml"), raising=False)
     monkeypatch.setattr(mw, "load_config", lambda: {"app": {}, "device": {}}, raising=False)
     monkeypatch.setattr(mw, "update_config", lambda d: None, raising=False)
     w = mw.MainWindow()
@@ -2407,7 +2404,6 @@ def test_name_save_not_duplicated_by_two_signals(qapp, monkeypatch, tmp_path, fa
     saved = []
     monkeypatch.setattr(mw, "update_config", lambda d: saved.append(d), raising=False)
     monkeypatch.setattr(mw, "CASES_DIR", str(tmp_path / "Test_cases"), raising=False)
-    monkeypatch.setattr(mw, "CONFIG_PATH", str(tmp_path / "config.yaml"), raising=False)
     w = mw.MainWindow()
     try:
         c = w.device_name_edit
@@ -2438,7 +2434,6 @@ def test_hint_lines_own_row_and_do_not_widen_window(qapp, monkeypatch, tmp_path)
     from PySide6.QtCore import Qt as _Qt
     import gui.main_window as mw
     monkeypatch.setattr(mw, "CASES_DIR", str(tmp_path / "Test_cases"), raising=False)
-    monkeypatch.setattr(mw, "CONFIG_PATH", str(tmp_path / "config.yaml"), raising=False)
     monkeypatch.setattr(mw, "load_config", lambda: {"app": {}, "device": {}}, raising=False)
     monkeypatch.setattr(mw, "update_config", lambda d: None, raising=False)
     w = mw.MainWindow()
@@ -2493,7 +2488,6 @@ def test_form_checkbox_full_click_area_and_no_hover_flash(qapp, monkeypatch, tmp
     from PySide6.QtTest import QTest
     import gui.main_window as mw
     monkeypatch.setattr(mw, "CASES_DIR", str(tmp_path / "Test_cases"), raising=False)
-    monkeypatch.setattr(mw, "CONFIG_PATH", str(tmp_path / "config.yaml"), raising=False)
     monkeypatch.setattr(mw, "load_config", lambda: {"app": {}, "device": {}}, raising=False)
     monkeypatch.setattr(mw, "update_config", lambda d: None, raising=False)
     w = mw.MainWindow()
@@ -2551,7 +2545,6 @@ def test_delete_current_history_clears_config(qapp, monkeypatch, tmp_path, fake_
     monkeypatch.setattr(mw, "load_config", lambda: cfg, raising=False)
     monkeypatch.setattr(mw, "update_config", _upd, raising=False)
     monkeypatch.setattr(mw, "CASES_DIR", str(tmp_path / "Test_cases"), raising=False)
-    monkeypatch.setattr(mw, "CONFIG_PATH", str(tmp_path / "config.yaml"), raising=False)
     w = mw.MainWindow()
     try:
         c = w.device_name_edit
@@ -2596,7 +2589,6 @@ def test_unchanged_value_not_repushed_to_history(qapp, monkeypatch, tmp_path, fa
     saved = []
     monkeypatch.setattr(mw, "update_config", lambda d: saved.append(d), raising=False)
     monkeypatch.setattr(mw, "CASES_DIR", str(tmp_path / "Test_cases"), raising=False)
-    monkeypatch.setattr(mw, "CONFIG_PATH", str(tmp_path / "config.yaml"), raising=False)
     w = mw.MainWindow()
     try:
         c = w.device_name_edit
@@ -2625,7 +2617,6 @@ def test_preconditions_save_and_stop_hints_go_to_run_log(qapp, monkeypatch, tmp_
     import core.driver as driver
     import gui.main_window as mw
     monkeypatch.setattr(mw, "CASES_DIR", str(tmp_path / "Test_cases"), raising=False)
-    monkeypatch.setattr(mw, "CONFIG_PATH", str(tmp_path / "config.yaml"), raising=False)
     monkeypatch.setattr(mw, "load_config", lambda: {"app": {}, "device": {}}, raising=False)
     monkeypatch.setattr(mw, "update_config", lambda d: None, raising=False)
     # ★ 必须隔离: save_preconditions 默认写真实 config.yaml(不能碰用户数据)
@@ -2876,5 +2867,92 @@ def test_clear_button_clears_all_groups(qapp, monkeypatch, tmp_path):
         w._set_cases_checked(_Qt.Unchecked)
         qapp.processEvents()
         assert _checked_groups(w) == {}, _checked_groups(w)
+    finally:
+        w.close()
+
+
+# ── 2026-09-24 审查修复: 切用例不覆盖数据 / 折叠组不丢勾选 ──
+
+MULTI_CASE_YAML = """module: 多用例
+cases:
+  - name: 用例甲
+    priority: P1
+    wait: 5
+    steps: []
+  - name: 用例乙
+    priority: P0
+    wait: 3
+    steps: []
+"""
+
+
+def test_switch_case_keeps_wait(qapp, monkeypatch, tmp_path):
+    """★ 同一文件内切用例, 目标用例的 wait 不能被上一个用例的值覆盖。
+
+    回归守护: `_load_case_into_ui` 里 `priority_combo.setCurrentIndex` 在优先级不同时
+    会**立刻发 currentTextChanged** → `_sync_header` 读控件里**上一个用例残留的**"间隔"
+    文本并回写 self.data, 于是刚加载用例的 wait 被改掉; 间隔框随后显示的也是被改后的值
+    (用户完全看不出异常), 300ms 后 `_autosave_timer` 把它写进磁盘 → 数据永久损坏。
+    实测: 甲 P1/wait=5 → 切到乙 P0/wait=3, 乙的 wait 变成 5。
+    """
+    from PySide6.QtCore import Qt as _Qt
+    import gui.main_window as mw
+    root = tmp_path / "Test_cases"
+    gdir = root / "甲组"
+    gdir.mkdir(parents=True)
+    (gdir / "多用例.yaml").write_text(MULTI_CASE_YAML, encoding="utf-8")
+    monkeypatch.setattr(mw, "CASES_DIR", str(root), raising=False)
+    monkeypatch.setattr(mw, "load_config", lambda: {"app": {}, "device": {}}, raising=False)
+    w = mw.MainWindow()
+    try:
+        w._fill_case_list()
+        target = str(gdir / "多用例.yaml")
+        row = -1
+        for i in range(w.case_list.count()):
+            if w.case_list.item(i).data(_Qt.UserRole) == target:
+                row = i
+                break
+        assert row >= 0, "列表里找不到用例文件"
+        w._on_case_item_clicked(w.case_list.item(row))      # 用户: 点左侧列表加载
+
+        assert [c.get("wait") for c in w.data["cases"]] == [5, 3], w.data["cases"]
+        w.case_combo.setCurrentIndex(1)                     # 切到「用例乙」
+        got = [(c["name"], c["priority"], c.get("wait")) for c in w.data["cases"]]
+        assert got[1][2] == 3, f"用例乙的 wait 被上一个用例的值覆盖了: {got}"
+        assert got[0][2] == 5, f"用例甲的 wait 也变了: {got}"
+        assert w.case_wait_edit.text() == "3", \
+            f"间隔框应显示当前用例的 3, 实际 {w.case_wait_edit.text()!r}"
+    finally:
+        w.close()
+
+
+def test_collapse_group_keeps_checked(qapp, monkeypatch, tmp_path):
+    """★ 折叠某组再展开, 该组已勾选的用例必须还在勾选态。
+
+    回归守护: 勾选态只存在 QListWidget 的 item 上, 而 `_fill_case_list` 重建列表时
+    折叠组不生成行 → 勾选信息永久消失(展开也回不来)。
+    后果: 用户勾好用例、顺手收起该组整理视图, 再点运行时这些用例**根本不会跑**,
+    而折叠态下连"没勾上"都看不见。
+    """
+    w = _cases_window(qapp, monkeypatch, tmp_path)
+    try:
+        from PySide6.QtCore import Qt as _Qt
+        for i in range(w.case_list.count()):
+            it = w.case_list.item(i)
+            p = it.data(_Qt.UserRole)
+            if p and "三星" in p:
+                it.setCheckState(_Qt.Checked)
+        qapp.processEvents()
+        before = _checked_groups(w)
+        assert before == {"三星": 2}, f"前置条件没准备好: {before}"
+
+        w._collapsed_groups.add("三星")        # 收起该组
+        w._fill_case_list()
+        qapp.processEvents()
+        w._collapsed_groups.discard("三星")     # 再展开
+        w._fill_case_list()
+        qapp.processEvents()
+        assert _checked_groups(w) == before, \
+            f"折叠再展开后勾选丢了: {before} -> {_checked_groups(w)}"
     finally:
         w.close()

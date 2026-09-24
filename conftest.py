@@ -18,20 +18,13 @@ from core.driver import BASE_DIR, load_config  # noqa: E402
 from core.excel_report import ExcelReport  # noqa: E402
 
 
-def _clean_debug_dir():
-    """清空 Test_img/debug —— room_zones 会往这里写标注图,历史产物越积越多,
-    残留的旧图会让人误以为是本轮结果。"""
-    debug_dir = os.path.join(BASE_DIR, "Test_img", "debug")
-    if not os.path.isdir(debug_dir):
-        return
-    for f in os.listdir(debug_dir):
-        try:
-            os.remove(os.path.join(debug_dir, f))
-        except OSError:
-            pass
-
-
-_clean_debug_dir()   # 模块加载时清一次(收集阶段就执行)
+# ★ 这里曾有 `_clean_debug_dir()`: 在模块加载时(收集阶段)清空 Test_img/debug/,
+#   本意是"残留旧图会被误认为本轮结果"。但它删的是**用户真实目录**里的产物 ——
+#   实测: 只跑一个与地图无关的 tests/test_ocr_fallback.py, 真机刚生成的
+#   map_zone.png 等诊断图就被删掉了。
+#   现在测试产物的隔离已由 tests/conftest.py::_isolate_base_dir 从**写入端**解决
+#   (map_ops/trace/vision 等的 BASE_DIR 逐个钉到临时目录), 测试不再往仓库写图,
+#   因此无需再删真实目录; 真机运行留下的诊断图由用户自己决定何时清理。
 
 
 def pytest_addoption(parser):

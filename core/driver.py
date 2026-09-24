@@ -6,6 +6,7 @@ BASE_DIR 不依赖 pytest 启动目录 —— GUI 与 pytest 两条入口共用�
 """
 import os
 import re
+import tempfile
 
 import yaml
 
@@ -13,6 +14,31 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CONFIG_PATH = os.path.join(BASE_DIR, "config", "config.yaml")
 
 _ENCRYPTED_HEADER = b"%TSD-Header"
+
+
+def _atomic_write(path, text, newline=""):
+    """原子写文本: 先写同目录临时文件, 再 os.replace 覆盖目标。
+
+    ★ 为什么不用直接 `open(path, "w")`: 该模式会**立即截断**目标文件。写入途中
+      进程被中断(崩溃/被杀/磁盘满), 或序列化本身抛异常, 用户的配置就只剩半截
+      甚至 0 字节。而用户的 config.yaml 被 .gitignore 忽略、没有版本保护, 丢了
+      只能手工重建。
+      os.replace 在同一文件系统上是原子的 —— 要么旧文件完整, 要么新文件完整,
+      不会出现"写坏一半"的中间态。临时文件同目录创建, 保证同一文件系统。
+    """
+    d = os.path.dirname(os.path.abspath(path))
+    os.makedirs(d, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=d, prefix=".tmp_", suffix="_" + os.path.basename(path))
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline=newline) as f:
+            f.write(text)
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        raise
 
 
 class YamlFileError(ValueError):
@@ -56,11 +82,17 @@ def load_group_preconditions(app_group):
 
 
 def save_group_preconditions(app_group, items):
-    """写该组的前置条件(整体覆盖该文件); 返回写入路径"""
+    """写该组的前置条件(整体覆盖该文件); 返回写入路径
+
+    ★ 必须先序列化再落盘。原实现把 `yaml.safe_dump` 写在 `open(path, "w")` **之后**,
+      一旦 items 里有 YAML 无法表示的对象(GUI 传来的非标准类型等), safe_dump 抛
+      RepresenterError 时文件已被截断 —— 实测 129 字节 → 0 字节, 且异常抛出后用户
+      并不知道内容已经没了。同模块的 save_preconditions 本来就是先序列化的,
+      两条路径的安全性由此保持一致。
+    """
     path = group_preconditions_path(app_group)
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, "w", encoding="utf-8", newline="\n") as f:
-        yaml.safe_dump({"preconditions": items}, f, allow_unicode=True, sort_keys=False)
+    body = yaml.safe_dump({"preconditions": items}, allow_unicode=True, sort_keys=False)
+    _atomic_write(path, body, newline="\n")
     return path
 
 
@@ -147,8 +179,7 @@ def save_preconditions(items, path=None):
                 end = j
                 break
         new_text = "".join(lines[:start]) + body + "".join(lines[end:])
-    with open(path, "w", encoding="utf-8", newline="") as f:
-        f.write(new_text)
+    _atomic_write(path, new_text)
 
 
 def update_config(updates, path=None):
@@ -174,14 +205,13 @@ def update_config(updates, path=None):
             lines = _set_scalar(lines, section, key, value)
         else:
             lines = _set_top_scalar(lines, spec, value)
-    with open(path, "w", encoding="utf-8", newline="") as f:
-        f.writelines(lines)
+    _atomic_write(path, "".join(lines))
 
 
 def _set_top_scalar(lines, key, value):
     """更新顶层零缩进标量(如 target_device),保留行内注释;不存在则追加末尾"""
     val = _fmt_scalar(value)
-    key_re = re.compile(r"^(" + re.escape(key) + r":)([^\n#]*?)(\s+#.*)?$")
+    key_re = re.compile(r"^(" + re.escape(key) + r":)(" + _SCALAR_PAT + r")(\s+#.*)?$")
     for i, line in enumerate(lines):
         m = key_re.match(line.rstrip("\r\n"))
         if m:
@@ -202,11 +232,19 @@ def _fmt_scalar(value):
     return s
 
 
+# 值部分的匹配式: 前导空白 + (双引号串(含转义) / 单引号串 / 裸标量到 # 或行尾)。
+# ★ 必须区分「引号内的 #」与「真正的行内注释」: 只用 `[^\n#]*?` 时, 值形如
+#   "Robot #1" 的行会把 ` #1"` 当成注释原样保留, 于是每次回写都在行尾累积一份 ——
+#   实测 "Robot #1" → "Robot #1" #1" → "Robot #1" #1" #1", 值语义虽还对, 文件却越写越脏。
+# ★ 前导 `\s*` 不能省: 冒号后是 ` "值"`(带空格), 不先吃掉空白, 引号分支永远匹配不上。
+_SCALAR_PAT = r'\s*(?:"(?:[^"\\]|\\.)*"|\'[^\']*\'|[^\n#]*?)'
+
+
 def _set_scalar(lines, section, key, value):
     """在指定 section 下更新标量键,保留行内注释;不存在则插入 section 首位"""
     val = _fmt_scalar(value)
     in_sec = False
-    key_re = re.compile(r"^(\s+)(" + re.escape(key) + r":)([^\n#]*?)(\s+#.*)?$")
+    key_re = re.compile(r"^(\s+)(" + re.escape(key) + r":)(" + _SCALAR_PAT + r")(\s+#.*)?$")
     for i, line in enumerate(lines):
         m = re.match(r"^([^\s#][^:]*):", line)
         if m:  # 顶层键切换 section

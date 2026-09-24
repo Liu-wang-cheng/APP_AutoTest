@@ -111,7 +111,8 @@ def test_prepare_items_runs_in_order_and_reports(monkeypatch):
     """按列表顺序执行, 结果含 key/desc/ok; 未勾选(disabled)的被跳过"""
     calls = []
     monkeypatch.setattr(session, "restart_app",
-                        lambda d, cfg, enter_page=True: calls.append("restart"))
+                        lambda d, cfg, enter_page=True, should_cancel=None:
+                        calls.append("restart"))
     monkeypatch.setattr(session, "ensure_charging",
                         lambda d, **kw: calls.append("charging") or True)
     monkeypatch.setattr(session, "ensure_battery",
@@ -820,3 +821,100 @@ def test_precondition_order_arrows_are_visible(qapp):
             assert "padding" in b.styleSheet(), "小按钮必须内联覆盖全局 padding"
     finally:
         dlg.close()
+
+
+# ── 2026-09-24 审查修复: 按组取前置 / 组前置写入安全 ──
+
+def test_resolve_group_preconditions_empty_list_does_not_fall_back():
+    """★ 某组前置「全部取消勾选」(空列表) 不得回退去执行别的组的前置。
+
+    回归守护: 原实现是 `pre_by_group.get(group) or self.pre_items` —— 空列表 falsy,
+    于是把「这组有意不做前置」当成「没配过」, 实际跑了当前界面组的前置。
+    实测: ZZZ 组界面 0 条, 实际执行 1 条(可能是重启 APP / 等充电这类重动作)。
+    """
+    from gui.runner_thread import resolve_group_preconditions
+    fallback = [{"type": "restart", "enabled": True}]
+    by_group = {"AAA": [{"type": "charging", "enabled": True}], "ZZZ": []}
+
+    assert resolve_group_preconditions(by_group, "ZZZ", fallback) == [], \
+        "空列表被当成'没配过', 回退到了别组的前置"
+    assert resolve_group_preconditions(by_group, "AAA", fallback) == by_group["AAA"]
+    # 真的没配过的组才用 fallback
+    assert resolve_group_preconditions(by_group, "未配过的组", fallback) == fallback
+    # 旧调用方传空/None 也要兜住
+    assert resolve_group_preconditions({}, "任意组", fallback) == fallback
+    assert resolve_group_preconditions(None, "任意组", fallback) == fallback
+
+
+def test_group_preconditions_save_failure_keeps_file():
+    """★ 序列化失败时原组配置必须完好(不能只剩 0 字节)。
+
+    回归守护: 原实现把 `yaml.safe_dump` 写在 `open(path, "w")` **之后** —— items 里
+    混入 YAML 无法表示的对象时 safe_dump 抛 RepresenterError, 而此刻文件已被截断
+    (实测 129 字节 → 0 字节); 异常抛出后用户并不知道内容已经没了。
+    """
+    from core import driver
+    good = [{"type": "charging", "enabled": True, "ready_text": "充电"}]
+    p = driver.save_group_preconditions("组安全", good)
+    before = open(p, encoding="utf-8").read()
+    assert before
+
+    with pytest.raises(Exception):
+        driver.save_group_preconditions("组安全", good + [{"type": "x", "obj": object()}])
+
+    assert open(p, encoding="utf-8").read() == before, "序列化失败把原配置清空了"
+    assert driver.load_group_preconditions("组安全") == good
+
+
+def test_steps_precondition_gets_device_name_and_cancel():
+    """★ 「自定义步骤」前置新建的 runner 必须拿到 device_name 与取消回调。
+
+    回归守护:
+      · 漏传 device_name → "插件页整页读不出文本就重进设备页"用不了, 同一条断言
+        在前置里失败、在正式用例里却能过(实测拿到的是空串)。
+      · 没有取消回调 → 用户点停止后这串前置会一路跑完(实测 4s 的等待步骤跑满 4.0s,
+        因为新建的 runner 拿不到主 runner 的 stop())。
+    """
+    from core import registry as reg
+    import core.actions        # noqa: F401
+
+    seen = {}
+    cancel = {"v": False}
+    try:
+        @reg.action("probe_pre_ctx", priority=1)
+        def _probe(runner, step):
+            seen["device_name"] = runner.device_name
+            cancel["v"] = True          # 第 1 步之后请求停止
+
+        @reg.action("probe_pre_after", priority=1)
+        def _after(runner, step):
+            seen["second_ran"] = True   # 这步不该被执行
+
+        class _D:
+            serial = "d"
+
+            @property
+            def info(self):
+                return {}
+
+            def dump_hierarchy(self):
+                return '<hierarchy><node text="x"/></hierarchy>'
+
+            def click(self, *a, **k):
+                pass
+
+        cfg = {"target_device": "我的扫地机",
+               "runner": {"step_interval": 0, "default_timeout": 1}}
+        session._run_one(_D(), cfg,
+                         {"type": "steps", "name": "探针",
+                          "steps": [{"desc": "查上下文", "probe_pre_ctx": True},
+                                    {"desc": "停止后不该执行", "probe_pre_after": True}]},
+                         None, lambda: cancel["v"])
+    finally:
+        reg.ACTIONS.pop("probe_pre_ctx", None)
+        reg.ACTIONS.pop("probe_pre_after", None)
+
+    assert seen.get("device_name") == "我的扫地机", \
+        "steps 前置的 runner 漏传 device_name(与正式用例行为不一致)"
+    assert "second_ran" not in seen, \
+        "取消信号没穿透到 steps 前置(点停止后它还会跑完剩余步骤)"

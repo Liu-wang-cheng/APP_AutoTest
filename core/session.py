@@ -73,8 +73,8 @@ def is_charging(d, text=None):
     ★ 轮询里带 WebView 预热 —— 设备页是插件页, 文本要完整层级 dump 才进无障碍树。
     """
     texts = _split_texts(text) or _split_texts(DEFAULT_CHARGING_TEXT)
-    warm_webview(d)
-    return _any_present(d, texts)
+    xml = warm_webview(d)        # 预热一次, 下面复用 —— 否则 _any_present 内部会再 dump 一次
+    return _any_present(d, texts, xml=xml)
 
 
 def click_template(d, img_name, timeout=10):
@@ -91,10 +91,36 @@ def click_template(d, img_name, timeout=10):
     return None
 
 
-def _wait_foreground(d, package, timeout=20):
+def _sleep(seconds, should_cancel=None):
+    """可中断等待: 收到停止请求立刻返回 False(未睡满), 睡满返回 True。
+
+    ★ 前置里的裸 `time.sleep` 会让"停止"完全失效 —— 实测最坏情况: 用户点停止后
+      worker 还卡在 restart_app 的 sleep(10) / _wait_foreground 的 20s 轮询 /
+      ensure_map_loaded 的 6×10s 里, 要等 1~2 分钟才响应, 用户以为卡死就去关窗口
+      (那会引出线程生命周期的问题)。有 should_cancel 时以 0.2s 粒度响应取消。
+
+    ★ 没有 should_cancel 时走**裸 time.sleep**: 既零额外开销, 也保住测试的可替换性
+      (测试常把 time.sleep 换成 no-op 跳过等待; 若这里也走轮询, 时间不推进就会忙循环)。
+    """
+    if not should_cancel:
+        time.sleep(seconds)
+        return True
+    end = time.time() + max(0.0, seconds)
+    while True:
+        if should_cancel():
+            return False
+        remain = end - time.time()
+        if remain <= 0:
+            return True
+        time.sleep(min(0.2, remain))
+
+
+def _wait_foreground(d, package, timeout=20, should_cancel=None):
     """轮询等待 APP 处于前台;超时返回 False(疑似闪退)"""
     end = time.time() + timeout
     while time.time() < end:
+        if should_cancel and should_cancel():
+            return False                # 用户请求停止: 别再等
         try:
             if d.app_current().get("package") == package:
                 return True
@@ -104,48 +130,55 @@ def _wait_foreground(d, package, timeout=20):
     return False
 
 
-def _heal_if_dead(d, package):
+def _heal_if_dead(d, package, should_cancel=None):
     """APP 不在前台(疑似闪退)时补拉一次;拉不起来抛 RuntimeError"""
-    if _wait_foreground(d, package, timeout=5):
+    if _wait_foreground(d, package, timeout=5, should_cancel=should_cancel):
         return
     log.warning("[前置] APP 中途退出(疑似闪退),补一次启动")
     d.app_start(package)
-    if not _wait_foreground(d, package, timeout=20):
+    if not _wait_foreground(d, package, timeout=20, should_cancel=should_cancel):
         raise RuntimeError("APP 补拉后仍未到前台,请检查模拟器环境")
 
 
-def restart_app(d, cfg, enter_page=True):
+def restart_app(d, cfg, enter_page=True, should_cancel=None):
     """重启 APP 并进入目标设备页面
 
     带启动自愈(2026-09-17):模拟器转译层偶发"启动即闪退",检测到 APP 没到
     前台就自动补拉(最多 3 次)。正常启动时前台轮询取代固定 sleep(10),
     几乎零额外开销;只有真闪退才多花一次重启的时间。
+
+    should_cancel: 收到停止请求时尽快退出(所有等待都走可中断的 _sleep)——
+    否则这一段最坏要 90s+ 才响应"停止"。
     """
     app_cfg = cfg["app"]
     package = app_cfg["package"]
     d.app_stop(package)
-    time.sleep(2)
+    _sleep(2, should_cancel)
 
     started = False
     for i in range(3):
+        if should_cancel and should_cancel():
+            return
         d.app_start(package, app_cfg.get("main_activity"))
-        if _wait_foreground(d, package, timeout=20):
+        if _wait_foreground(d, package, timeout=20, should_cancel=should_cancel):
             started = True
             break
         log.warning(f"[前置] APP 启动后未到前台(疑似闪退),第 {i + 1}/3 次自愈重启")
         d.app_stop(package)
-        time.sleep(3)
+        _sleep(3, should_cancel)
     if not started:
+        if should_cancel and should_cancel():
+            return
         raise RuntimeError(f"APP {package} 反复启动失败(疑似持续闪退),请检查模拟器")
 
-    time.sleep(8)                       # 首页数据加载
+    _sleep(8, should_cancel)            # 首页数据加载
     device_name = cfg.get("target_device", "")
     if enter_page and device_name:
-        _heal_if_dead(d, package)       # 进设备页前:APP 中途闪退兜底
+        _heal_if_dead(d, package, should_cancel)   # 进设备页前:APP 中途闪退兜底
         if d(text=device_name).exists(timeout=10):
             d(text=device_name).click()
-            time.sleep(10)
-            _heal_if_dead(d, package)   # 进设备页后:偶发闪退兜底
+            _sleep(10, should_cancel)
+            _heal_if_dead(d, package, should_cancel)   # 进设备页后:偶发闪退兜底
             log.info(f"[前置] 已进入 {device_name} 设备页面")
         else:
             log.warning(f"[前置] 未找到设备 {device_name}")
@@ -158,23 +191,27 @@ LIST_PAGE_MARKS = ("主页", "日常程序", "收藏")
 DEFAULT_DEVICE_READY_TEXT = "设备控制,服务"
 
 
-def _wait_texts(d, texts, timeout):
+def _wait_texts(d, texts, timeout, should_cancel=None):
     """在 timeout 内轮询: texts 任一出现 → 返回命中的那个; 超时返回 None。
 
-    ★ 直接复用 `_any_present` —— 它已包含 WebView 预热 + **OCR 兜底**, 这里不再
+    ★ 直接复用 `text_present` —— 它已包含 WebView 预热 + **OCR 兜底**, 这里不再
       自己拼一套只读无障碍树的判断(插件页树稀疏时那套会一直判不到)。
+      每次轮询只 dump 一次, 所有候选共用(逐个 _any_present 会 dump N 次)。
     """
     end = time.time() + timeout
     while True:
+        if should_cancel and should_cancel():
+            return None
+        xml = warm_webview(d)
         for t in texts:
-            if _any_present(d, [t]):
+            if text_present(d, [t], xml=xml):
                 return t
         if time.time() >= end:
             return None
         time.sleep(1)
 
 
-def _enter_device_page(d, device_name):
+def _enter_device_page(d, device_name, should_cancel=None):
     """从**列表页**点设备名进设备页; 不在列表页就先退一层再试(最多 3 层)。
 
     ⚠ 只在"确认处于列表页"时才点: 设备页上设备名是 WebView 的标题(铺满全屏),
@@ -183,20 +220,22 @@ def _enter_device_page(d, device_name):
     if not device_name:
         return False
     for attempt in range(3):
+        if should_cancel and should_cancel():
+            return False
         if _any_present(d, LIST_PAGE_MARKS) and d(text=device_name).exists(timeout=5):
             d(text=device_name).click()
-            time.sleep(8)               # 等插件页加载
+            _sleep(8, should_cancel)    # 等插件页加载
             return True
         if _any_present(d, DEVICE_PAGE_MARKS):
             return False                # 已经在设备页(只是没确认到), 别再乱点
         log.info(f"[前置] 当前不在设备列表页, 返回上一层再试(第 {attempt + 1}/3 次)")
         d.press("back")
-        time.sleep(3)
+        _sleep(3, should_cancel)
     return False
 
 
 def ensure_device_page(d, device_name="", ready_text=DEFAULT_DEVICE_READY_TEXT,
-                       timeout=30, rounds=3):
+                       timeout=30, rounds=3, should_cancel=None):
     """确保已进入设备页: **用特定文本确认**; 确认不了就重新执行进入操作。
 
     ★ 用户要求(2026-09-24): 进入设备页也要是一个前置条件, 而且必须靠特定文本
@@ -205,52 +244,29 @@ def ensure_device_page(d, device_name="", ready_text=DEFAULT_DEVICE_READY_TEXT,
     ★ 单轮确认默认 30s: 插件页文本要预热才可读(见 warm_webview)。
 
     返回 True 已确认进入 / False 多轮后仍确认不到(按前置语义会阻断本轮执行)。
+    should_cancel: 收到停止请求时尽快退出(本函数最坏耗时 110s+)
     """
     texts = _split_texts(ready_text) or _split_texts(DEFAULT_DEVICE_READY_TEXT)
     rounds = max(1, int(rounds))
     for r in range(rounds):
-        hit = _wait_texts(d, texts, timeout)
+        if should_cancel and should_cancel():
+            return False
+        hit = _wait_texts(d, texts, timeout, should_cancel)
         if hit:
             log.info(f"[前置] 已确认进入设备页(命中「{hit}」)")
             return True
         log.warning(f"[前置] 第 {r + 1}/{rounds} 次未确认进入设备页, 重新执行进入操作...")
-        _enter_device_page(d, device_name)
+        _enter_device_page(d, device_name, should_cancel)
     log.warning(f"[前置] {rounds} 轮仍未确认进入设备页({ready_text}), 继续执行——后续步骤会暴露")
     return False
 
 
-# 插件页所在的 Activity 片段(SmartThings 设备页 = .webplugin.WebPluginActivity)。
-# 仅用于"整页文本读不出来时要不要重进"的判断 —— 别的页面不碰。
-PLUGIN_ACTIVITY_HINT = "WebPlugin"
-
-
-def plugin_page_unreadable(d):
-    """当前停在插件页、但整页文本都读不出来(只剩标题/时间)。
-
-    ★ 真机实测(2026-09-24): 插件页切视图后无障碍树可能整体消失, 且**不会自己恢复**
-      (40s+ dump 无效), 只能重新进入设备页(实测 5s 恢复)。断言/前置遇到这种情况
-      要重进一次再继续等, 否则只能干等到超时(用户实测: 断言 30s 超时失败)。
-    """
-    try:
-        act = (d.app_current() or {}).get("activity", "") or ""
-    except Exception:
-        return False
-    return PLUGIN_ACTIVITY_HINT in act and not device_page_readable(d)
-
-
-def device_page_readable(d, min_texts=5):
-    """设备页(插件 WebView)的内容此刻能不能读到。
-
-    ★ 真机实测(2026-09-24): 插件页有时**整块内容都不在无障碍树里** —— dump 出来
-      只剩标题(`扫地机器人0087`)和时间 2 条, 此时无论配什么判定文本都读不到,
-      充电/地图/断言会全部"判不到"。这种情况重进一次设备页能恢复(实测多次)。
-    """
-    try:
-        xml = d.dump_hierarchy()
-    except Exception:
-        return False
-    texts = [t for t in re.findall(r'text="([^"]*)"', xml) if t]
-    return len(texts) >= min_texts
+# ★ 这里曾有 plugin_page_unreadable() / device_page_readable() / PLUGIN_ACTIVITY_HINT:
+#   用来判断"插件页整页文本读不出来, 就重进一次设备页"。
+#   删掉的原因(2026-09-24 审查): ① 全项目零调用方, 是从未接线的死代码;
+#   ② 判据本身("可见文本 < 5 条 ⇒ 页面主体没暴露")已经活在 core/ocr.py 的 sparse() 里 ——
+#      text_present 遇到这种情况会直接走 OCR 兜底(截图识别), 比"重进一次再赌它能恢复"
+#      更直接可靠。故删除, 别再往回加。
 
 
 def ensure_charging(d, timeout=1200, on_progress=None, should_cancel=None,
@@ -258,7 +274,6 @@ def ensure_charging(d, timeout=1200, on_progress=None, should_cancel=None,
     """确保设备处于充电状态(未充电则回充),默认超时 20 分钟;should_cancel 可中断等待
 
     ready_text:  充电判定文本(可配置, 多个用逗号/顿号分隔);留空用默认「充电」
-    device_name: 设备名称 —— 用于"页面内容读不出来时重进设备页"(见 device_page_readable)
     """
     charging = is_charging(d, ready_text)
     if charging:
@@ -391,17 +406,21 @@ def text_present(d, texts, xml=None):
     return False
 
 
-def _any_present(d, texts):
+def _any_present(d, texts, xml=None):
     """texts 里任一文本出现在屏幕上(兼容旧调用点: 转发到 text_present)。
+
+    xml: 调用方已经 warm 过一次就传进来 —— 否则这里会**再 dump 一次**,
+         轮询里等于把设备 I/O 翻倍(见各调用点的注释)。
 
     ⚠ 历史坑: 多值曾用 `d(textMatches="a|b")` —— Android 的 textMatches 是
       **整串匹配**(Pattern.matches), 不是子串匹配, 于是"多文本反而比单文本更差"
       (真机实测: 单值「满电」→ True, 「充电,满电」→ False)。子串语义必须自己来。
     """
-    return text_present(d, texts)
+    return text_present(d, texts, xml=xml)
 
 def ensure_map_loaded(d, timeout=10, device_name="", rounds=6,
-                      ready_text="地图编辑", loading_text="地图正在加载"):
+                      ready_text="地图编辑", loading_text="地图正在加载",
+                      should_cancel=None):
     """等待地图加载:正常 10s 内就能加载出来;超时自动退出重进设备页面
 
     ★ ready_text / loading_text 可配置(GUI 前置条件里可编辑) —— 换 APP 时
@@ -416,19 +435,23 @@ def ensure_map_loaded(d, timeout=10, device_name="", rounds=6,
     for r in range(rounds):
         end = time.time() + timeout
         while time.time() < end:
-            warm_webview(d)      # ★ WebView 文本预热(dump 才会让插件页文本进树)
-            if _any_present(d, ready) and not _any_present(d, loading):
+            if should_cancel and should_cancel():
+                return False
+            # ★ WebView 文本预热(dump 才会让插件页文本进树); 一次 dump 供下面两个
+            #   判断复用 —— 这个循环每 2s 一轮, 不复用就是每轮 3 次 dump
+            xml = warm_webview(d)
+            if _any_present(d, ready, xml=xml) and not _any_present(d, loading, xml=xml):
                 log.info("[前置] 地图已加载" + (f"(第{r + 1}轮)" if r else ""))
                 return True
-            time.sleep(2)
+            _sleep(2, should_cancel)
         if r < rounds - 1 and device_name:
             # 退出设备页回到列表再重新进入,触发地图重新加载
             log.warning(f"[前置] 地图 {timeout}s 未就绪,退出重进设备页面(第 {r + 1} 次)")
             d.press("back")
-            time.sleep(3)
+            _sleep(3, should_cancel)
             if d(text=device_name).exists(timeout=10):
                 d(text=device_name).click()
-                time.sleep(5)
+                _sleep(5, should_cancel)
     log.warning(f"[前置] 地图 {rounds} 轮重进后仍未就绪,继续执行")
     return False
 
@@ -452,17 +475,18 @@ def ensure_text_check(d, wait_text="", absent_text="", timeout=60,
         log.info(f"[前置] {label}: 未配置判断文本,跳过")
         return True
 
-    def _ok():
-        if waits and not _any_present(d, waits):
+    def _ok(xml):
+        if waits and not _any_present(d, waits, xml=xml):
             return False
-        if absents and _any_present(d, absents):
+        if absents and _any_present(d, absents, xml=xml):
             return False
         return True
 
     end = time.time() + timeout
     while time.time() < end:
-        warm_webview(d)          # ★ 同上: WebView 文本预热
-        if _ok():
+        # ★ 预热一次供两个判断复用(原本最多 dump 3 次)
+        xml = warm_webview(d)
+        if _ok(xml):
             log.info(f"[前置] {label}: 条件已满足")
             return True
         if should_cancel and should_cancel():
@@ -570,7 +594,7 @@ def _run_one(d, cfg, item, on_progress, should_cancel):
     """执行单个前置项(按 type 分发);返回 True/False"""
     t = item.get("type")
     if t == "restart":
-        restart_app(d, cfg)
+        restart_app(d, cfg, should_cancel=should_cancel)
         return True
     if t == "charging":
         return ensure_charging(d, timeout=int(item.get("timeout", 1200)),
@@ -583,14 +607,16 @@ def _run_one(d, cfg, item, on_progress, should_cancel):
             device_name=item.get("device_name") or cfg.get("target_device", ""),
             ready_text=item.get("ready_text") or DEFAULT_DEVICE_READY_TEXT,
             timeout=int(item.get("timeout", 30)),
-            rounds=int(item.get("rounds", 3)))
+            rounds=int(item.get("rounds", 3)),
+            should_cancel=should_cancel)
     if t == "map_load":
         return ensure_map_loaded(
             d, timeout=int(item.get("timeout", 10)),
             device_name=cfg.get("target_device", ""),
             rounds=int(item.get("rounds", 6)),
             ready_text=item.get("ready_text") or "地图编辑",
-            loading_text=item.get("loading_text") or "地图正在加载")
+            loading_text=item.get("loading_text") or "地图正在加载",
+            should_cancel=should_cancel)
     if t == "battery":
         return ensure_battery(d, min_level=int(item.get("min_level", 50)),
                               timeout=int(item.get("timeout", 1800)),
@@ -605,7 +631,14 @@ def _run_one(d, cfg, item, on_progress, should_cancel):
             return True
         from core.runner import ActionRunner
         runner = ActionRunner(d, (cfg.get("runner") or {}),
-                              case_name=item.get("name") or "前置步骤")
+                              case_name=item.get("name") or "前置步骤",
+                              # ★ 与正式用例保持一致: 漏传 device_name 时, 插件页整页
+                              #   读不出文本的"重进设备页"就用不了 —— 同一条断言在
+                              #   前置里失败、在用例里却能过(实测 device_name 为空串)。
+                              device_name=cfg.get("target_device", ""),
+                              # ★ 让"停止"能穿透到这串前置步骤(见 ActionRunner.stopped):
+                              #   否则用户点停止后它会一路跑完
+                              cancel_check=should_cancel)
         ok = runner.run_steps(steps)
         log.info(f"[前置] {item.get('name') or '自定义步骤'}: "
                  f"{'通过' if ok else '有步骤失败'}")
