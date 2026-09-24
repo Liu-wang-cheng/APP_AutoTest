@@ -363,37 +363,42 @@ def tap_blank(d, point=None):
     return True
 
 
-def _any_present(d, texts):
-    """texts 里任一文本出现在屏幕上 → True(空列表 → False)。
+def text_present(d, texts, xml=None):
+    """页面上有没有这些文本 —— **判断类统一入口**(原生优先, 树稀疏时 OCR 兜底)。
 
-    单个文本走 textContains(与旧行为完全一致)。
-    多个文本: **在层级 XML 的 text 属性里做子串查找**。
+    ① 原生: 一次层级 dump, 在 **text 与 content-desc 两个属性**里做子串匹配。
+       (必须含 content-desc —— `_find_element` 对找不到文本的元素会回退到
+        description; 判断类若不看 description, 就会出现"断言找得到、前置找不到"。)
+    ② OCR: 仅当"原生没命中"且"页面主体没暴露"(可见文本 < 5 条, 插件页切视图后的
+       典型症状)时, 截图识别一次(RapidOCR ≈1s/张, 同一帧 1.5s 缓存)。
+       正常页面一次 OCR 都不做 —— 不给判断加开销。
 
-    ⚠ 曾经用 `d(textMatches="a|b")` 实现多值 —— 错的! Android 的
-      `UiSelector.textMatches` 是**整串匹配**(Pattern.matches), 不是子串匹配:
-      文本是「已充满电 仅真空吸尘器」时, 正则 `充电|满电` 匹配不上(整条不等于
-      其中任何一个), 于是"多文本反而比单文本更差"(真机实测: 单值 满电 → True,
-      而 充电,满电 → False)。子串语义必须自己来。
-
-    ★ 兜底(用户定的方向: 原生优先, OCR 兜底): 原生查不到**且页面主体没暴露**
-      (插件页切换视图后的典型症状)时, 用截图 OCR 再认一次。
+    xml: 调用方已经 dump 过就传进来, 省一次 dump(如断言轮询里)。
     """
-    if not texts:
+    wanted = [t for t in (texts or []) if t]
+    if not wanted:
         return False
-    xml = warm_webview(d)          # 一次 dump: 预热 + 供多值匹配/稀疏判断
-    values = re.findall(r'text="([^"]*)"', xml)
-    if len(texts) == 1:
-        if d(textContains=texts[0]).exists(timeout=1):
-            return True
-    elif any(t in v for t in texts for v in values):
+    if xml is None:
+        xml = warm_webview(d)
+    values = re.findall(r'(?:text|content-desc)="([^"]*)"', xml)
+    if any(t in v for t in wanted for v in values):
         return True
     if ocr.sparse(xml) and ocr.available():
-        hit = ocr.find(d, texts)
+        hit = ocr.find(d, wanted)
         if hit:
             log.info(f"[OCR兜底] 无障碍树里没有, 截图识别命中「{hit}」")
             return True
     return False
 
+
+def _any_present(d, texts):
+    """texts 里任一文本出现在屏幕上(兼容旧调用点: 转发到 text_present)。
+
+    ⚠ 历史坑: 多值曾用 `d(textMatches="a|b")` —— Android 的 textMatches 是
+      **整串匹配**(Pattern.matches), 不是子串匹配, 于是"多文本反而比单文本更差"
+      (真机实测: 单值「满电」→ True, 「充电,满电」→ False)。子串语义必须自己来。
+    """
+    return text_present(d, texts)
 
 def ensure_map_loaded(d, timeout=10, device_name="", rounds=6,
                       ready_text="地图编辑", loading_text="地图正在加载"):

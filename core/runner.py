@@ -14,7 +14,7 @@ from core import registry as reg
 import core.actions  # noqa: F401  导入即注册全部动作(见 core/actions/__init__.py)
 from core.driver import BASE_DIR, split_texts
 from core import ocr                          # 文本兜底: 原生读不到时截图识别
-from core.session import warm_webview        # WebView 文本预热(见 warm_webview 注释)
+from core.session import text_present, warm_webview   # 判断统一入口 + WebView 预热
 from core.logger import get_logger
 from core.trace import TraceRecorder
 from vlm.backend import VisionRouter
@@ -260,32 +260,19 @@ class ActionRunner:
         return el
 
     def _text_present(self, *texts, timeout=None):
-        """页面上有没有这些文本 —— **判断类统一走这里**(原生优先, OCR 兜底)。
+        """判断类统一入口(转发 session.text_present): 原生优先 → 树稀疏时 OCR 兜底。
 
-        ★ 为什么要有这个入口(2026-09-24 真机实测): SmartThings 插件页切视图后
-          **主体内容不再提供可访问节点**(只剩标题和个别按钮), 此时 uiautomator 的
-          所有文本 API 都读不到 —— 只读无障碍树的判断(if 条件/wait_for/wait_loading/
-          地图状态…)会集体判错。这里统一: 先查树, 树稀疏时再用截图 OCR 认一次。
-
-        timeout: 给了就轮询等待(等价原 `d(textContains=..).exists(timeout=..)` 语义)
+        ★ 插件页(WebView)切视图后主体不再提供可访问节点, 只读无障碍树的判断
+          (if 条件/wait_for/wait_loading…)会集体判错 —— 见 core/ocr.py 注释。
+        timeout: 给了就轮询等待(等价原 `d(textContains=..).exists(timeout=..)`)
         """
         wanted = [t for t in texts if t]
         if not wanted:
             return False
         end = time.time() + timeout if timeout else None
         while True:
-            try:
-                xml = self.d.dump_hierarchy()
-            except Exception:
-                xml = ""
-            values = re.findall(r'text="([^"]*)"', xml)
-            if any(t in v for t in wanted for v in values):
+            if text_present(self.d, wanted):
                 return True
-            if ocr.sparse(xml) and ocr.available():
-                hit = ocr.find(self.d, wanted)
-                if hit:
-                    log.info(f"[OCR兜底] 无障碍树里没有, 截图识别命中「{hit}」")
-                    return True
             if end is None or time.time() >= end:
                 return False
             self._sleep(1)
@@ -470,12 +457,10 @@ class ActionRunner:
             for v in values:
                 if self._find_element(v).exists(timeout=1):
                     return
-            # ★ 兜底(用户定的方向: 原生优先, OCR 兜底): 页面主体没暴露时截图识别
-            if ocr.sparse(xml) and ocr.available():
-                hit = ocr.find(self.d, values)
-                if hit:
-                    log.info(f"[OCR兜底] 无障碍树里没有, 截图识别命中「{hit}」")
-                    return
+            # ★ 兜底(用户定的方向: 原生优先, OCR 兜底): 页面主体没暴露时截图识别。
+            #   复用统一入口并带上本次的 xml —— 省一次 dump, 且语义与其它判断一致
+            if text_present(self.d, values, xml=xml):
+                return
             check_count += 1
             self._poll_sleep(check_count)
 

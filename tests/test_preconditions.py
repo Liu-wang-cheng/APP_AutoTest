@@ -599,14 +599,19 @@ def test_map_load_and_text_check_warm_webview(monkeypatch):
     monkeypatch.setattr(session.time, "sleep", lambda s: None)
     dev = FakeDev(present=("地图编辑",))
     calls = {"n": 0}
-    dev.dump_hierarchy = lambda: calls.__setitem__("n", calls["n"] + 1) or ""
+    # 计数同时要返回"能看到 present"的层级(判断类现在读层级)
+    dev.dump_hierarchy = lambda: (
+        calls.__setitem__("n", calls["n"] + 1)
+        or "".join(f'<node text="{p}"/>' for p in sorted(dev.present)))
     assert session.ensure_map_loaded(dev, timeout=0.01, rounds=1,
                                      ready_text="地图编辑") is True
     assert calls["n"] >= 1, "地图加载没有预热"
 
     dev2 = FakeDev(present=("首页",))
     calls2 = {"n": 0}
-    dev2.dump_hierarchy = lambda: calls2.__setitem__("n", calls2["n"] + 1) or ""
+    dev2.dump_hierarchy = lambda: (
+        calls2.__setitem__("n", calls2["n"] + 1)
+        or "".join(f'<node text="{p}"/>' for p in sorted(dev2.present)))
     assert session.ensure_text_check(dev2, wait_text="首页", timeout=0.01) is True
     assert calls2["n"] >= 1, "文本检查没有预热"
 
