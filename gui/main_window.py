@@ -46,6 +46,9 @@ CASE_STATE_ROLE = int(Qt.UserRole) + 1     # item 存状态字符串
 _LAMP_SIZE = 12                            # 状态灯直径
 _ARROW_W = 44                              # 右侧箭头命中区宽(↑22 + ↓22)
 _FIELD_LABEL_W = 96                        # 步骤字段标签列固定宽(对齐整齐)
+# ★ 表单里的勾选框(自动截图等)的最小高度。真机抓屏发现: 被压到 13px 高时指示器
+#   画不全(悬停态尤其明显)。给足高度 + 关掉 hover 态, 见 _FormCheckBox 注释。
+_CHECK_MIN_H = 20
 
 
 def make_lamp_pixmap(color, size=_LAMP_SIZE):
@@ -534,7 +537,7 @@ def _make_field_widget(field, value, steps=None, exclude_index=None):
         combo.fit_width_to_items()
         return combo, combo.currentData
     if t == "bool":
-        w = QCheckBox()
+        w = _FormCheckBox()          # 整块可点 + 高度够, 见类注释(真机闪动/点不动)
         w.setChecked(bool(value))
         return w, w.isChecked
     if t == "int":
@@ -590,6 +593,42 @@ def _int4_of(w):
             return None
         return [int(p) for p in parts]
     return get
+
+
+class _FormCheckBox(QCheckBox):
+    """步骤表单里的勾选框(自动截图 / 条件 等)。
+
+    ⚠ 两个坑(真机抓屏实测):
+    1. **不能被拉宽**: 表单曾把它拉成 200px 宽, 而 Qt 只认指示器那一小块命中 →
+       右边一大片是死区(点不动); 若改成"整块都可点", 又会变成"点旁边空白也选中"
+       (用户实测反馈)。所以**保持自然大小**(_add_field 对它跳过宽度限制):
+       看到多少就能点多少, 两个毛病都没有。
+    2. **悬停时"闪动"**: 真机抓屏(1.5x DPI)看到 —— 未悬停时方框四条边完整, 鼠标
+       一悬停就只剩左边和上边, 右/下边整块缺失, 移开又恢复 ⇒ 一进一出闪两下。
+       修法: 关掉该控件的 hover 属性, 让它不进入悬停态(勾选框没有需要 hover 的
+       行为), 悬停前后像素完全一致(实测 0 差异), 方框两态都完整。
+       ⚠ 离屏平台不执行真实绘制, **测不出**这类裁切/悬停态问题, 必须真机抓屏。
+    """
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.setMinimumHeight(_CHECK_MIN_H)
+        self.setCursor(Qt.PointingHandCursor)
+        self._no_hover()
+
+    def _no_hover(self):
+        self.setAttribute(Qt.WA_Hover, False)
+
+    def event(self, ev):
+        # ⚠ 构造时关掉 WA_Hover 不够: QSS 在 polish 阶段会把它重新打开, 悬停态就
+        #   又画出来了(守护测试抓到)。所以在 polish / 样式变更之后再关一次。
+        res = super().event(ev)
+        if ev.type() in (QEvent.Polish, QEvent.StyleChange):
+            self._no_hover()
+        return res
+
+    # 不重写 hitButton: 控件本体就是指示器大小(见 _add_field 不给它拉宽),
+    # 于是"看到多少就能点多少", 不会出现点旁边空白也选中(用户明确要求)。
 
 
 class StepCard(QFrame):
@@ -785,7 +824,9 @@ class StepCard(QFrame):
         w, getter = _make_field_widget(field, self.step.get(field["key"]),
                                        steps=self.main.steps,
                                        exclude_index=self.index)
-        if isinstance(w, _FitCombo):
+        if isinstance(w, _FormCheckBox):
+            pass                     # ★ 勾选框保持自然大小: 拉宽会产生"点不动/点哪儿都算"
+        elif isinstance(w, _FitCombo):
             w.fit_width_to_items()   # 选择型下拉: 按最长项(内容驱动, 上限 420)
         else:
             w.setMinimumWidth(200)
@@ -822,7 +863,8 @@ class StepCard(QFrame):
             w, getter = _make_field_widget(sub, cur.get(sub["key"]),
                                            steps=self.main.steps,
                                            exclude_index=self.index)
-            w.setMinimumWidth(200)
+            if not isinstance(w, _FormCheckBox):
+                w.setMinimumWidth(200)     # 勾选框保持自然大小(见 _FormCheckBox)
             row_h.addWidget(w)
             hv.addLayout(row_h)
             sub_getters[sub["key"]] = getter
@@ -1650,6 +1692,7 @@ class MainWindow(QMainWindow):
         v.setContentsMargins(8, 6, 8, 6)
         v.setSpacing(5)
         v.addWidget(self._build_toolbar())
+        v.addWidget(self._build_status_line())   # ★ 状态提示独立一行(用户要求)
         v.addWidget(self._build_env_strip())
         # ★ 用例列表(左,固定宽 200) | 右列 = 组/用例信息条(上)+ 步骤详情(下)
         #   同一垂直列 —— 步骤详情与组信息同列,不横跨在列表/信息条下方
@@ -1772,8 +1815,23 @@ class MainWindow(QMainWindow):
         self.stop_btn.clicked.connect(self.on_stop)
         lay.addWidget(self.stop_btn)
 
+        return bar
+
+    def _build_status_line(self):
+        """状态提示行: 工具栏**下方**独立一整行。
+
+        ★ 用户反馈: 原来它在工具栏最右端, 而「报告已生成(部分执行): D:\\...\\xx.xlsx」
+        这类长文本会把工具栏那一行整体撑宽 → 窗口跟着变宽。移到下方独立一行, 并且
+        **不让它参与宽度决策**(水平策略 Ignored + 自动换行): 文本再长也只在自己这行
+        里排布, 不会把窗口撑大(与截图预览同一套路)。
+        """
+        bar = QWidget()
+        lay = QHBoxLayout(bar)
+        lay.setContentsMargins(0, 0, 0, 0)
         self.status_label = QLabel("就绪")
         self.status_label.setStyleSheet("color:#64748b;")
+        self.status_label.setWordWrap(True)
+        self.status_label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
         lay.addWidget(self.status_label)
         return bar
 

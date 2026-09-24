@@ -2414,6 +2414,92 @@ def test_name_save_not_duplicated_by_two_signals(qapp, monkeypatch, tmp_path, fa
         w.close()
 
 
+def test_status_line_below_toolbar_does_not_widen_window(qapp, monkeypatch, tmp_path):
+    """★ 状态提示(如「报告已生成(部分执行): D:\\...\\xx.xlsx」)必须在工具栏**下方**
+    独立一行, 不能待在工具栏最右端 —— 长文本会把那一行撑宽, 窗口跟着变大(用户反馈)。
+    """
+    import gui.main_window as mw
+    monkeypatch.setattr(mw, "CASES_DIR", str(tmp_path / "Test_cases"), raising=False)
+    monkeypatch.setattr(mw, "CONFIG_PATH", str(tmp_path / "config.yaml"), raising=False)
+    monkeypatch.setattr(mw, "load_config", lambda: {"app": {}, "device": {}}, raising=False)
+    monkeypatch.setattr(mw, "update_config", lambda d: None, raising=False)
+    w = mw.MainWindow()
+    w.resize(900, 700)
+    w.show()
+    try:
+        qapp.processEvents()
+        # ① 位置: 不与运行按钮同行(同行=会被长文本撑宽)
+        assert w.status_label.parent() is not w.run_btn.parent(), \
+            "状态提示不能和运行按钮挤在同一行"
+        # ② 不参与宽度决策
+        assert w.status_label.wordWrap(), "状态提示要能自动换行"
+        assert w.status_label.sizePolicy().horizontalPolicy() == mw.QSizePolicy.Ignored, \
+            "状态提示的水平策略必须是 Ignored(否则长文本仍会撑宽窗口)"
+        # ③ 关键断言: 塞一条超长提示, 窗口最小宽度不能变大
+        base = w.minimumSizeHint().width()
+        w.status_label.setText(
+            "报告已生成(部分执行): D:/claude_test/Auto_test/reports/涂鸦智能T4/"
+            "全局清扫_20260924_103000/全局清扫_执行报告_20260924_103000.xlsx")
+        qapp.processEvents()
+        assert w.minimumSizeHint().width() <= base + 2, \
+            f"长状态提示把窗口撑宽了: {base} → {w.minimumSizeHint().width()}"
+    finally:
+        w.close()
+
+
+def test_form_checkbox_full_click_area_and_no_hover_flash(qapp, monkeypatch, tmp_path):
+    """★ 表单勾选框(自动截图等)的实测缺陷守护:
+
+    1. **不能被拉宽**: 拉成 200px 后只有指示器那一小块能点(点 x=150 无反应);
+       改成整块可点又变成"点旁边空白也选中"(用户实测反馈) → 保持自然大小,
+       看到多少就能点多少。
+    2. 13px 高时指示器被裁切。
+    3. 悬停态原生指示器画残(右/下边缺失) → 一进一出"闪动"
+       (真机 1.5x DPI 抓屏验证: 关掉 WA_Hover 后悬停前后像素 0 差异;
+        可用 tools/check_render.py 复现与复验)
+    """
+    from PySide6.QtCore import Qt as _Qt, QPoint
+    from PySide6.QtTest import QTest
+    import gui.main_window as mw
+    monkeypatch.setattr(mw, "CASES_DIR", str(tmp_path / "Test_cases"), raising=False)
+    monkeypatch.setattr(mw, "CONFIG_PATH", str(tmp_path / "config.yaml"), raising=False)
+    monkeypatch.setattr(mw, "load_config", lambda: {"app": {}, "device": {}}, raising=False)
+    monkeypatch.setattr(mw, "update_config", lambda d: None, raising=False)
+    w = mw.MainWindow()
+    w.resize(1100, 700)
+    w.data = {"module": "组", "cases": [{"name": "c", "priority": "P1",
+                                        "steps": [{"desc": "步骤", "screenshot": True}]}]}
+    w.case_idx = 0
+    w.expanded_key = (0,)
+    w.render_cards()
+    w.show()
+    try:
+        qapp.processEvents()
+        card = w.cards_lay.itemAt(0).widget()
+        card._toggle_advanced()
+        qapp.processEvents()
+        cb = card.widgets["screenshot"]
+        # ① 用专用控件(不是裸 QCheckBox)
+        assert isinstance(cb, mw._FormCheckBox)
+        # ② 不进入悬停态 —— 悬停闪动的根因
+        assert not cb.testAttribute(_Qt.WA_Hover), \
+            "勾选框必须关掉 WA_Hover, 否则原生指示器悬停态会画残(真机实测)"
+        # ③ 高度够, 指示器不被裁切
+        assert cb.height() >= mw._CHECK_MIN_H, f"高度不足会裁切指示器: {cb.height()}"
+        # ④ 保持自然大小(不能被表单拉成 200px —— 否则要么点不动、要么点旁边空白也选中)
+        assert cb.width() <= cb.sizeHint().width() + 8, \
+            f"勾选框被拉宽了(现在 {cb.width()}px, 自然 {cb.sizeHint().width()}px)"
+        assert not cb.hitButton(QPoint(cb.width() - 1, cb.height() // 2)), \
+            "控件最右侧不该是命中区(否则点旁边空白也会切换)"
+        # ⑤ 点指示器本身必须能切换
+        before = cb.isChecked()
+        QTest.mouseClick(cb, _Qt.LeftButton, pos=QPoint(7, cb.height() // 2))
+        qapp.processEvents()
+        assert cb.isChecked() != before, "点指示器应能切换勾选状态"
+    finally:
+        w.close()
+
+
 def test_delete_current_history_clears_config(qapp, monkeypatch, tmp_path, fake_settings):
     """★ 用户要求: ✕ 删掉的若是「当前生效的值」, 连 config 一起清空。
 
