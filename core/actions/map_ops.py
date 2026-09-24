@@ -74,7 +74,7 @@ def do_room_zones(runner, step):
     bounds: [x1, y1, x2, y2] 地图区域,默认屏幕中间区域
 
     APP 冷启动后地图像素可能比"地图编辑"文本晚几秒才渲染出来 —— 识别不到
-    时等 5s 重试,最多 3 次(每轮标注图都存 reports/debug/map_zone.png)。
+    时等 5s 重试,最多 3 次(每轮标注图都存 Test_img/debug/map_zone.png)。
     """
     bounds = step.get("room_zones")
     if not isinstance(bounds, (list, tuple)) or len(bounds) != 4:
@@ -99,7 +99,7 @@ def do_room_zones(runner, step):
 
 
 def _detect_room_zones(runner, screen, bounds):
-    """单次分区识别:标注图存 reports/debug,返回 (分区列表, 诊断信息)"""
+    """单次分区识别:标注图存 Test_img/debug,返回 (分区列表, 诊断信息)"""
     h, w = screen.shape[:2]
     if bounds is None:
         x1, y1, x2, y2 = int(w * 0.01), int(h * 0.20), int(w * 0.84), int(h * 0.73)
@@ -163,7 +163,7 @@ def _detect_room_zones(runner, screen, bounds):
         if not too_close:
             merged.append(z)
     zones = merged
-    debug_dir = os.path.join(BASE_DIR, "reports", "debug")
+    debug_dir = os.path.join(BASE_DIR, "Test_img", "debug")   # 调试图统一放 Test_img/(用户要求)
     os.makedirs(debug_dir, exist_ok=True)
     # 标注检测区域(红框)+ 分区中心(绿点)
     debug = screen.copy()

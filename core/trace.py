@@ -51,7 +51,7 @@ class TraceRecorder:
         if not trace:
             return ""
         prefix = f"{self.case_name}_" if self.case_name else ""
-        root = out_root or os.path.join(BASE_DIR, "reports", "failures")
+        root = out_root or os.path.join(BASE_DIR, "Test_img", "debug", "failures")
         out_dir = os.path.join(root, f"{prefix}trace")
         try:
             os.makedirs(out_dir, exist_ok=True)
@@ -77,9 +77,9 @@ class TraceRecorder:
             return ""
 
     def failure_screenshot(self, device, step_index):
-        """失败截图存到 reports/failures/,文件名带用例名避免跨用例覆盖"""
+        """失败截图存到 Test_img/debug/failures/,文件名带用例名避免跨用例覆盖"""
         prefix = f"{self.case_name}_" if self.case_name else ""
-        fail_path = os.path.join(BASE_DIR, "reports", "failures",
+        fail_path = os.path.join(BASE_DIR, "Test_img", "debug", "failures",
                                  f"{prefix}step_{step_index:02d}_fail.png")
         try:
             os.makedirs(os.path.dirname(fail_path), exist_ok=True)

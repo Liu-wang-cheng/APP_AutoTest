@@ -394,7 +394,7 @@ class ActionRunner:
     def _save_click_marker(self, frame, pos, label):
         """把点击位置标注在匹配帧上存档(报告之外的第一手证据)。
 
-        存 reports/debug/clicks/<case>/,conftest 每轮收集前清 debug 目录,
+        存 Test_img/debug/clicks/<case>/,conftest 每轮收集前清 debug 目录,
         不会无限堆积。cv2 的 imwrite/imdecode 在 Windows 上不支持中文路径,
         统一走 imencode + open()。
         """
@@ -402,7 +402,7 @@ class ActionRunner:
             import cv2
             vis = frame.copy()
             self._draw_click_marker(vis, pos[0], pos[1])
-            d = os.path.join(BASE_DIR, "reports", "debug", "clicks",
+            d = os.path.join(BASE_DIR, "Test_img", "debug", "clicks",
                              self.case_name or "case")
             os.makedirs(d, exist_ok=True)
             safe = "".join(c for c in str(label).rsplit(".", 1)[0]

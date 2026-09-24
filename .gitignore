@@ -9,3 +9,5 @@ Test_img/screenshots/
 .DS_Store
 # 用例执行截图(运行产物, 不入库)
 Test_cases/*/screenshots/
+# 调试图(执行时生成: 分区标注/点击标记/失败截图)
+Test_img/debug/

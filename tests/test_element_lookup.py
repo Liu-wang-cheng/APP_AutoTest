@@ -331,7 +331,7 @@ def test_save_click_marker_writes_annotated_frame(make_runner, monkeypatch, tmp_
     r = make_runner(FakeDevice())
     r._save_click_marker(frame, (100, 200), "继续清扫.png")
 
-    files = list((tmp_path / "reports" / "debug" / "clicks" / "t").glob("*.png"))
+    files = list((tmp_path / "Test_img" / "debug" / "clicks" / "t").glob("*.png"))
     assert files, "标记图未生成"
     img = cv2.imdecode(np.fromfile(str(files[0]), dtype=np.uint8), cv2.IMREAD_COLOR)
     assert img is not None

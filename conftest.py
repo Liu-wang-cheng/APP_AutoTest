@@ -19,9 +19,9 @@ from core.excel_report import ExcelReport  # noqa: E402
 
 
 def _clean_debug_dir():
-    """清空 reports/debug —— room_zones 会往这里写标注图,历史产物越积越多,
+    """清空 Test_img/debug —— room_zones 会往这里写标注图,历史产物越积越多,
     残留的旧图会让人误以为是本轮结果。"""
-    debug_dir = os.path.join(BASE_DIR, "reports", "debug")
+    debug_dir = os.path.join(BASE_DIR, "Test_img", "debug")
     if not os.path.isdir(debug_dir):
         return
     for f in os.listdir(debug_dir):

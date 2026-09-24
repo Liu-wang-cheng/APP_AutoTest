@@ -115,7 +115,7 @@ def test_yaml_case(device, report, module, case_name, steps, priority, case_wait
 
     # 失败自动截图
     if not passed and cfg["runner"].get("screenshot_on_fail", True):
-        fail_dir = os.path.join(BASE_DIR, "reports", "failures")
+        fail_dir = os.path.join(BASE_DIR, "Test_img", "debug", "failures")
         os.makedirs(fail_dir, exist_ok=True)
         fail_path = os.path.join(fail_dir, f"{case_name}.png")
         device.screenshot(fail_path)
@@ -134,7 +134,7 @@ def test_yaml_case(device, report, module, case_name, steps, priority, case_wait
     if not passed and cfg["runner"].get("screenshot_on_fail", True):
         report.set_step_desc(module, "失败截图")
         report.add_result(module, False, error="用例执行失败,自动截图",
-                          screenshot=os.path.join(BASE_DIR, "reports", "failures",
+                          screenshot=os.path.join(BASE_DIR, "Test_img", "debug", "failures",
                                                   f"{case_name}.png"))
 
     assert passed, f"{case_name} 执行失败"
