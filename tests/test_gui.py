@@ -2414,10 +2414,13 @@ def test_name_save_not_duplicated_by_two_signals(qapp, monkeypatch, tmp_path, fa
         w.close()
 
 
-def test_status_line_below_toolbar_does_not_widen_window(qapp, monkeypatch, tmp_path):
-    """★ 状态提示(如「报告已生成(部分执行): D:\\...\\xx.xlsx」)必须在工具栏**下方**
-    独立一行, 不能待在工具栏最右端 —— 长文本会把那一行撑宽, 窗口跟着变大(用户反馈)。
+def test_hint_lines_own_row_and_do_not_widen_window(qapp, monkeypatch, tmp_path):
+    """★ 两个提示行都必须**独占一行、位于组件下方**, 不能挂在组件右边:
+      · status_label —— 「报告已生成(部分执行): ...」(原来在工具栏最右端)
+      · env_status   —— 「配置已保存: ...」(原来在环境条流式布局末尾)
+    挂在组件旁边时长文本会把那一行撑宽 → 窗口跟着变大(用户两次反馈)。
     """
+    from PySide6.QtCore import Qt as _Qt
     import gui.main_window as mw
     monkeypatch.setattr(mw, "CASES_DIR", str(tmp_path / "Test_cases"), raising=False)
     monkeypatch.setattr(mw, "CONFIG_PATH", str(tmp_path / "config.yaml"), raising=False)
@@ -2428,21 +2431,34 @@ def test_status_line_below_toolbar_does_not_widen_window(qapp, monkeypatch, tmp_
     w.show()
     try:
         qapp.processEvents()
-        # ① 位置: 不与运行按钮同行(同行=会被长文本撑宽)
-        assert w.status_label.parent() is not w.run_btn.parent(), \
-            "状态提示不能和运行按钮挤在同一行"
-        # ② 不参与宽度决策
-        assert w.status_label.wordWrap(), "状态提示要能自动换行"
-        assert w.status_label.sizePolicy().horizontalPolicy() == mw.QSizePolicy.Ignored, \
-            "状态提示的水平策略必须是 Ignored(否则长文本仍会撑宽窗口)"
-        # ③ 关键断言: 塞一条超长提示, 窗口最小宽度不能变大
-        base = w.minimumSizeHint().width()
-        w.status_label.setText(
-            "报告已生成(部分执行): D:/claude_test/Auto_test/reports/涂鸦智能T4/"
-            "全局清扫_20260924_103000/全局清扫_执行报告_20260924_103000.xlsx")
-        qapp.processEvents()
-        assert w.minimumSizeHint().width() <= base + 2, \
-            f"长状态提示把窗口撑宽了: {base} → {w.minimumSizeHint().width()}"
+        long_path = ("D:/claude_test/Auto_test/reports/涂鸦智能T4/"
+                     "全局清扫_20260924_103000/全局清扫_执行报告_20260924_103000.xlsx")
+        for label, neighbor, msg, centered in (
+                (w.status_label, w.run_btn, f"报告已生成(部分执行): {long_path}", True),
+                (w.env_status, w.device_combo,
+                 f"配置已保存: target_device = {long_path}", False)):
+            # ① 位置: 不与组件同行(同行=会被长文本撑宽)
+            assert label.parent() is not neighbor.parent(), \
+                f"提示不能和组件挤在同一行: {msg[:12]}"
+            # ② 不参与宽度决策
+            assert label.wordWrap(), "提示要能自动换行"
+            assert label.sizePolicy().horizontalPolicy() == mw.QSizePolicy.Ignored, \
+                "提示的水平策略必须是 Ignored(否则长文本仍会撑宽窗口)"
+            # ③ 关键断言: 塞一条超长提示, 窗口最小宽度不能变大
+            w.status_label.setText("")
+            w.env_status.setText("")
+            qapp.processEvents()
+            base = w.minimumSizeHint().width()
+            label.setText(msg)
+            qapp.processEvents()
+            assert w.minimumSizeHint().width() <= base + 2, \
+                f"长提示把窗口撑宽了({msg[:12]}...): {base} → {w.minimumSizeHint().width()}"
+        # ④ 运行状态行居中(用户要求); 且标签必须铺满整行, 否则居中看不出来
+        assert w.status_label.alignment() & _Qt.AlignHCenter, "「就绪」那行要居中显示"
+        assert w.status_label.width() >= w.status_label.parent().width() - 2, \
+            "状态标签要铺满整行, 居中才有意义"
+        assert not (w.env_status.alignment() & _Qt.AlignHCenter), \
+            "配置提示行保持左对齐(用户只要求运行状态行居中)"
     finally:
         w.close()
 

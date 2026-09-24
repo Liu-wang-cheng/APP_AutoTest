@@ -1692,8 +1692,9 @@ class MainWindow(QMainWindow):
         v.setContentsMargins(8, 6, 8, 6)
         v.setSpacing(5)
         v.addWidget(self._build_toolbar())
-        v.addWidget(self._build_status_line())   # ★ 状态提示独立一行(用户要求)
+        v.addWidget(self._build_status_line())      # ★ 运行状态独立一行(用户要求)
         v.addWidget(self._build_env_strip())
+        v.addWidget(self._build_env_status_line())  # ★ 配置提示独立一行(用户要求)
         # ★ 用例列表(左,固定宽 200) | 右列 = 组/用例信息条(上)+ 步骤详情(下)
         #   同一垂直列 —— 步骤详情与组信息同列,不横跨在列表/信息条下方
         #   (2026-09-21 二次调整;列表仍在左侧,右侧是「组信息+步骤详情」)
@@ -1817,23 +1818,34 @@ class MainWindow(QMainWindow):
 
         return bar
 
-    def _build_status_line(self):
-        """状态提示行: 工具栏**下方**独立一整行。
+    def _hint_line(self, attr, text, color, align=Qt.AlignLeft):
+        """提示行: 独占一整行(**组件下方**, 不挂在组件右边)。
 
-        ★ 用户反馈: 原来它在工具栏最右端, 而「报告已生成(部分执行): D:\\...\\xx.xlsx」
-        这类长文本会把工具栏那一行整体撑宽 → 窗口跟着变宽。移到下方独立一行, 并且
-        **不让它参与宽度决策**(水平策略 Ignored + 自动换行): 文本再长也只在自己这行
-        里排布, 不会把窗口撑大(与截图预览同一套路)。
+        ★ 用户两次反馈: 「报告已生成(部分执行): ...」「配置已保存: ...」这类长文本
+        挂在工具栏/环境条右侧时, 会把那一行整体撑宽 → 窗口跟着变大。所以所有提示都
+        做成整行显示, 并且**不让它参与宽度决策**(水平策略 Ignored + 自动换行):
+        文本再长也只在自己这行里排布(与截图预览 `preview.setSizePolicy` 同一套路)。
+        align: 文本在整行内的对齐(运行状态行居中, 配置提示行左对齐)。
         """
         bar = QWidget()
         lay = QHBoxLayout(bar)
         lay.setContentsMargins(0, 0, 0, 0)
-        self.status_label = QLabel("就绪")
-        self.status_label.setStyleSheet("color:#64748b;")
-        self.status_label.setWordWrap(True)
-        self.status_label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
-        lay.addWidget(self.status_label)
+        lbl = QLabel(text)
+        lbl.setStyleSheet(f"color:{color};")
+        lbl.setWordWrap(True)
+        lbl.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        lbl.setAlignment(align)
+        lay.addWidget(lbl)
+        setattr(self, attr, lbl)
         return bar
+
+    def _build_status_line(self):
+        """运行状态行(工具栏下方): 执行中/报告已生成 等。★ 文本居中(用户要求)"""
+        return self._hint_line("status_label", "就绪", "#64748b", Qt.AlignCenter)
+
+    def _build_env_status_line(self):
+        """环境配置提示行(环境条下方): 配置已保存/已删除历史记录/检测结果 等"""
+        return self._hint_line("env_status", "", "#94a3b8")
 
     # ── 名称输入(自适应 + 历史下拉 + ×清除) ──
 
@@ -2048,10 +2060,7 @@ class MainWindow(QMainWindow):
             "APP 内的扫地机设备名称(如 SE3L),前置阶段自动点击进入该设备页",
             "target_device", "hist/device_name")
         lay.addWidget(self.device_name_edit)
-
-        self.env_status = QLabel("")
-        self.env_status.setStyleSheet("color:#94a3b8;")
-        lay.addWidget(self.env_status)
+        # ★ env_status 不放在这条流式布局里(会被长文本撑宽) —— 见 _build_env_status_line
         return strip
 
     def _fill_env_from_config(self):
