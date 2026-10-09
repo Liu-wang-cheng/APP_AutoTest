@@ -20,7 +20,9 @@
     隔离: 内存 QSettings + 临时 CASES_DIR/CONFIG_PATH —— 不碰真实用例与配置。
 """
 import argparse
+import atexit
 import os
+import shutil
 import sys
 import tempfile
 import time
@@ -57,7 +59,10 @@ class _FakeSettings:
 def build_window():
     """一个最小可复现窗口: 单步用例 + 展开卡片与高级参数(让勾选框可见)"""
     mw.QSettings = _FakeSettings
-    tmp = tempfile.mkdtemp()
+    tmp = tempfile.mkdtemp(prefix="check_render_")
+    # ★ 注册退出清理: 否则每跑一次就在 %TEMP% 留一份小仓库(含 Test_cases/config),
+    #   攒久了既占空间又容易和别的临时目录混淆。atexit 在异常退出时同样会执行。
+    atexit.register(shutil.rmtree, tmp, True)
     cases = os.path.join(tmp, "Test_cases")
     os.makedirs(os.path.join(cases, "探针组"), exist_ok=True)
     case_path = os.path.join(cases, "探针组", "probe.yaml")
