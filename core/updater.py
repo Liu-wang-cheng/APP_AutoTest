@@ -344,18 +344,34 @@ def check_for_update(cfg, current=None):
     if not repo:
         return CheckResult("skipped", "未配置更新仓库(update.repository)")
     version_file = str(conf.get("version_file") or "version.json")
+    branch = str(conf.get("branch") or "master")
     mirrors = build_mirrors(conf, repo)
     if not mirrors:
         return CheckResult("error", "更新配置里没有可用的镜像站")
 
     try:
+        log.info(f"[更新] 开始检查: 仓库 {repo}(分支 {branch}), "
+                 f"本地 v{cur}, 共 {len(mirrors)} 个镜像源")
         ranked = race_mirrors(mirrors, version_file)
+        # 把测速结果写进日志 —— 排查"取不到版本清单"时, 这一行就能看出是全网不通
+        # 还是某个镜像的问题
+        detail = ", ".join(
+            f"{m.name} {'可达 %.0fms' % m.latency_ms if m.success else '不可达'}"
+            for m in ranked)
+        ok_n = sum(1 for m in ranked if m.success)
+        log.info(f"[更新] 镜像测速({ok_n}/{len(ranked)} 可达): {detail}")
+
         got = fetch_version_info(ranked, version_file)
         if not got:
-            return CheckResult("error", "所有镜像都取不到版本清单")
+            return CheckResult("error", f"所有镜像都取不到版本清单({detail})")
         info, mirror = got
+        log.info(f"[更新] 取到版本清单: 远程 v{info.version}"
+                 f"{'(发布于 %s)' % info.release_date if info.release_date else ''}"
+                 f", 来自 {mirror.name}")
         if not is_newer(info.version, cur):
-            return CheckResult("up_to_date", f"已是最新({cur})", info, mirror)
+            return CheckResult("up_to_date",
+                               f"已是最新(本地 v{cur}, 远程 v{info.version})",
+                               info, mirror)
         # 本地版本低于 min_version -> 强制更新(不允许继续用旧版)
         force = bool(info.min_version) and is_newer(info.min_version, cur)
         return CheckResult("has_update",
@@ -363,6 +379,7 @@ def check_for_update(cfg, current=None):
                            + ("，需强制更新" if force else ""),
                            info, mirror, force)
     except Exception as e:
+        log.warning(f"[更新] 检查过程异常: {type(e).__name__}: {e}")
         return CheckResult("error", f"检查更新失败: {e}")
 
 
