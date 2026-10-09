@@ -551,9 +551,44 @@ def test_bootstrap_never_raises(tmp_path, monkeypatch):
     bootstrap.ensure_data_dirs(app_dir=str(src), data_dir=str(dst))   # 不得抛
 
 
+def test_config_gets_update_section_when_missing(tmp_path):
+    """★ 老 config.yaml 没有 update 段时要补上 —— 否则"检查更新"静默报"未启用",
+    用户以为功能坏了(实测遇到: 源码版的 config 是 update 段之前生成的)。
+
+    用户的注释与原有内容必须原样保住(文本级追加, 不重写整个文件)。
+    """
+    from core import bootstrap
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text("app:\n  name: 涂鸦\n# 用户自己的注释\ntarget_device: SE3L\n",
+                   encoding="utf-8", newline="\n")
+    boot_cfg = tmp_path / "repo" / "config"
+    boot_cfg.mkdir(parents=True, exist_ok=True)   # 隔离夹具已建过同名目录
+    (boot_cfg / "config.yaml").write_text(cfg.read_text(encoding="utf-8"),
+                                          encoding="utf-8")
+    (tmp_path / "repo" / "config" / "config.example.yaml").write_text(
+        "app:\n  name: x\n", encoding="utf-8")
+    # 直接调补段函数(它才是被测对象)
+    assert bootstrap._ensure_update_section(str(cfg)) is True
+    text = cfg.read_text(encoding="utf-8")
+    assert "update:" in text and "repository" in text
+    assert "# 用户自己的注释" in text and "target_device: SE3L" in text
+    import yaml
+    assert (yaml.safe_load(text).get("update") or {}).get("repository")
+    # 幂等: 再调一次什么都不做
+    assert bootstrap._ensure_update_section(str(cfg)) is False
+
+
+def test_config_keeps_user_update_section(tmp_path):
+    """用户已有 update 段时一个字都不能动(哪怕内容是错的/留空的)"""
+    from core import bootstrap
+    cfg = tmp_path / "config.yaml"
+    mine = "update:\n  repository: 我自己填的/仓库\n"
+    cfg.write_text(mine, encoding="utf-8", newline="\n")
+    assert bootstrap._ensure_update_section(str(cfg)) is False
+    assert cfg.read_text(encoding="utf-8") == mine
+
+
 def test_cleanup_update_leftovers(tmp_path):
-    """★ 上次更新被杀软打断留下的残留必须启动时清掉:
-    半截下载(_update_download.exe)与旧程序备份(*.exe.bak)。"""
     from core import bootstrap
     (tmp_path / "_update_download.exe").write_bytes(b"partial")
     (tmp_path / "AutoTest.exe.bak").write_bytes(b"old")

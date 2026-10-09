@@ -15,6 +15,7 @@
   已存在的一律不动(用户改过的配置不能被覆盖)。开发环境下源与目标同目录, 直接跳过。
 """
 import os
+import re
 import shutil
 import sys
 
@@ -159,4 +160,46 @@ def ensure_data_dirs(app_dir=None, data_dir=None):
 
     if seeded:
         log.info(f"[初始化] 首次运行, 已铺出: {', '.join(seeded)}")
+
+    # 老配置缺 update 段时补一段默认的
+    try:
+        _ensure_update_section(os.path.join(dst_root, _CONFIG_TARGET))
+    except Exception as e:
+        log.warning(f"[初始化] 补 update 段失败(忽略): {e}")
     return seeded
+
+
+def _ensure_update_section(cfg_path):
+    """config.yaml 里没有 update 段时, 追加一段默认的。
+
+    ★ 为什么必须补: 自动更新的全部配置(仓库/分支/检查周期)都在这段里, 而它是后来
+      才加进模板的 —— 老用户的 config.yaml 早就生成好了、没有这一段, 于是
+      "检查更新"会静默返回"未启用自动更新", 用户以为功能坏了(实测遇到)。
+      ★ 文本级追加而不是 yaml.safe_dump 重写: 保住用户自己的注释与排版。
+      已有该段就一个字都不动(哪怕用户改过内容)。
+    """
+    if not os.path.isfile(cfg_path):
+        return False
+    try:
+        with open(cfg_path, encoding="utf-8", newline="") as f:
+            text = f.read()
+    except OSError:
+        return False
+    if re.search(r"^update:", text, re.M):
+        return False                      # 已有 -> 不动
+    eol = "\r\n" if "\r\n" in text else "\n"
+    block = (
+        f"{eol}# ── OTA 自动更新 ──{eol}"
+        f"# repository 留空 = 不检查更新。填 GitHub 的 owner/repo 即启用:{eol}"
+        f"# 启动后自动检查一次, 之后每 8 小时一次(执行用例期间不检测)。{eol}"
+        f"update:{eol}"
+        f"  enabled: true{eol}"
+        f'  repository: "Liu-wang-cheng/APP_AutoTest"{eol}'
+        f'  branch: "master"{eol}'
+        f'  version_file: "version.json"{eol}'
+        f"  check_interval_hours: 8{eol}"
+    )
+    with open(cfg_path, "w", encoding="utf-8", newline="") as f:
+        f.write(text.rstrip("\r\n") + eol + block)
+    log.info("[初始化] config.yaml 缺少 update 段, 已补上默认配置(自动更新启用)")
+    return True
