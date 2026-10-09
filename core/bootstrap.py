@@ -105,6 +105,14 @@ def ensure_data_dirs(app_dir=None, data_dir=None):
     dst_root = os.path.abspath(data_dir or DATA_DIR)
     seeded = []
 
+    # ★ 补 update 段必须在"开发环境提前返回"**之前**做: 它针对的正是**老配置文件**,
+    #   而开发环境的 config.yaml 往往就是那个老文件 —— 放到后面会被跳过
+    #   (实测踩过: 日志说补了, 实际文件里还是没有, 检查更新仍报"未启用")。
+    try:
+        _ensure_update_section(os.path.join(dst_root, _CONFIG_TARGET))
+    except Exception as e:
+        log.warning(f"[初始化] 补 update 段失败(忽略): {e}")
+
     # 开发环境: 源就是目标所在目录, 没什么可铺的
     if os.path.normcase(src_root) == os.path.normcase(dst_root):
         return seeded
@@ -160,12 +168,6 @@ def ensure_data_dirs(app_dir=None, data_dir=None):
 
     if seeded:
         log.info(f"[初始化] 首次运行, 已铺出: {', '.join(seeded)}")
-
-    # 老配置缺 update 段时补一段默认的
-    try:
-        _ensure_update_section(os.path.join(dst_root, _CONFIG_TARGET))
-    except Exception as e:
-        log.warning(f"[初始化] 补 update 段失败(忽略): {e}")
     return seeded
 
 
