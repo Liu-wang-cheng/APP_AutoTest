@@ -209,12 +209,24 @@ def update_version_json_and_tag(repo, version, sha256, download_url, notes):
     else:
         print("  [GIT] version.json 无变化, 跳过 commit")
     _git(["tag", "-f", f"v{version}"])
-    _git(["push", "origin", "master", f"v{version}"])
+    # ★ 分两步推, 且 tag 要**强推**: create_release() 走 GitHub API 建 Release 时,
+    #   GitHub 已经**自动创建了同名 tag**(指向当时的 master HEAD); 而本地这个 tag
+    #   指向"含 version.json 的提交" —— 一起推会被 "already exists" 整条拒绝
+    #   (v1.1/v1.2 两次发布都死在这里, 且 git 的 stderr 被吞掉看不出原因)。
+    _git(["push", "origin", "master"])
+    _git(["push", "-f", "origin", f"v{version}"])
 
 
 def _git(args):
-    subprocess.run(["git"] + args, cwd=ROOT, check=True,
-                   capture_output=True, text=True, timeout=300)
+    r = subprocess.run(["git"] + args, cwd=ROOT, capture_output=True,
+                       text=True, timeout=300)
+    if r.returncode != 0:
+        # ★ 必须把 git 自己的 stderr 带出来: 只抛 CalledProcessError 的话,
+        #   "tag already exists" 这类真实原因全被吞掉, 排查只能靠手动重跑
+        raise RuntimeError(
+            f"git {' '.join(args)} 失败(退出码 {r.returncode}):\n"
+            f"{(r.stderr or r.stdout or '').strip()}")
+    return r.stdout
 
 
 def ensure_clean_tree():
