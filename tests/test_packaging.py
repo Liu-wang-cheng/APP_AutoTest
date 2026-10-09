@@ -231,13 +231,51 @@ def qapp():
 
 @pytest.fixture
 def win(qapp, monkeypatch, tmp_path):
+    """真实的 MainWindow(用于验证装配/按钮状态)。
+
+    ★ 必须 stub DeviceScanThread: 真实版要跑 adb 子进程(最坏 30s)并留一个后台
+      QThread; 这些测试建的窗口不会真的被销毁, 残留线程/定时器会污染**后面**的
+      测试 —— 实测: 与 test_preconditions.py 一起跑时, 后者会卡死在一个
+      再普通不过的对话框用例上(单独跑却通过)。
+    ★ 同时停掉 _update_timer, 避免每 8 小时的定时器在测试期间触发真实网络检查。
+    """
+    from PySide6.QtCore import QObject, Signal
+
     import gui.main_window as mw
     monkeypatch.setattr(mw, "CASES_DIR", str(tmp_path / "Test_cases"), raising=False)
     monkeypatch.setattr(mw, "load_config", lambda: {"app": {}, "device": {}},
                         raising=False)
+
+    class _NoScan(QObject):
+        done = Signal(list, str)
+
+        def __init__(self, *a, **k):
+            super().__init__()
+
+        def start(self):
+            pass
+
+    monkeypatch.setattr(mw, "DeviceScanThread", _NoScan)
     w = mw.MainWindow()
+    w._update_timer.stop()
+    w._first_check_timer.stop()      # 别让"启动 3 秒后检查"在测试期间触发真实网络
+    # ★ 再兜一道: 把"真发检查"整个替换掉。检查是**后台线程 + 信号回调**, 回调可能
+    #   在**后面测试**的 processEvents 里才被派发, 那时它会弹模态窗 → 挂死别的测试
+    #   (实测: 与 test_preconditions 同跑时, 后者卡在一个普通对话框用例上)。
+    monkeypatch.setattr(w, "_check_update_now", lambda: None)
     yield w
+    w.worker = None
     w.close()
+    # ★ 彻底销毁 + 排空事件队列: close() 只是隐藏窗口, 对象本身(以及它身上的定时器、
+    #   信号连接)还在。这些窗口累积下来, 残留回调会在**后面测试**的 processEvents
+    #   里被派发, 把不相干的用例拖死(实测: 与 test_preconditions 同跑时, 后者卡在
+    #   一个普通对话框用例上; 单个跑却通过)。
+    w.deleteLater()
+    from PySide6.QtWidgets import QApplication as _QApp
+    _app = _QApp.instance()
+    if _app is not None:
+        for _ in range(3):
+            _app.processEvents()
 
 
 def test_update_timer_period_follows_config(win, monkeypatch):
@@ -262,6 +300,11 @@ def test_check_skipped_while_running_cases(win, monkeypatch):
     started = []
     import gui.main_window as mw
 
+    # 这个用例要测**真实**的 _check_update_now, 而 win 夹具把它 stub 掉了
+    # (夹具的 stub 是为了不让 3 秒定时器在测试期间发真实网络请求) —— 这里恢复回来
+    monkeypatch.setattr(win, "_check_update_now",
+                        type(win)._check_update_now.__get__(win))
+
     class _FakeThread:
         def __init__(self, *a, **k):
             started.append(1)
@@ -272,7 +315,7 @@ def test_check_skipped_while_running_cases(win, monkeypatch):
         win._check_update_now()
     finally:
         # ★ 必须清掉: 否则 teardown 的 close() 会因为它弹「正在执行,停止并退出?」
-        #   的**模态**对话框 —— 断言一旦失败就会挂死在这里(反向验证时踩到过)
+        #   的**模态**对话框 —— 断言一旦失败就会挂死(踩过)
         win.worker = None
     assert started == [], "执行用例期间不该发起检查"
 

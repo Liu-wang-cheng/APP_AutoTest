@@ -1894,7 +1894,15 @@ class MainWindow(QMainWindow):
         self._update_timer.setInterval(max(1, int(hours * 3600 * 1000)))
         self._update_timer.timeout.connect(self._check_update_now)
         self._update_timer.start()
-        QTimer.singleShot(3000, self._check_update_now)   # 首次: 启动 3 秒后
+        # 首次检查用**独立且可停止**的定时器, 不用 QTimer.singleShot:
+        # singleShot 没有句柄、取消不掉, 而它 3 秒后会在测试运行期间触发一次真实
+        # 网络检查(并可能走到模态弹窗), 污染后面的测试(实测: 与 test_preconditions
+        # 同跑时后者卡死)。
+        self._first_check_timer = QTimer(self)
+        self._first_check_timer.setSingleShot(True)
+        self._first_check_timer.setInterval(3000)      # 启动 3 秒后查一次
+        self._first_check_timer.timeout.connect(self._check_update_now)
+        self._first_check_timer.start()
 
     def on_check_update(self):
         """「检查更新」按钮: 手动检查。
