@@ -259,10 +259,9 @@ def win(qapp, monkeypatch, tmp_path):
     w = mw.MainWindow()
     w._update_timer.stop()
     w._first_check_timer.stop()      # 别让"启动 3 秒后检查"在测试期间触发真实网络
-    # ★ 再兜一道: 把"真发检查"整个替换掉。检查是**后台线程 + 信号回调**, 回调可能
-    #   在**后面测试**的 processEvents 里才被派发, 那时它会弹模态窗 → 挂死别的测试
-    #   (实测: 与 test_preconditions 同跑时, 后者卡在一个普通对话框用例上)。
-    monkeypatch.setattr(w, "_check_update_now", lambda: None)
+    # 真发检查已由 tests/conftest.py 的 _no_real_update_check 在**类**上统一拦住
+    # (需要真实实现的用例自己置 _allow_real_check=True) —— 这里不再重复 stub,
+    # 否则实例级 stub 会盖住那个开关。
     yield w
     w.worker = None
     w.close()
@@ -300,10 +299,9 @@ def test_check_skipped_while_running_cases(win, monkeypatch):
     started = []
     import gui.main_window as mw
 
-    # 这个用例要测**真实**的 _check_update_now, 而 win 夹具把它 stub 掉了
-    # (夹具的 stub 是为了不让 3 秒定时器在测试期间发真实网络请求) —— 这里恢复回来
-    monkeypatch.setattr(win, "_check_update_now",
-                        type(win)._check_update_now.__get__(win))
+    # 这个用例要测**真实**的 _check_update_now, 而 conftest 在类上 stub 了它
+    # (防测试期真联网) —— 打开它提供的开关即可(见 tests/conftest.py)
+    win._allow_real_check = True
 
     class _FakeThread:
         def __init__(self, *a, **k):

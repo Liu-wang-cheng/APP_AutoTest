@@ -85,6 +85,52 @@ def _isolate_group_preconditions(monkeypatch, tmp_path):
 
 
 @pytest.fixture(autouse=True)
+def _expand_groups_in_tests(monkeypatch, request):
+    """测试里默认把 APP 组**全部展开**。
+
+    ★ 界面默认是**收起**的(用户要求: 用例列表默认收回 APP 组)。但收起时用例行
+      根本不生成, 而绝大多数 GUI 测试要直接操作用例行(勾选/排序/切换用例) ——
+      逐个测试去展开既啰嗦又容易漏(实测: 默认折叠一上线, test_gui 里 24 个用例
+      立刻失败)。所以这里在测试环境统一展开。
+    ★ 想验证"默认折叠"本身, 给测试打标记 `@pytest.mark.real_collapse` 豁免即可
+      (见 test_case_groups_collapsed_by_default)。
+    """
+    if request.node.get_closest_marker("real_collapse"):
+        yield
+        return
+    from gui import main_window as mw
+    orig = mw.MainWindow._fill_case_list
+
+    def _fill_expanded(self, *a, **k):
+        self._collapsed_groups.clear()             # 测试里全展开
+        self._known_groups.update(self._list_group_dirs())   # 别被"默认折叠"重新收起
+        return orig(self, *a, **k)
+
+    monkeypatch.setattr(mw.MainWindow, "_fill_case_list", _fill_expanded)
+    yield
+
+
+@pytest.fixture(autouse=True)
+def _no_real_update_check(monkeypatch):
+    """测试里一律不发真实的更新检查(它要联网、还可能在回调里弹模态窗)。
+
+    ★ 检查更新是**后台线程 + 信号回调**: 回调可能在**别的测试**的 processEvents
+      里才被派发(那时窗口已关、还会弹模态), 既拖慢又污染。检查逻辑本身由
+      tests/test_updater.py 专门覆盖。
+    """
+    from gui import main_window as mw
+    real = mw.MainWindow._check_update_now
+
+    def _guarded(self):
+        # 少数用例要测**真实**的检查逻辑, 自己把 _allow_real_check 置 True 即可
+        if getattr(self, "_allow_real_check", False):
+            return real(self)
+
+    monkeypatch.setattr(mw.MainWindow, "_check_update_now", _guarded, raising=False)
+    yield
+
+
+@pytest.fixture(autouse=True)
 def _disable_ocr_by_default(monkeypatch):
     """默认关掉 OCR 兜底 —— 单元测试不该真跑它。
 

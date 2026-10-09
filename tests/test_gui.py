@@ -658,6 +658,10 @@ def test_case_arrows_real_click(qapp, monkeypatch, tmp_path):
             "module: %s\ncases: [{name: a, steps: []}]\n" % n, encoding="utf-8")
     monkeypatch.setattr(mw, "CASES_DIR", str(tmp_path / "Test_cases"), raising=False)
     w = mw.MainWindow()
+    # 本用例测"点击折叠", 需从展开态起步(界面默认收起, 见 conftest 的说明)
+    w._collapsed_groups.clear()
+    w._known_groups.update(w._list_group_dirs())
+    w._fill_case_list()
     w.resize(900, 700)
     w.show()
     try:
@@ -685,6 +689,10 @@ def test_case_row_name_click_selects(qapp, monkeypatch, tmp_path):
             "module: %s\ncases: [{name: a, steps: []}]\n" % n, encoding="utf-8")
     monkeypatch.setattr(mw, "CASES_DIR", str(tmp_path / "Test_cases"), raising=False)
     w = mw.MainWindow()
+    # 从展开态起步(界面默认收起)
+    w._collapsed_groups.clear()
+    w._known_groups.update(w._list_group_dirs())
+    w._fill_case_list()
     w.resize(900, 700)
     w.show()
     try:
@@ -762,6 +770,10 @@ def test_preview_label_does_not_grow(qapp, monkeypatch, tmp_path):
     shot = tmp_path / "shot.png"
     Image.new("RGB", (800, 600), "blue").save(shot)
     w = mw.MainWindow()
+    # 从展开态起步(界面默认收起)
+    w._collapsed_groups.clear()
+    w._known_groups.update(w._list_group_dirs())
+    w._fill_case_list()
     w.resize(900, 700)
     w.show()
     try:
@@ -1196,6 +1208,7 @@ def test_app_icon_set(win):
     assert pm.width() == 64 and not pm.isNull()
 
 
+@pytest.mark.real_collapse
 def test_group_header_click_collapses(qapp, monkeypatch, tmp_path):
     """点击 APP 组头 → 折叠该组(用例行隐藏),再点展开;
     折叠后用例行不存在 → 勾选/排序自然作用于可见行"""
@@ -1209,6 +1222,10 @@ def test_group_header_click_collapses(qapp, monkeypatch, tmp_path):
             "module: %s\ncases: [{name: a, steps: []}]\n" % n, encoding="utf-8")
     monkeypatch.setattr(mw, "CASES_DIR", str(tmp_path / "Test_cases"), raising=False)
     w = mw.MainWindow()
+    # 从展开态起步(界面默认收起)
+    w._collapsed_groups.clear()
+    w._known_groups.update(w._list_group_dirs())
+    w._fill_case_list()
     w.resize(900, 700)
     w.show()
     try:
@@ -1233,6 +1250,7 @@ def test_group_header_click_collapses(qapp, monkeypatch, tmp_path):
         w.close()
 
 
+@pytest.mark.real_collapse
 def test_collapse_group_unloads_editor(qapp, monkeypatch, tmp_path):
     """★ 收起组时,若当前编辑用例属于该组 → 编辑区恢复未选中状态;
     chip 条标题「测试步骤详情」与字段顺序(用例组→用例→优先级→间隔→添加步骤)"""
@@ -1246,6 +1264,10 @@ def test_collapse_group_unloads_editor(qapp, monkeypatch, tmp_path):
         encoding="utf-8")
     monkeypatch.setattr(mw, "CASES_DIR", str(tmp_path / "Test_cases"), raising=False)
     w = mw.MainWindow()
+    # 从展开态起步(界面默认收起)
+    w._collapsed_groups.clear()
+    w._known_groups.update(w._list_group_dirs())
+    w._fill_case_list()
     w.resize(900, 700)
     w.show()
     try:
@@ -1400,6 +1422,7 @@ def test_save_button_dirty_flow(qapp, monkeypatch, tmp_path):
         w.close()
 
 
+@pytest.mark.real_collapse
 def test_collapsed_group_not_marked_empty(qapp, monkeypatch, tmp_path):
     """★ 排序重建(order_paths 分支)后, 折叠组的数据必须补全 ——
     否则折叠组被误判为空组, 错插「暂无用例」占位(用户实测);
@@ -1440,6 +1463,7 @@ def test_truly_empty_group_shows_placeholder(qapp, monkeypatch, tmp_path):
         w.close()
 
 
+@pytest.mark.real_collapse
 def test_collapse_via_real_click_after_reorder(qapp, monkeypatch, tmp_path):
     """★ 完整用户路径验证: 排序(order_paths 分支)→ QTest 真实点击组头折叠 →
     折叠组只有 ▸ 组头无占位; 空组占位仍在; 再点击展开数据完整"""
@@ -1454,6 +1478,10 @@ def test_collapse_via_real_click_after_reorder(qapp, monkeypatch, tmp_path):
             "module: %s\ncases: [{name: a, steps: []}]\n" % n, encoding="utf-8")
     monkeypatch.setattr(mw, "CASES_DIR", str(root), raising=False)
     w = mw.MainWindow()
+    # 本用例测"点击折叠", 需从展开态起步(界面默认收起, 见 conftest 的说明)
+    w._collapsed_groups.clear()
+    w._known_groups.update(w._list_group_dirs())
+    w._fill_case_list()
     w.resize(900, 700)
     w.show()
     try:
@@ -1489,6 +1517,7 @@ def test_collapse_via_real_click_after_reorder(qapp, monkeypatch, tmp_path):
         w.close()
 
 
+@pytest.mark.real_collapse
 def test_collapse_empty_group_hides_placeholder(qapp, monkeypatch, tmp_path):
     """★ 收起空组(三星)后占位行必须消失(用户实测 bug); 再展开恢复"""
     from PySide6.QtCore import Qt, QPoint
@@ -1498,6 +1527,10 @@ def test_collapse_empty_group_hides_placeholder(qapp, monkeypatch, tmp_path):
     (root / "三星").mkdir(parents=True)          # 空组
     monkeypatch.setattr(mw, "CASES_DIR", str(root), raising=False)
     w = mw.MainWindow()
+    # 从展开态起步(界面默认收起)
+    w._collapsed_groups.clear()
+    w._known_groups.update(w._list_group_dirs())
+    w._fill_case_list()
     w.resize(900, 700)
     w.show()
     try:
@@ -1655,6 +1688,10 @@ def test_delete_selected_case_and_group(qapp, monkeypatch, tmp_path):
                         staticmethod(lambda *a, **k: boxes.append(a) or
                                      QMessageBox.Yes))
     w = mw.MainWindow()
+    # 从展开态起步(界面默认收起)
+    w._collapsed_groups.clear()
+    w._known_groups.update(w._list_group_dirs())
+    w._fill_case_list()
     w.resize(900, 700)
     w.show()
     try:
@@ -2766,7 +2803,12 @@ def test_runworker_preconditions_fall_back_when_group_missing(qapp, monkeypatch,
 # ── 用例列表「全选」优先服务于当前所选 APP 组 ──
 
 def _cases_window(qapp, monkeypatch, tmp_path):
-    """造两个组的用例, 返回窗口(组内用例文件名 a/b/c)"""
+    """造两个组的用例, 返回窗口(组内用例文件名 a/b/c)
+
+    ★ 这里**显式展开**所有组: 界面默认是收起的(用户要求), 而这些用例大多要直接
+      操作用例行(勾选/排序/切换), 收起状态下那些行根本不存在。默认收起本身由
+      test_case_groups_collapsed_by_default 单独守护。
+    """
     import gui.main_window as mw
     root = tmp_path / "Test_cases"
     for g in ("三星", "涂鸦智能T4"):
@@ -2779,9 +2821,48 @@ def _cases_window(qapp, monkeypatch, tmp_path):
     monkeypatch.setattr(mw, "load_config", lambda: {"app": {}, "device": {}}, raising=False)
     monkeypatch.setattr(mw, "update_config", lambda d: None, raising=False)
     w = mw.MainWindow()
+    # 展开全部组(默认是收起的); 已在 _known_groups 里 -> 重建时不会被重新折叠
+    w._collapsed_groups.clear()
     w._fill_case_list()
     qapp.processEvents()
     return w
+
+
+@pytest.mark.real_collapse
+def test_case_groups_collapsed_by_default(qapp, monkeypatch, tmp_path):
+    """★ 用例列表里的 APP 组**默认收起**(用户要求: 不要展开)。
+
+    组默认展开时, 用例多起来列表会很长、要滚很久才能看到组头 —— 收起后一眼能看全
+    所有 APP 组。用户手动展开过的组不会再被收回(见 _fill_case_list 的 _known_groups)。
+    """
+    import gui.main_window as mw
+    root = tmp_path / "Test_cases"
+    for g in ("三星", "涂鸦智能T4"):
+        d = root / g
+        d.mkdir(parents=True)
+        (d / "a.yaml").write_text("module: a\ncases:\n  - name: a\n    steps: []\n",
+                                  encoding="utf-8")
+    monkeypatch.setattr(mw, "CASES_DIR", str(root), raising=False)
+    monkeypatch.setattr(mw, "load_config", lambda: {"app": {}, "device": {}}, raising=False)
+    w = mw.MainWindow()
+    try:
+        qapp.processEvents()
+        # 所有组都应处于收起状态
+        assert set(w._list_group_dirs()) <= w._collapsed_groups, \
+            f"组应默认收起: {w._list_group_dirs()} vs {w._collapsed_groups}"
+        # 收起的组: 只有组头行, 没有用例行
+        rows = [w.case_list.item(i).text() for i in range(w.case_list.count())]
+        assert not any("a" == r for r in rows), f"收起时不该出现用例行: {rows}"
+        assert any("▸" in r for r in rows), f"组头应显示收起箭头 ▸: {rows}"
+
+        # 手动展开后, 重建列表不得又把它收回去
+        group = w._list_group_dirs()[0]
+        w._collapsed_groups.discard(group)
+        w._fill_case_list()
+        qapp.processEvents()
+        assert group not in w._collapsed_groups, "手动展开的组被重新折叠了"
+    finally:
+        w.close()
 
 
 def _checked_groups(w):
@@ -2857,14 +2938,60 @@ def test_select_all_falls_back_to_everything(qapp, monkeypatch, tmp_path):
         w.close()
 
 
-def test_clear_button_clears_all_groups(qapp, monkeypatch, tmp_path):
-    """「清空」仍是清掉全部组的勾选(与全选的范围语义不同, 按用户原话只改全选)"""
+def test_clear_button_scoped_to_target_group(qapp, monkeypatch, tmp_path):
+    """★ 「清空」与「全选」同一范围语义: 优先只清当前所选 APP 组的勾选。
+
+    用户要求(2026-10-09): 清空也按组限定 —— 原先无差别清全部, 想清掉某一组时会
+    把别的组辛苦勾好的也一起清掉, 与"全选优先服务本组"的语义也不对称。
+    """
+    w = _cases_window(qapp, monkeypatch, tmp_path)
+    try:
+        from PySide6.QtCore import Qt as _Qt
+        # 两组各勾一条, 当前编辑「三星」的用例 -> 目标组是三星
+        rows = {}
+        for i in range(w.case_list.count()):
+            it = w.case_list.item(i)
+            p = it.data(0x0100)
+            if not p:
+                continue
+            it.setCheckState(_Qt.Checked)
+            import os as _os
+            rows[_os.path.basename(_os.path.dirname(p))] = True
+        qapp.processEvents()
+        assert set(_checked_groups(w)) == {"三星", "涂鸦智能T4"}, _checked_groups(w)
+
+        # _target_group_for_bulk_check 靠"当前选中的行/正在编辑的用例"判定目标组 ——
+        # 这里显式选中「三星」的第一条用例, 让目标组明确
+        import os as _os
+        target_row = next(i for i in range(w.case_list.count())
+                          if (w.case_list.item(i).data(0x0100) or "")
+                          and "三星" in w.case_list.item(i).data(0x0100))
+        w.case_list.setCurrentRow(target_row)
+        w._on_case_item_clicked(w.case_list.item(target_row))
+        qapp.processEvents()
+        group = w._target_group_for_bulk_check()
+        assert group == "三星", f"应判定出目标组为三星: {group}"
+        w.on_clear_cases()
+        qapp.processEvents()
+        left = _checked_groups(w)
+        assert group not in left, f"目标组「{group}」应被清空: {left}"
+        assert left, f"其它组不该被牵连: {left}"
+    finally:
+        w.close()
+
+
+def test_clear_button_clears_all_when_no_group_selected(qapp, monkeypatch, tmp_path):
+    """没选中任何组(空列表/未选用例)时才退回"清全部" —— 与全选同一条兜底规则"""
     w = _cases_window(qapp, monkeypatch, tmp_path)
     try:
         from PySide6.QtCore import Qt as _Qt
         w.on_select_all_cases()
         qapp.processEvents()
-        w._set_cases_checked(_Qt.Unchecked)
+        # 断开"当前选中/正在编辑" -> 目标组判定不出来
+        w.case_list.setCurrentItem(None)
+        w.case_path = None
+        monkeypatch.setattr(w, "_target_group_for_bulk_check", lambda: None)
+        w.on_clear_cases()
         qapp.processEvents()
         assert _checked_groups(w) == {}, _checked_groups(w)
     finally:
@@ -2926,6 +3053,7 @@ def test_switch_case_keeps_wait(qapp, monkeypatch, tmp_path):
         w.close()
 
 
+@pytest.mark.real_collapse
 def test_collapse_group_keeps_checked(qapp, monkeypatch, tmp_path):
     """★ 折叠某组再展开, 该组已勾选的用例必须还在勾选态。
 

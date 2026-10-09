@@ -2466,8 +2466,8 @@ class MainWindow(QMainWindow):
         all_btn.clicked.connect(self.on_select_all_cases)
         head.addWidget(all_btn)
         none_btn = QPushButton("清空")
-        none_btn.setToolTip("取消所有组的勾选")
-        none_btn.clicked.connect(lambda: self._set_cases_checked(Qt.Unchecked))
+        none_btn.setToolTip("取消当前所选 APP 组的勾选(没选用例时才清全部)")
+        none_btn.clicked.connect(self.on_clear_cases)
         head.addWidget(none_btn)
         del_btn = QPushButton("删除")
         del_btn.setToolTip("删除当前选中的用例文件, 或整组目录(含组内全部用例)")
@@ -2483,6 +2483,12 @@ class MainWindow(QMainWindow):
         self.case_list.setFixedWidth(200)    # 宽度与设备下拉框视觉对齐;高度随步骤详情区填满右列
         self._case_states = {}               # path → 'running'/'passed'/'failed'(状态灯)
         self._collapsed_groups = set()       # 折叠的组目录名
+        #: 见过哪些组 —— 只对"第一次见到"的组做默认折叠, 用户手动展开过的不再动它
+        self._known_groups = set()
+        # ★ 折叠状态要**跨启动记住**(用户要求: 下次打开保持原状)。
+        #   存"展开过的组"(而不是折叠的): 新出现的组天然不在里面 -> 默认折叠,
+        #   正好也满足"默认收回 APP 组"。
+        self._expanded_saved = self._load_expanded_groups()
         # ★ 勾选态的**模型层**表示(路径集合)。不能只依赖 QListWidget 的 checkState:
         #   折叠组的用例行根本不生成, 每次重建列表都会把它们的勾选丢掉(用户实测:
         #   勾好用例 → 收起该组整理视图 → 点运行, 那些用例不会跑, 而折叠态下连
@@ -2531,6 +2537,27 @@ class MainWindow(QMainWindow):
         with open(path, "w", encoding="utf-8", newline="") as f:
             f.write(new_text)
 
+    def _load_expanded_groups(self):
+        """读回上次**展开**过的组名(用户要求: 折叠状态跨启动保持原状)。
+
+        存"展开的"而不是"折叠的": 新出现的组天然不在里面 -> 默认折叠, 正好满足
+        "APP 组默认收回"。读失败/没记录过都返回空集(即全部按默认折叠)。
+        """
+        try:
+            v = QSettings("vacuum_test", "case_studio").value("ui/expanded_groups")
+            return set(v) if isinstance(v, (list, tuple)) else set()
+        except Exception:
+            return set()
+
+    def _save_expanded_groups(self):
+        """把"已展开的组"写回 QSettings(关窗口/切组时都调, 保证下次还原)"""
+        try:
+            expanded = sorted(set(self._list_group_dirs()) - self._collapsed_groups)
+            QSettings("vacuum_test", "case_studio").setValue(
+                "ui/expanded_groups", expanded)
+        except Exception as e:
+            log.debug(f"[ui] 保存组展开状态失败(忽略): {e}")
+
     def _list_group_dirs(self):
         """Test_cases/ 下的组目录(APP 分组)列表,按名称排序"""
         if not os.path.isdir(CASES_DIR):
@@ -2545,6 +2572,15 @@ class MainWindow(QMainWindow):
         点击组头可折叠/展开该组。order_paths 给定时按它排;
         Test_cases/ 外的当前打开文件也追加显示。"""
         import glob
+        # ★ 新出现的组**默认收起**(用户要求: 用例列表默认收回 APP 组, 不要展开)。
+        #   只对"第一次见到的组"这样做: 用户手动展开过的组记在 _known_groups 里,
+        #   之后重建列表不会又把它收回去(否则每次刷新都白展开一次)。
+        for g in self._list_group_dirs():
+            if g not in self._known_groups:
+                self._known_groups.add(g)
+                # 上次展开过的组保持展开; 其余(含新出现的组)默认收起
+                if g not in self._expanded_saved:
+                    self._collapsed_groups.add(g)
         if order_paths is None:
             infos = []
             for g in self._list_group_dirs():
@@ -2782,6 +2818,7 @@ class MainWindow(QMainWindow):
                     if (self.case_path and
                             os.path.basename(os.path.dirname(os.path.abspath(self.case_path))) == group):
                         self._unload_case()
+                self._save_expanded_groups()   # 记住展开/收起(下次打开保持原状)
                 self._fill_case_list()
                 # ★ 选中框保持在被点击的组头上(否则重建后 cur=None 会错误
                 #   匹配到第一个组头, 高亮跳到别的 APP 组 —— 用户实测)
@@ -2892,6 +2929,20 @@ class MainWindow(QMainWindow):
             self._set_status(f"已全选「{group}」的 {n} 条用例", self.status_label)
         else:
             self._set_status(f"已全选全部 {n} 条用例(未选中具体组)", self.status_label)
+
+    def on_clear_cases(self):
+        """「清空」: 与「全选」**同一范围语义** —— 优先只作用于当前所选 APP 组。
+
+        ★ 用户要求(2026-10-09): 清空也按组限定。原先是无差别清掉所有组的勾选 ——
+          想清掉某一组时会把别的组辛苦勾好的也一起清掉, 与"全选优先服务本组"
+          的语义也不对称。
+        """
+        group = self._target_group_for_bulk_check()
+        n = self._set_cases_checked(Qt.Unchecked, scope_group=group)
+        if group:
+            self._set_status(f"已清空「{group}」的 {n} 条勾选", self.status_label)
+        else:
+            self._set_status(f"已清空全部 {n} 条勾选(未选中具体组)", self.status_label)
 
     def _current_device_id(self):
         return self.device_combo.currentData()
@@ -3842,6 +3893,7 @@ class MainWindow(QMainWindow):
             self.worker = None
 
     def closeEvent(self, event):
+        self._save_expanded_groups()      # 关窗前记住组展开状态(下次打开还原)
         if self.worker:
             if QMessageBox.question(self, "正在执行", "用例正在执行,停止并退出?") == QMessageBox.Yes:
                 self.worker.request_stop()
