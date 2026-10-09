@@ -19,6 +19,7 @@
 import hashlib
 import json
 import os
+import sys
 import time
 import urllib.error
 import urllib.request
@@ -35,6 +36,7 @@ CHECK_INTERVAL_HOURS = 8          # 启动后每 8 小时自动检测一次(用�
 MIRROR_TIMEOUT = 5.0
 VERSION_TIMEOUT = 10.0
 DOWNLOAD_TIMEOUT = 60.0
+PROGRESS_MIN_INTERVAL = 0.5       # 下载进度回调最小间隔(秒), 见 download()
 _UA = "AutoTest-Updater"          # 有的 CDN 对空 UA 不友好
 
 #: 镜像站: base_url 取仓库文件, download_prefix 加速 Release 下载(留空=直连)。
@@ -318,6 +320,16 @@ def download(url, dest_path, progress_cb=None, timeout=DOWNLOAD_TIMEOUT):
             total = int(resp.headers.get("content-length") or 0)
             got = 0
             t0 = time.monotonic()
+            last_cb = None            # None = 还没报过 -> 第一块就报, 让界面立刻有反应
+
+            def _report(now):
+                el = max(now - t0, 1e-6)
+                speed = got / el
+                if total > 0:
+                    progress_cb(got, total, f"{speed / 1048576:.1f} MB/s")
+                else:
+                    progress_cb(got, 0, f"{got / 1048576:.1f} MB")
+
             while True:
                 chunk = resp.read(65536)
                 if not chunk:
@@ -325,12 +337,16 @@ def download(url, dest_path, progress_cb=None, timeout=DOWNLOAD_TIMEOUT):
                 f.write(chunk)
                 got += len(chunk)
                 if progress_cb:
-                    el = max(time.monotonic() - t0, 1e-6)
-                    speed = got / el
-                    if total > 0:
-                        progress_cb(got, total, f"{speed / 1048576:.1f} MB/s")
-                    else:
-                        progress_cb(got, 0, f"{got / 1048576:.1f} MB")
+                    now = time.monotonic()
+                    # ★ 节流(每 64KB 一次的话, 208MB ≈ 3300 次): 每次回调都要跨线程
+                    #   发信号、界面 setText、再写一行日志 —— 不节流会把 GUI 事件队列
+                    #   和运行日志一起淹掉(实测: 一次更新写 3300 行日志)。
+                    #   但**收尾那一次必报**(见循环后), 否则进度到不了 100%。
+                    if last_cb is None or now - last_cb >= PROGRESS_MIN_INTERVAL:
+                        last_cb = now
+                        _report(now)
+            if progress_cb:
+                _report(time.monotonic())       # 收尾: 进度必须能走到 100%
         os.replace(tmp, dest_path)      # 原子落地: 半截文件不会冒充完整包
         return True
     except Exception:
@@ -442,21 +458,97 @@ def validate_new_exe(path):
     return path
 
 
-def generate_update_bat(app_dir, pid):
+#: 传给替换脚本的「目标程序名」标记文件(见 write_target_marker / generate_update_bat)
+TARGET_MARKER = "_update_target.txt"
+#: 目标名里**绝不能有**的字符: 这个名字会被 cmd 再解析一次(% 会二次展开, 引号/
+#: 重定向/管道符能改变命令结构) —— 遇到这类名字就不写标记文件, 让 bat 走"唯一候选"
+#: 兜底(并因此拒绝在有多候选时动手), 绝不冒险把名字拼进命令行。
+_MARKER_BAD_CHARS = set('%"&|<>^!\r\n\t')
+
+
+def write_target_marker(app_dir, exe_name):
+    """把**正在运行的那个 exe 名**写给替换脚本; 写不了返回 ""。
+
+    ★ 为什么需要它(F3): bat 早先靠"目录里字母序第一个 .exe"猜当前程序 —— 目录里
+      只要有第二个 exe(用户留着的旧版本、重复下载的副本), 就会换错文件: 轻则
+      更新循环, 重则把用户另一个程序覆盖掉。
+    ★ 编码 UTF-8 + bat 在 `chcp 65001` **之后**读: 实测(2026-10-09, Win10 19045)
+      `set /p` 读文件是**字节透明**的, 而 cmd 在 65001 下能把 UTF-8 字节的变量正确
+      转成文件名; ANSI 字节同样可行, 但非中文系统的 ANSI 代码页根本编不出中文名 ——
+      所以选覆盖面最大的 UTF-8。bat 那边另有 `if not exist` 校验兜底。
+    """
+    name = os.path.basename(str(exe_name or "").strip())
+    if not name or set(name) & _MARKER_BAD_CHARS:
+        return ""
+    path = os.path.join(os.path.abspath(app_dir), TARGET_MARKER)
+    try:
+        with open(path, "w", encoding="utf-8", newline="\r\n") as f:
+            f.write(name)
+    except OSError as e:
+        log.warning(f"[更新] 写目标程序名标记失败(将退回候选匹配): {e}")
+        return ""
+    return path
+
+
+def generate_update_bat(app_dir, pid, exe_name=None, probe_seconds=8):
     """生成单文件版自替换 bat, 返回 bat 路径(写在 app_dir 下)。
 
     流程: 等 PID 退出 -> 旧 exe 改名 .bak(原子, 被锁也能成功) -> 复制新 exe ->
-          失败则回滚 -> 启动新版本 -> 清理 -> 自删。
+          启动新版本 -> **确认新进程活着**(没起来就回滚) -> 清理 -> 自删。
     新 exe 固定名 `_update_download.exe`(下载线程落盘时命名), 与 bat 同目录;
     只碰 exe 本身, 用户数据(config/ Test_cases/ 等)天然不碰。
 
+    ★ 目标程序名(F3): 优先用 exe_name(默认取 sys.executable, 即**本进程自己**)
+      写下的标记文件; 读不到才退回"目录里唯一的 .exe", 多个候选直接停手报错 ——
+      绝不靠字母序猜。
+    ★ 启动确认与回滚(F2): `start` 之后固定 3 秒就无条件删 .bak 是**没有退路**的
+      写法 —— 新版本因缺 DLL/被杀软隔离/包损坏而起不来时, 用户手里只剩一个坏程序。
+      现在必须**两道判据都指向"没起来"**才回滚:
+        ① 进程列表里查不到它  ② 它的文件删得掉(= 没被占用 = 确实没在跑)。
+      判据②既是补充也是保险: 万一 tasklist 判断失误, 删得掉才敢回滚。
+    ★ 等待用 ping 不用 timeout: timeout 在 stdin 被重定向时会立刻报错退出, 观察窗口
+      会缩成 0 秒 —— 判据①就变成"start 后立刻查一次"的竞态(2026-10-09 实测: 测试里
+      根本没等到 probe_seconds, 全靠替身进程死得快才侥幸通过)。
+    ★ .bak 在成功后**不由 bat 删**: 新版本可能几十秒后才崩, 那时 .bak 是唯一退路。
+      改由新版本自己跑稳之后删(core.bootstrap.cleanup_old_backup)。同理,
+      core.bootstrap 的启动清理也**不再碰** .bak —— 启动(约 1 秒)就删等于把退路拆了。
+
     ★ bat 里绝不嵌入绝对/中文路径 —— UTF-8 写入的 bat 在 GBK 代码页系统会被 cmd
       读乱码, rename/copy 的路径就失效了(参考项目实战踩过)。全部用 %~dp0。
+
+    ★★ echo 文本里**绝不能出现**半角圆括号/&/|/</>/^ (2026-10-09 实证, 血的教训)
+      这些字符在 `if (...)` 块里会被 cmd **当成命令结构**: 一个半角 `)` 就把块提前
+      闭合, cmd 随即报 "xxx was unexpected at this time" 并**整个批处理中止**(rc=255,
+      与代码页无关, 已用最小样例逐条验证)。
+      曾经的 "无法重命名当前程序(权限不足/杀毒锁定?)" 就踩了这个坑 —— 而它偏偏在
+      `ren` **之后**, 于是每次更新都是: 旧 exe 已被改名成 .bak -> bat 静默死掉 ->
+      新版本没复制、没启动、没回滚, 用户手里一个 exe 都不剩。这行字从 v1.0 起就在,
+      直到 2026-10-09 真跑一遍 cmd 才暴露(纯文本断言**证明不了** bat 能跑完)。
+      规矩: 要写括号就用全角（）, 或改成破折号; test_updater 里有一条扫描守护。
     """
+    if exe_name is None and getattr(sys, "frozen", False):
+        exe_name = os.path.basename(sys.executable)
+    marker = write_target_marker(app_dir, exe_name) if exe_name else ""
+    if not marker:
+        log.warning("[更新] 未能写下目标程序名, 替换脚本将按「目录里唯一的 .exe」匹配")
+    # ping -n N 用时约 N-1 秒(第一次立刻发包), 所以想等 N 秒要给 N+1
+    probe_pings = max(2, int(probe_seconds) + 1)
     bat = f"""@echo off
 chcp 65001 >nul 2>&1
 title 正在更新 APP 自动化测试平台
 cd /d "%~dp0"
+
+REM ★ chcp 必须紧跟在 @echo off 之后: 本文件是 UTF-8, 而 cmd 是按**当前代码页**
+REM   边读边解析的 —— 切换代码页之前出现中文, 就会被按旧代码页读成乱码。切换之后
+REM   %~dp0 的展开也才与文件的 UTF-8 一致(中文安装路径靠这一点)。
+REM ★ 外部命令一律走系统绝对路径: 开发机若把 Git/MSYS 放在 PATH 前面, 裸写
+REM   find/ping 会命中 coreutils, 于是"等待"变成立即返回、判断全部失真 —— 而这个
+REM   脚本正握着用户的程序文件。
+REM ★ 等待用 ping 而不是 timeout: timeout 在 stdin 被重定向时(服务/脚本/测试里
+REM   拉起)会立刻打印 "Input redirection is not supported" 并退出 —— 等待等于没有,
+REM   "等够时间再看新版本活没活"的判断会变成一场竞态。ping 不受重定向影响。
+if not defined SystemRoot set "SystemRoot=C:\\Windows"
+set "SYS=%SystemRoot%\\System32"
 
 echo ============================================
 echo   正在更新, 请勿关闭此窗口
@@ -466,18 +558,18 @@ echo.
 REM 等待原进程退出(最多 30 秒)
 set WAITED=0
 :wait_loop
-tasklist /FI "PID eq {pid}" 2>nul | find "{pid}" >nul
+"%SYS%\\tasklist.exe" /FI "PID eq {pid}" 2>nul | "%SYS%\\find.exe" "{pid}" >nul
 if %errorlevel% equ 0 (
     set /a WAITED+=1
     if %WAITED% geq 30 (
         echo [ERROR] 原进程未能退出, 更新取消
         goto :cleanup
     )
-    timeout /t 1 /nobreak >nul
+    "%SYS%\\ping.exe" -n 2 127.0.0.1 >nul 2>&1
     goto wait_loop
 )
 echo [OK] 原进程已退出
-timeout /t 2 /nobreak >nul
+"%SYS%\\ping.exe" -n 3 127.0.0.1 >nul 2>&1
 echo.
 
 if not exist "_update_download.exe" (
@@ -486,13 +578,35 @@ if not exist "_update_download.exe" (
     goto :cleanup
 )
 
-REM 动态定位当前 exe(不写死名字/路径, 避免中文与绝对路径被 cmd 乱码)
+REM 目标程序名 = Python 写下的标记文件(就是当时正在运行的那个 exe)。
+REM 读不到就退回"目录里唯一的 .exe"; 有多个候选直接停手 —— 宁可不更新, 也不换错文件。
 set "EXE_NAME="
-for %%f in ("%~dp0*.exe") do (
-    if /i not "%%~nxf"=="_update_download.exe" if not defined EXE_NAME set "EXE_NAME=%%~nxf"
+if exist "{TARGET_MARKER}" set /p EXE_NAME=<"{TARGET_MARKER}"
+if defined EXE_NAME if /i "%EXE_NAME%"=="_update_download.exe" set "EXE_NAME="
+if defined EXE_NAME if not exist "%EXE_NAME%" set "EXE_NAME="
+
+set "CAND2="
+if not defined EXE_NAME (
+    for %%f in ("%~dp0*.exe") do (
+        if /i not "%%~nxf"=="_update_download.exe" (
+            if not defined EXE_NAME (
+                set "EXE_NAME=%%~nxf"
+            ) else (
+                set "CAND2=%%~nxf"
+            )
+        )
+    )
 )
 if not defined EXE_NAME (
     echo [ERROR] 未找到当前程序文件, 更新取消
+    pause
+    goto :cleanup
+)
+if defined CAND2 (
+    echo [ERROR] 目录里有多个程序文件, 无法确认该替换哪一个:
+    echo         %EXE_NAME%
+    echo         %CAND2%
+    echo   这次没有改动任何文件。请只保留要更新的那个 exe 后再试。
     pause
     goto :cleanup
 )
@@ -502,14 +616,19 @@ echo 正在替换程序文件...
 if exist "%EXE_NAME%.bak" del /f /q "%EXE_NAME%.bak" 2>nul
 ren "%EXE_NAME%" "%EXE_NAME%.bak"
 if %errorlevel% neq 0 (
-    echo [ERROR] 无法重命名当前程序(权限不足/杀毒锁定?), 更新取消
+    echo [ERROR] 无法重命名当前程序 -- 权限不足或被杀毒锁定? 更新取消
+    pause
+    goto :cleanup
+)
+if not exist "%EXE_NAME%.bak" (
+    echo [ERROR] 备份当前程序失败, 更新取消, 未改动任何文件
     pause
     goto :cleanup
 )
 
 copy /y "_update_download.exe" "%EXE_NAME%" >nul
 if %errorlevel% neq 0 (
-    echo [ERROR] 新程序复制失败, 回滚
+    echo [ERROR] 新程序复制失败, 正在回滚...
     ren "%EXE_NAME%.bak" "%EXE_NAME%"
     pause
     goto :cleanup
@@ -519,23 +638,39 @@ echo [OK] 程序文件已更新
 echo 正在启动新版本...
 start "" "%EXE_NAME%"
 
-REM 清理: 杀软可能短暂锁定 .bak, 重试几次; 仍删不掉就留给下次启动清
-timeout /t 3 /nobreak >nul
-set OLD_RETRY=0
-:old_cleanup_loop
-if not exist "%EXE_NAME%.bak" goto :cleanup
-del /f /q "%EXE_NAME%.bak" 2>nul
-if exist "%EXE_NAME%.bak" (
-    set /a OLD_RETRY+=1
-    if %OLD_RETRY% lss 5 (
-        timeout /t 3 /nobreak >nul
-        goto old_cleanup_loop
-    )
-    echo [WARN] 旧程序文件(.bak)残留, 将由新版本启动时清理
+REM ★ 启动后必须确认新进程活着才敢收工
+echo 正在确认新版本是否正常启动, 约 {probe_seconds} 秒...
+"%SYS%\\ping.exe" -n {probe_pings} 127.0.0.1 >nul 2>&1
+"%SYS%\\tasklist.exe" /FI "IMAGENAME eq %EXE_NAME%" /FO CSV /NH 2>nul | "%SYS%\\find.exe" /i "%EXE_NAME%" >nul
+if not errorlevel 1 goto :started
+del /f /q "%EXE_NAME%" 2>nul
+if exist "%EXE_NAME%" goto :started
+if not exist "%EXE_NAME%.bak" (
+    echo [WARN] 新版本没有起来, 且找不到旧程序备份, 无法自动回滚
+    echo       请重新下载完整安装包, 配置、用例、模板都不受影响
+    pause
+    goto :cleanup
 )
+echo [ERROR] 新版本没有正常启动, 正在回滚到更新前的版本...
+ren "%EXE_NAME%.bak" "%EXE_NAME%"
+if not exist "%EXE_NAME%" (
+    echo [ERROR] 回滚失败! 请手工把 "%EXE_NAME%.bak" 改名为 "%EXE_NAME%"
+    pause
+    goto :cleanup
+)
+start "" "%EXE_NAME%"
+echo [OK] 已恢复到更新前的版本, 配置/用例/模板都没动, 稍后联网可以再试一次更新
+pause
+goto :cleanup
+
+:started
+echo [OK] 新版本已启动
+REM .bak 这里**不删**: 新版本若在后面几十秒里崩了, 它是唯一的退路。
+REM 删它由新版本自己跑稳之后做(core.bootstrap.cleanup_old_backup)
 
 :cleanup
 if exist "_update_download.exe" del /f /q "_update_download.exe"
+if exist "{TARGET_MARKER}" del /f /q "{TARGET_MARKER}"
 (goto) 2>nul & del /f /q "%~f0"
 """
     bat_path = os.path.join(os.path.abspath(app_dir), "_update.bat")

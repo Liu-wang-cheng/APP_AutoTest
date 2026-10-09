@@ -38,50 +38,93 @@ _CONFIG_TEMPLATE = "config/config.example.yaml"
 _CONFIG_TARGET = "config/config.yaml"
 
 #: OTA 自替换可能留下的残留(更新 bat 删不掉时的兜底, 见 updater.generate_update_bat)
-_UPDATE_LEFTOVERS = ("_update_download.exe",)
-#: 旧程序备份(onefile 更新把当前 exe 改名成 <名>.exe.bak, 杀软锁定时可能残留);
-#: 名字不固定(用户可能重命名过 exe), 用 glob 找
+#: ★ 三样**故意不在**这里:
+#:   ① `*.exe.bak` —— 它是"刚更新的那一版起不来就回滚"的唯一退路, 而回滚脚本要等
+#:      新进程起来几秒后才判定。启动(约 1 秒)就把它删了 = 把退路拆掉, 于是 F2 那
+#:      套回滚形同虚设。改由 cleanup_old_backup() 在跑稳之后删。
+#:   ② `_update.bat` —— **它此刻正在运行**(就是它把本进程拉起来的)。删一个正在执行
+#:      的 bat 会让 cmd 后续读不到下一行, 更新流程可能断在半路。它自己会自删,
+#:      真残留了也由 cleanup_old_backup() 收尾。
+#:   ③ 目录里的其它文件一律不碰。
+_UPDATE_LEFTOVERS = ("_update_download.exe",        # 下好的新版本(已复制或已作废)
+                     "_update_download.exe.part",   # 下载中断留下的半截(200MB)
+                     "_update_target.txt")          # 目标程序名标记
+#: 旧程序备份(onefile 更新把当前 exe 改名成 <名>.exe.bak); 名字不固定(用户可能
+#: 重命名过 exe), 用 glob 找。只在 cleanup_old_backup() 里用。
 _LEFTOVER_GLOB = "*.exe.bak"
+#: 延迟清理时一并收尾的更新残渣
+_LEFTOVER_LATE = ("_update.bat", "_update_download.exe", "_update_download.exe.part",
+                  "_update_target.txt")
 
 
-def cleanup_update_leftovers(app_dir=None):
-    """清掉上次更新中断留下的残留; 返回清理掉的条目。
+def cleanup_old_backup(app_dir=None):
+    """新版本**跑稳之后**再删旧程序备份(.bak)与更新残渣; 返回清掉的条目。
 
-    ★ 正常情况下更新 bat 自己会清; 但杀软可能短暂锁定导致残留 —— 启动时再兜一道
-      (此刻新版本已在运行, 旧 .bak 必然没用了)。任何失败都吞掉。
+    ★ 为什么必须晚于启动: `*.exe.bak` 是新版本起不来时唯一的退路 —— 更新脚本靠它
+      在 8 秒内判定新进程是否存活并回滚; 用户也能在几十秒内手工改回旧版本。
+      `gui/main_window` 在窗口稳定运行 BACKUP_CLEANUP_DELAY_MS 之后(以及正常关窗
+      时)调用这里, 那一刻才谈得上"更新确实成功了"。
+    ★ 顺带收 `_update.bat`: 启动时它还在运行(不能删), 此刻必然已经跑完。
     """
     import glob as _glob
-    import shutil
-    # ★ app_dir 必须单独判断 —— 写成 `app_dir or X if frozen else ""` 会被解析成
-    #   `(app_dir or X) if frozen else ""`: 未打包时 app_dir 被整个丢掉, 清理落空
+    root = _app_root(app_dir)
+    if not root:
+        return []
+    cleaned = []
+    for name in _LEFTOVER_LATE:
+        if _remove(os.path.join(root, name)):
+            cleaned.append(name)
+    for p in _glob.glob(os.path.join(root, _LEFTOVER_GLOB)):
+        if _remove(p):
+            cleaned.append(os.path.basename(p))
+    if cleaned:
+        log.info(f"[初始化] 已清理更新残渣: {', '.join(cleaned)}")
+    return cleaned
+
+
+def _app_root(app_dir=None):
+    """程序目录: 显式给了就用它; 否则仅打包环境可从 sys.executable 推出。
+
+    ★ 开发环境**不返回**项目根 —— 免得脚本/测试"顺手"删掉仓库里的文件
+      (与 cleanup_update_leftovers 同样的保守策略)。
+    """
     if app_dir:
         root = os.path.abspath(app_dir)
     elif getattr(sys, "frozen", False):
         root = os.path.dirname(os.path.abspath(sys.executable))
     else:
+        return ""
+    return root if root and os.path.isdir(root) else ""
+
+
+def _remove(path):
+    import shutil
+    if not os.path.exists(path):
+        return False
+    try:
+        if os.path.isdir(path):
+            shutil.rmtree(path, ignore_errors=True)
+        else:
+            os.remove(path)
+        return not os.path.exists(path)
+    except OSError:
+        return False
+
+
+def cleanup_update_leftovers(app_dir=None):
+    """清掉上次更新中断留下的残留; 返回清理掉的条目。
+
+    ★ 正常情况下更新 bat 自己会清; 但杀软可能短暂锁定导致残留 —— 启动时再兜一道。
+      `*.exe.bak` 与 `_update.bat` **不在这里**(见 _UPDATE_LEFTOVERS 的说明),
+      它们由 cleanup_old_backup() 在跑稳之后收。任何失败都吞掉。
+    """
+    # ★ app_dir 必须单独判断 —— 写成 `app_dir or X if frozen else ""` 会被解析成
+    #   `(app_dir or X) if frozen else ""`: 未打包时 app_dir 被整个丢掉, 清理落空
+    root = _app_root(app_dir)
+    if not root:
         return []
-    if not root or not os.path.isdir(root):
-        return []
-    cleaned = []
-    for name in _UPDATE_LEFTOVERS:
-        p = os.path.join(root, name)
-        if not os.path.exists(p):
-            continue
-        try:
-            if os.path.isdir(p):
-                shutil.rmtree(p, ignore_errors=True)
-            else:
-                os.remove(p)
-            if not os.path.exists(p):
-                cleaned.append(name)
-        except OSError:
-            pass
-    for p in _glob.glob(os.path.join(root, _LEFTOVER_GLOB)):
-        try:
-            os.remove(p)
-            cleaned.append(os.path.basename(p))
-        except OSError:
-            pass
+    cleaned = [name for name in _UPDATE_LEFTOVERS
+               if _remove(os.path.join(root, name))]
     if cleaned:
         log.info(f"[初始化] 已清理上次更新的残留: {', '.join(cleaned)}")
     return cleaned
@@ -179,6 +222,9 @@ def _ensure_update_section(cfg_path):
       "检查更新"会静默返回"未启用自动更新", 用户以为功能坏了(实测遇到)。
       ★ 文本级追加而不是 yaml.safe_dump 重写: 保住用户自己的注释与排版。
       已有该段就一个字都不动(哪怕用户改过内容)。
+    ★ 必须走 core.driver._atomic_write(先写临时文件再 os.replace): 直接 `open(w)`
+      会**立刻截断**用户的 config.yaml, 写到一半进程被杀(或磁盘满)就只剩半截 ——
+      而它含设备序列号等, 被 .gitignore 忽略、丢了只能手工重建。
     """
     if not os.path.isfile(cfg_path):
         return False
@@ -201,7 +247,7 @@ def _ensure_update_section(cfg_path):
         f'  version_file: "version.json"{eol}'
         f"  check_interval_hours: 8{eol}"
     )
-    with open(cfg_path, "w", encoding="utf-8", newline="") as f:
-        f.write(text.rstrip("\r\n") + eol + block)
+    from core.driver import _atomic_write
+    _atomic_write(cfg_path, text.rstrip("\r\n") + eol + block)
     log.info("[初始化] config.yaml 缺少 update 段, 已补上默认配置(自动更新启用)")
     return True

@@ -9,6 +9,7 @@ import copy
 import os
 import shutil
 import re
+import sys
 import time
 
 import yaml
@@ -961,7 +962,6 @@ class UpdateDownloadThread(QThread):
         from core import updater
         from core.driver import DATA_DIR
         try:
-            conf = updater.load_update_config(self._cfg)
             # 下载走镜像加速: 版本清单所在的镜像若配了 download_prefix 就用它
             # ★ 但**下载要独立选源**, 不能跟着"取版本清单"那个走 —— 清单优先 GitHub
             #   直连(求最新、避开 CDN 缓存), 而直连拉大文件实测几乎不可用(3MB 只得到
@@ -972,6 +972,10 @@ class UpdateDownloadThread(QThread):
             if dmirror is not None:
                 log.info(f"[更新] 下载走镜像: {dmirror.name}"
                          f"(加速前缀 {prefix or '无, 直连'})")
+            else:
+                # 没测速结果就退回直连 —— 直连拉大文件实测会卡住, 至少要留个痕迹,
+                # 别让"下载不动"变成一个没有线索的现象
+                log.warning("[更新] 没有可用的加速镜像, 本次下载走直连(可能很慢)")
             url = updater.apply_download_prefix(self._info.download_url, prefix)
             if not url:
                 self.done.emit("", "版本清单里没有 download_url")
@@ -988,7 +992,10 @@ class UpdateDownloadThread(QThread):
                 self.done.emit("", "下载包校验失败(sha256 不符), 已删除")
                 return
             updater.validate_new_exe(new_exe)
-            bat = updater.generate_update_bat(DATA_DIR, os.getpid())
+            # ★ 把**正在运行的 exe 名**交给替换脚本(F3): 不然它只能靠"目录里字母序
+            #   第一个 .exe"猜, 目录里多一个 exe 就会换错文件
+            bat = updater.generate_update_bat(
+                DATA_DIR, os.getpid(), os.path.basename(sys.executable))
             self.done.emit(bat, "")
         except Exception as e:
             self.done.emit("", f"下载/准备更新失败: {e}")
@@ -1912,6 +1919,47 @@ class MainWindow(QMainWindow):
         self._first_check_timer.setInterval(3000)      # 启动 3 秒后查一次
         self._first_check_timer.timeout.connect(self._check_update_now)
         self._first_check_timer.start()
+        self._setup_backup_cleanup()
+
+    #: 窗口稳定运行多久之后, 才认定"这次更新确实成功了"
+    BACKUP_CLEANUP_DELAY_MS = 120_000
+
+    def _setup_backup_cleanup(self):
+        """延迟清理更新留下的旧程序备份(*.exe.bak)与残渣。
+
+        ★ 为什么不在启动时清: .bak 是"新版本起不来就回滚"的唯一退路 —— 更新脚本
+          要在新进程起来 8 秒后才判定存活, 启动那一瞬间把它删掉, 回滚脚本将无路可退
+          (F2)。所以延到窗口稳定运行 2 分钟后, 以及正常关窗时(见 closeEvent)。
+        """
+        self._backup_cleanup_timer = QTimer(self)
+        self._backup_cleanup_timer.setSingleShot(True)
+        self._backup_cleanup_timer.setInterval(self.BACKUP_CLEANUP_DELAY_MS)
+        self._backup_cleanup_timer.timeout.connect(self._cleanup_update_backups)
+        self._backup_cleanup_timer.start()
+
+    def _cleanup_update_backups(self):
+        """真正干活的那个(幂等; 任何失败都只记日志)。
+
+        ★ 故意**不传** app_dir: 由 bootstrap 自己只在打包环境推程序目录。开发环境
+          (APP_DIR 就是仓库根)传进去等于允许"顺手删仓库里的文件", 与项目铁律
+          「脚本绝不改动用户/仓库状态」冲突 —— 而开发环境根本不会产生这些残渣。
+        """
+        try:
+            self._backup_cleanup_timer.stop()   # 已经清了, 别再排着(关窗路径也会走到这)
+        except Exception:
+            pass
+        # ★ 已下好、但用户还没点「立即重启」的那次更新不能清: 包和替换脚本都还要用
+        #   (下载完成的弹窗上点「稍后」就是这种状态 —— 定时器到点会把它们一并删掉,
+        #    用户再点重启就变成"替换脚本不存在")
+        pending = getattr(self, "_update_bat_path", "")
+        if pending and os.path.exists(pending):
+            log.debug("[更新] 有已就绪的更新未执行, 跳过本次清理")
+            return
+        try:
+            from core.bootstrap import cleanup_old_backup
+            cleanup_old_backup()
+        except Exception as e:
+            log.debug(f"[更新] 清理旧程序备份失败(忽略): {e}")
 
     def on_check_update(self):
         """「检查更新」按钮: 手动检查。
@@ -1931,21 +1979,33 @@ class MainWindow(QMainWindow):
         self._update_manual = True
         self.update_btn.setEnabled(False)
         self._set_status("正在检查更新…", self.status_label)
-        self._check_update_now()
+        # ★ 起不来线程时必须**把按钮点亮回去**: 检查期间按钮是灰的, 而"恢复正常"
+        #   只写在回调 _on_update_checked 里 —— 线程压根没起来就不会有回调, 按钮
+        #   从此永久置灰(用户只能重启程序)。配置瞬时读不到(企业加密文件正在解密)
+        #   在这个项目里是承认存在的场景, 不是假想。
+        if not self._check_update_now():
+            self.update_btn.setEnabled(not getattr(self, "_locked", False))
+            self._update_manual = False
+            self._set_status("检查更新没启动起来，请稍后再试", self.status_label)
 
     def _check_update_now(self):
-        """发起一次检查; 正在跑用例时**整轮跳过**(用户要求: 执行期间不检测新版本)"""
+        """发起一次检查; 返回是否真的起了后台线程。
+
+        正在跑用例时**整轮跳过**(用户要求: 执行期间不检测新版本)。
+        """
         if self.worker:
             log.info("[更新] 正在执行用例, 跳过本次检查")
-            return
+            return False
         if self._update_thread is not None and self._update_thread.isRunning():
-            return                                   # 上一次还没结束
+            return False                             # 上一次还没结束
         try:
             self._update_thread = UpdateCheckThread(load_config(), self)
             self._update_thread.done.connect(self._on_update_checked)
             self._update_thread.start()
+            return True
         except Exception as e:
             log.warning(f"[更新] 检查失败(忽略): {e}")
+            return False
 
     def _on_update_checked(self, result):
         """检查结果: 自动检查只在「有新版本」时打扰用户; 手动检查则任何结果都要回话"""
@@ -2004,6 +2064,7 @@ class MainWindow(QMainWindow):
             self._set_status("更新包正在下载，请稍候…", self.status_label)
             return
         self._set_status(f"正在下载更新 v{result.info.version}…", self.status_label)
+        self._dl_logged_key = None          # 进度日志台阶清零(见 _on_download_progress)
         self._update_download_thread = UpdateDownloadThread(
             load_config(), result.info, result.mirror, self,
             ranked=getattr(result, "ranked", None))
@@ -2012,11 +2073,24 @@ class MainWindow(QMainWindow):
         self._update_download_thread.start()
 
     def _on_download_progress(self, got, total, speed):
+        """下载进度: 界面每次都刷新, **日志只在跨过 5% 台阶时记一行**。
+
+        ★ 进度回调原来每 64KB 一次、每次都经 _set_status 落一行日志 —— 208MB 的包
+          会写 3000+ 行, 把运行日志和"这一轮到底发生了什么"全冲没了(updater.download
+          那边也做了节流, 这里是第二道)。
+        """
         if total > 0:
-            self._set_status(f"正在下载更新 {got * 100 // total}%（{speed}）",
-                             self.status_label)
+            key, step = got * 100 // total, 5     # 百分比台阶
+            msg, done = f"正在下载更新 {key}%（{speed}）", key >= 100
         else:
-            self._set_status(f"正在下载更新… {speed}", self.status_label)
+            key, step = got // (10 << 20), 1      # 总长未知 -> 按 10MB 台阶
+            msg, done = f"正在下载更新… {speed}", False
+        last = getattr(self, "_dl_logged_key", None)
+        if done or last is None or key >= last + step:
+            self._dl_logged_key = key
+            self._set_status(msg, self.status_label)     # 这个会写日志
+        else:
+            self.status_label.setText(msg)               # 只刷新界面
 
     def _on_download_done(self, bat_path, err):
         if err:
@@ -2550,11 +2624,20 @@ class MainWindow(QMainWindow):
             return set()
 
     def _save_expanded_groups(self):
-        """把"已展开的组"写回 QSettings(关窗口/切组时都调, 保证下次还原)"""
+        """把"已展开的组"写回 QSettings(关窗口/切组时都调, 保证下次还原)。
+
+        ★ 列表**读不到就一个字都不写**(F11): 原来无条件覆盖, 而 CASES_DIR 读不到
+          (目录被挪走/临时不可访问)时 _list_group_dirs() 返回空 → 写进去一个空集合,
+          用户攒下来的展开状态被一次静默清空。空集合也一律不写 —— 那同样是
+          "这次没读到组", 而不是"用户把组都删了"。残留的旧组名无害: 还原时只对
+          当前存在的组查表。
+        """
         try:
-            expanded = sorted(set(self._list_group_dirs()) - self._collapsed_groups)
+            groups = set(self._list_group_dirs())
+            if not groups:
+                return
             QSettings("vacuum_test", "case_studio").setValue(
-                "ui/expanded_groups", expanded)
+                "ui/expanded_groups", sorted(groups - self._collapsed_groups))
         except Exception as e:
             log.debug(f"[ui] 保存组展开状态失败(忽略): {e}")
 
@@ -3894,6 +3977,7 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event):
         self._save_expanded_groups()      # 关窗前记住组展开状态(下次打开还原)
+        self._cleanup_update_backups()    # 正常关窗 = 本次更新确实可用, 可以扔掉旧版本
         if self.worker:
             if QMessageBox.question(self, "正在执行", "用例正在执行,停止并退出?") == QMessageBox.Yes:
                 self.worker.request_stop()

@@ -586,17 +586,81 @@ def test_config_keeps_user_update_section(tmp_path):
     assert cfg.read_text(encoding="utf-8") == mine
 
 
-def test_cleanup_update_leftovers(tmp_path):
+def test_cleanup_update_leftovers_at_startup_is_conservative(tmp_path):
+    """★ 启动时的清理只管**更新残渣**, 绝不碰退路。
+
+    `*.exe.bak` 是"刚更新的那一版起不来就回滚"的唯一退路, 而回滚脚本要等新进程起来
+    8 秒后才判定 —— 启动(约 1 秒)就把它删了, 那套回滚形同虚设(F2)。
+    `_update.bat` 此刻**正在运行**(就是它把本进程拉起来的), 删它会让 cmd 读不到下一行。
+    """
     from core import bootstrap
     (tmp_path / "_update_download.exe").write_bytes(b"partial")
+    (tmp_path / "_update_download.exe.part").write_bytes(b"half")
+    (tmp_path / "_update_target.txt").write_text("AutoTest.exe", encoding="utf-8")
     (tmp_path / "AutoTest.exe.bak").write_bytes(b"old")
+    (tmp_path / "_update.bat").write_bytes(b"@echo off")
     cleaned = bootstrap.cleanup_update_leftovers(app_dir=str(tmp_path))
-    assert "_update_download.exe" in cleaned
-    assert "AutoTest.exe.bak" in cleaned
-    assert not (tmp_path / "_update_download.exe").exists()
-    assert not (tmp_path / "AutoTest.exe.bak").exists()
-    # 没有残留时是安静的无操作
+    for gone in ("_update_download.exe", "_update_download.exe.part",
+                 "_update_target.txt"):
+        assert gone in cleaned and not (tmp_path / gone).exists(), gone
+    assert (tmp_path / "AutoTest.exe.bak").exists(), "启动就删了唯一的退路"
+    assert (tmp_path / "_update.bat").exists(), "删了正在运行的替换脚本"
+    # 没有残渣时是安静的无操作
     assert bootstrap.cleanup_update_leftovers(app_dir=str(tmp_path)) == []
+
+
+def test_cleanup_old_backup_runs_late(tmp_path):
+    """跑稳之后(与关窗时)才收旧程序备份与替换脚本残渣 —— 那一刻才谈得上"更新成功" """
+    from core import bootstrap
+    (tmp_path / "AutoTest.exe.bak").write_bytes(b"old")
+    (tmp_path / "_update.bat").write_bytes(b"@echo off")
+    (tmp_path / "_update_download.exe").write_bytes(b"pkg")
+    cleaned = bootstrap.cleanup_old_backup(app_dir=str(tmp_path))
+    assert "AutoTest.exe.bak" in cleaned and "_update.bat" in cleaned
+    assert not (tmp_path / "AutoTest.exe.bak").exists()
+    assert not (tmp_path / "_update.bat").exists()
+    assert not (tmp_path / "_update_download.exe").exists()
+    assert bootstrap.cleanup_old_backup(app_dir=str(tmp_path)) == []
+
+
+def test_update_cleanup_never_touches_dev_tree(monkeypatch):
+    """★ 开发/测试环境(未打包)**必须**什么都不清: 传空 app_dir 时按 sys.executable
+    推出来的会是解释器目录, 而不是项目根 —— 否则测试会"顺手"删仓库里的文件。"""
+    from core import bootstrap
+    monkeypatch.setattr(bootstrap.sys, "frozen", False, raising=False)
+    assert bootstrap.cleanup_update_leftovers() == []
+    assert bootstrap.cleanup_old_backup() == []
+
+
+def test_ensure_update_section_writes_atomically(tmp_path, monkeypatch):
+    """补 update 段必须原子落盘(F12): 直接 open(w) 会先截断用户的 config.yaml,
+    写一半崩掉就只剩半截 —— 它含设备序列号, 丢了只能手工重建。"""
+    from core import bootstrap, driver
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text("app:\n  name: 涂鸦\n", encoding="utf-8", newline="\n")
+    import os as _os
+    replaced, tmp_files = [], []
+    real_replace = _os.replace
+
+    def spy_replace(src, dst):
+        replaced.append((src, dst))
+        return real_replace(src, dst)
+
+    real_mkstemp = driver.tempfile.mkstemp
+
+    def spy_mkstemp(*a, **k):
+        tmp_files.append(k.get("dir"))
+        return real_mkstemp(*a, **k)
+
+    monkeypatch.setattr(driver.os, "replace", spy_replace)
+    monkeypatch.setattr(driver.tempfile, "mkstemp", spy_mkstemp)
+    assert bootstrap._ensure_update_section(str(cfg)) is True
+    assert replaced, "没有走 os.replace —— 不是原子写"
+    assert replaced[0][0].startswith(str(tmp_path)), "临时文件必须同目录(同一文件系统)"
+    # 没有留下临时文件
+    leftovers = [p for p in tmp_files if p and any(
+        f.startswith(".tmp_") for f in _os.listdir(p))]
+    assert not leftovers, f"临时文件残留: {leftovers}"
 
 
 # ── 下载与自替换的 GUI 流程 ──
@@ -692,8 +756,15 @@ def test_download_worker_emits_bat(monkeypatch, tmp_path):
     monkeypatch.setattr(updater, "download", lambda url, dest, progress_cb=None: None)
     monkeypatch.setattr(updater, "verify_sha256", lambda f, s: True)
     monkeypatch.setattr(updater, "validate_new_exe", lambda p: p)
-    monkeypatch.setattr(updater, "generate_update_bat",
-                        lambda app, pid: str(tmp_path / "_update.bat"))
+    seen_exe = {}
+
+    def fake_bat(app, pid, exe_name=None):
+        # ★ F3 的接线: 必须把"正在运行的那个 exe 名"交给替换脚本, 否则它只能靠
+        #   字母序猜目标, 目录里多一个 exe 就换错文件
+        seen_exe["name"] = exe_name
+        return str(tmp_path / "_update.bat")
+
+    monkeypatch.setattr(updater, "generate_update_bat", fake_bat)
     # run() 里是 from core.driver import DATA_DIR(调用时才取), 钉住它
     monkeypatch.setattr("core.driver.DATA_DIR", str(tmp_path), raising=False)
 
@@ -706,6 +777,7 @@ def test_download_worker_emits_bat(monkeypatch, tmp_path):
     th.done.connect(lambda bat, err: results.append((bat, err)))
     th.run()      # 直接调 run(QThread.start 会真开线程, 时序不好控制)
     assert results == [(str(tmp_path / "_update.bat"), "")], results
+    assert seen_exe.get("name") == os.path.basename(sys.executable), seen_exe
 
 
 def test_download_worker_reports_sha_mismatch(monkeypatch, tmp_path):

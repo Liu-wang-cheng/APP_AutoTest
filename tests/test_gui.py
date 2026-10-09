@@ -3088,3 +3088,159 @@ def test_collapse_group_keeps_checked(qapp, monkeypatch, tmp_path):
             f"折叠再展开后勾选丢了: {before} -> {_checked_groups(w)}"
     finally:
         w.close()
+
+
+# ── OTA 更新: GUI 与更新器的**真实接线** ──
+from gui import main_window as mw          # noqa: E402  (本节要直接 patch 模块级名字)
+
+# ★ conftest 的 _no_real_update_check 把 _check_update_now 换成了空操作, 于是
+#   "建线程 -> done.connect -> 按钮恢复 -> 弹窗" 这条链在测试里从来没跑过: 任一处
+#   改名或漏连, 全套测试照样全绿, 而用户点按钮**没反应**(F10)。
+#   下面这几条把 _allow_real_check 打开, 只把最外层的网络入口 check_for_update 换掉。
+
+def _pump(qapp, pred, timeout=10.0):
+    """转事件循环直到 pred 成立 —— 跨线程信号要有事件循环才会派发到 GUI 线程"""
+    import time
+    end = time.time() + timeout
+    while time.time() < end:
+        qapp.processEvents()
+        if pred():
+            return True
+        time.sleep(0.02)
+    return False
+
+
+def test_check_update_button_really_reaches_updater(win, qapp, monkeypatch):
+    """★ F10: 手动点「检查更新」要真的调到更新器, 并且按钮先灰后亮"""
+    from core import updater
+    seen = {}
+
+    def fake_check(cfg, current=None):
+        seen["n"] = seen.get("n", 0) + 1
+        return updater.CheckResult("up_to_date", "已是最新(测试桩)")
+
+    monkeypatch.setattr(updater, "check_for_update", fake_check)
+    dialogs = []
+    monkeypatch.setattr(
+        mw.MainWindow, "_update_message",
+        lambda self, h, b="", kind="info", buttons=None, default=0:
+        dialogs.append((h, kind)) or list(buttons or ["知道了"])[default])
+    win._allow_real_check = True          # 解开 conftest 的护栏
+
+    win.on_check_update()
+    assert win.update_btn.isEnabled() is False, "检查期间按钮应置灰(用户要求)"
+    assert win._update_thread is not None, "没有真的建检查线程"
+    assert win._update_thread.wait(15000), "检查线程没结束"
+    assert _pump(qapp, lambda: win.update_btn.isEnabled()), \
+        "检查结束后按钮没有恢复 —— 用户再也点不动了"
+    assert seen.get("n") == 1, f"更新器没被调到: {seen}"
+    assert dialogs and dialogs[0][0] == "已是最新版本", dialogs
+
+
+def test_check_update_button_recovers_when_thread_cannot_start(win, monkeypatch):
+    """★ F5: 发起检查时抛异常(配置瞬时读不到/企业加密文件未解密完)必须把按钮点亮
+    回去 —— 原来只有回调才恢复按钮, 线程没起来就没有回调, 按钮永久置灰。"""
+    def boom(*a, **k):
+        raise RuntimeError("模拟: 配置瞬时读不到")
+
+    monkeypatch.setattr(mw, "UpdateCheckThread", boom)
+    win._allow_real_check = True
+    win.on_check_update()
+    assert win.update_btn.isEnabled(), "起不来线程却把按钮永久置灰(只能重启程序)"
+    assert win._update_manual is False, "手动标记没清掉, 下次自动检查会误弹窗"
+
+
+def test_download_progress_log_is_throttled(win, monkeypatch):
+    """★ F8: 进度回调每 64KB 一次(208MB ≈ 3300 次), 全写日志会把运行日志冲没"""
+    lines = []
+    monkeypatch.setattr(mw.log, "info", lambda m, *a, **k: lines.append(str(m)))
+    win._dl_logged_key = None
+    total = 100 * 1048576
+    for pct in range(1, 101):            # 100 次进度回调
+        win._on_download_progress(pct * 1048576, total, "1.0 MB/s")
+    assert len(lines) <= 25, f"进度日志没节流: {len(lines)} 行"
+    assert "100%" in lines[-1], f"收尾没写日志: {lines[-1]}"
+
+
+def test_save_expanded_groups_keeps_record_when_unreadable(win, tmp_path, monkeypatch):
+    """★ F11: 组目录读不到时不许把用户的展开记录清空(原来是无条件覆盖 -> 写进空集)"""
+    store = mw.QSettings.store            # conftest 的内存替身
+    store.clear()
+    monkeypatch.setattr(mw, "CASES_DIR", str(tmp_path / "并不存在"), raising=False)
+    win._save_expanded_groups()
+    assert "ui/expanded_groups" not in store, "读不到组却把记录清空了"
+
+
+def test_save_expanded_groups_records_only_expanded(win, tmp_path, monkeypatch):
+    """有组时: 记的是"展开过的", 收起的不记(新组天然不在里面 -> 默认收起)"""
+    base = tmp_path / "Test_cases"
+    for g in ("APP组", "三星"):
+        (base / g).mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(mw, "CASES_DIR", str(base), raising=False)
+    store = mw.QSettings.store
+    store.clear()
+    win._collapsed_groups = {"三星"}
+    win._save_expanded_groups()
+    assert store["ui/expanded_groups"] == ["APP组"], store
+
+
+def test_backup_cleanup_is_deferred_not_at_startup(win, monkeypatch):
+    """★ F2 的另一半: *.exe.bak 是"新版本起不来就回滚"的唯一退路, 只能在跑稳之后删。
+
+    启动时(约 1 秒)删 = 把退路拆了 —— 回滚脚本要等新进程起来 8 秒才判定。而且调用
+    **不能带 app_dir**: 开发环境下 APP_DIR 就是仓库根, 传进去等于允许删仓库文件。
+    """
+    from core import bootstrap
+    calls = []
+    monkeypatch.setattr(bootstrap, "cleanup_old_backup",
+                        lambda *a, **k: calls.append((a, k)))
+    assert win._backup_cleanup_timer.isSingleShot()
+    assert win._backup_cleanup_timer.interval() == win.BACKUP_CLEANUP_DELAY_MS
+    assert win.BACKUP_CLEANUP_DELAY_MS >= 60_000, "太早删等于没有退路"
+    win._cleanup_update_backups()
+    assert calls == [((), {})], f"调用方式不对(必须不带 app_dir): {calls}"
+    assert not win._backup_cleanup_timer.isActive(), "清完还留着定时器"
+
+
+def test_backup_cleanup_runs_on_close(win, monkeypatch):
+    """正常关窗本身就是"这次更新确实可用"的信号"""
+    from PySide6.QtGui import QCloseEvent
+    from core import bootstrap
+    calls = []
+    monkeypatch.setattr(bootstrap, "cleanup_old_backup",
+                        lambda *a, **k: calls.append(a))
+    win.closeEvent(QCloseEvent())
+    assert calls, "关窗时没有清理旧程序备份"
+
+
+def test_update_timers_follow_config(win, monkeypatch):
+    """启动后延迟查一次 + 之后每 N 小时一次(用户要求), 周期取配置"""
+    monkeypatch.setattr(mw, "load_config", lambda: {"update": {"check_interval_hours": 3}})
+    win._setup_update_check()
+    assert win._update_timer.interval() == 3 * 3600 * 1000
+    assert win._update_timer.isActive()
+    assert win._first_check_timer.isSingleShot()
+    assert 0 < win._first_check_timer.interval() <= 10_000, "首次检查应很快(但别拖慢启动)"
+
+
+def test_backup_cleanup_skips_pending_update(win, tmp_path, monkeypatch):
+    """★ 已下好但还没重启的那次更新不能被延迟清理删掉: 用户可能正在弹窗上犹豫。
+
+    否则 200MB 白下、点「立即重启」只会得到"替换脚本不存在"。
+    """
+    from core import bootstrap
+    bat = tmp_path / "_update.bat"
+    bat.write_text("@echo off\r\n", encoding="utf-8")
+    pkg = tmp_path / "_update_download.exe"
+    pkg.write_bytes(b"MZ")
+    calls = []
+    monkeypatch.setattr(bootstrap, "cleanup_old_backup",
+                        lambda *a, **k: calls.append(a))
+    win._update_bat_path = str(bat)
+    win._cleanup_update_backups()
+    assert not calls, "把待执行的更新清掉了"
+    assert pkg.exists()
+    # 用户放弃这次更新(脚本没了)之后, 清理恢复正常
+    bat.unlink()
+    win._cleanup_update_backups()
+    assert calls, "没有待执行更新时应该正常清理"
