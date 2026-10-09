@@ -139,6 +139,32 @@ class CheckResult:
     force: bool = False              # 本地版本低于 min_version -> 强制更新
 
 
+def _base_url_of(mirror):
+    """取镜像的 base_url —— **同时兼容 dict 与 MirrorResult**。
+
+    ★ 这两种形态在流程里都会出现: `build_mirrors()` 产出 dict(还没测速),
+      `race_mirrors()` 产出 MirrorResult(已测速)。曾经只按 MirrorResult 写,
+      而 race_mirrors 传进去的是 dict —— 每个镜像都在 `mirror.base_url` 抛
+      AttributeError, 被 except 吞掉后全判为"不可用", 于是**更新检查从未成功过**
+      (跑 15 天、每 8 小时失败一次都是这个原因)。
+    """
+    if isinstance(mirror, dict):
+        return str(mirror.get("base_url") or "")
+    return str(getattr(mirror, "base_url", "") or "")
+
+
+def _name_of(mirror):
+    if isinstance(mirror, dict):
+        return str(mirror.get("name") or _base_url_of(mirror))
+    return str(getattr(mirror, "name", "") or _base_url_of(mirror))
+
+
+def _prefix_of(mirror):
+    if isinstance(mirror, dict):
+        return str(mirror.get("download_prefix") or "")
+    return str(getattr(mirror, "download_prefix", "") or "")
+
+
 def is_direct_github(base_url):
     """是否 GitHub 直连(权威无缓存)。
 
@@ -151,7 +177,7 @@ def is_direct_github(base_url):
 
 
 def build_url(mirror, version_file):
-    return f"{mirror.base_url}/{version_file}"
+    return f"{_base_url_of(mirror)}/{version_file}"
 
 
 def _request(url, method="GET", timeout=MIRROR_TIMEOUT, extra_headers=None):

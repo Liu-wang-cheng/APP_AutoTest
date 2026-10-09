@@ -390,6 +390,84 @@ def test_check_update_never_raises_in_gui(win, monkeypatch):
     win._check_update_now()          # 不得抛
 
 
+def test_update_button_exists_and_disabled_while_running(win):
+    """★ 「检查更新」按钮: 存在, 且**用例执行期间置灰**(用户要求)。
+
+    运行中即使点得到也没意义 —— 更新完还得重启, 而带着执行中的用例重启会毁掉
+    这一轮, 所以不如直接禁用, 让用户一眼看出"现在不行"。
+    """
+    assert hasattr(win, "update_btn"), "工具栏缺少「检查更新」按钮"
+    assert win.update_btn.text() == "检查更新"
+    assert win.update_btn.isEnabled(), "空闲时应可点"
+
+    win._set_locked(True)             # 模拟开始执行用例
+    assert not win.update_btn.isEnabled(), "用例执行期间该按钮必须置灰"
+
+    win._set_locked(False)            # 执行结束
+    assert win.update_btn.isEnabled(), "执行结束后应恢复可点"
+
+
+def test_manual_check_gives_feedback_on_every_result(win, monkeypatch):
+    """★ 手动检查**必须有反馈**: 已是最新/失败/没配仓库都要说一声。
+
+    自动检查每 8 小时静默跑一次, 只在有新版时弹窗; 手动点是用户的明确意图,
+    点了没反应会让人以为按钮坏了。
+    """
+    import gui.main_window as mw
+    from core import updater
+    pops = []
+    monkeypatch.setattr(mw.QMessageBox, "information",
+                        lambda *a, **k: pops.append(("info", a[2] if len(a) > 2 else "")))
+    monkeypatch.setattr(mw.QMessageBox, "warning",
+                        lambda *a, **k: pops.append(("warn", a[2] if len(a) > 2 else "")))
+
+    # 自动检查: 已是最新 -> 不打扰
+    win._update_manual = False
+    win._on_update_checked(updater.CheckResult("up_to_date", "已是最新(1.1)"))
+    assert pops == [], "自动检查不该为'已是最新'弹窗"
+
+    # 手动检查: 已是最新 -> 必须回话
+    win._update_manual = True
+    win._on_update_checked(updater.CheckResult("up_to_date", "已是最新(1.1)"))
+    assert pops and pops[0][0] == "info" and "已是最新" in pops[0][1], pops
+
+    pops.clear()
+    win._update_manual = True
+    win._on_update_checked(updater.CheckResult("error", "所有镜像都取不到版本清单"))
+    assert pops and pops[0][0] == "warn" and "镜像" in pops[0][1], pops
+
+    pops.clear()
+    win._update_manual = True
+    win._on_update_checked(updater.CheckResult("skipped", "未配置更新仓库"))
+    assert pops and "update.repository" in pops[0][1], pops
+
+
+def test_manual_check_blocked_while_running(win, monkeypatch):
+    """运行中点「检查更新」(程序化调用/竞态)也不能真发检查"""
+    win.worker = object()
+    try:
+        called = []
+        monkeypatch.setattr(win, "_check_update_now", lambda: called.append(1))
+        monkeypatch.setattr("gui.main_window.QMessageBox.information",
+                            lambda *a, **k: None)
+        win.on_check_update()
+        assert called == [], "执行用例期间不该发起检查"
+    finally:
+        win.worker = None
+
+
+def test_update_button_not_reenabled_while_still_locked(win, monkeypatch):
+    """检查完成的回调不得把"运行中"的置灰又点亮(否则按钮状态与锁定状态打架)"""
+    from core import updater
+    monkeypatch.setattr("gui.main_window.QMessageBox.information",
+                        lambda *a, **k: None)
+    win._set_locked(True)
+    win._update_manual = False
+    win._on_update_checked(updater.CheckResult("up_to_date", "已是最新(1.1)"))
+    assert not win.update_btn.isEnabled(), "锁定中不该被检查回调点亮"
+    win._set_locked(False)
+
+
 # ── 首次运行的资源铺出(打包后才会暴露的问题) ──
 
 def _seed_src(root):

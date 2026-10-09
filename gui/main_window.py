@@ -1843,11 +1843,31 @@ class MainWindow(QMainWindow):
         except Exception:
             hours = float(updater.CHECK_INTERVAL_HOURS)
         self._update_thread = None
+        self._update_manual = False      # 本次检查是用户手动点的?(手动必须有反馈)
         self._update_timer = QTimer(self)
         self._update_timer.setInterval(max(1, int(hours * 3600 * 1000)))
         self._update_timer.timeout.connect(self._check_update_now)
         self._update_timer.start()
         QTimer.singleShot(3000, self._check_update_now)   # 首次: 启动 3 秒后
+
+    def on_check_update(self):
+        """「检查更新」按钮: 手动检查。
+
+        与自动检查的区别是**必须有反馈** —— 自动检查每 8 小时静默跑一次, 只在发现
+        新版时弹窗(平时不打扰); 手动点是用户的明确意图, 所以"已是最新""检查失败"
+        "没配仓库"都要说一声, 否则点了没反应, 用户会以为按钮坏了。
+        """
+        if self.worker:
+            QMessageBox.information(self, "检查更新",
+                                    "正在执行用例, 请等本轮跑完再检查。")
+            return
+        if self._update_thread is not None and self._update_thread.isRunning():
+            QMessageBox.information(self, "检查更新", "正在检查中, 请稍候…")
+            return
+        self._update_manual = True
+        self.update_btn.setEnabled(False)
+        self._set_status("正在检查更新…", self.status_label)
+        self._check_update_now()
 
     def _check_update_now(self):
         """发起一次检查; 正在跑用例时**整轮跳过**(用户要求: 执行期间不检测新版本)"""
@@ -1864,10 +1884,34 @@ class MainWindow(QMainWindow):
             log.warning(f"[更新] 检查失败(忽略): {e}")
 
     def _on_update_checked(self, result):
-        """检查结果: 只有「有新版本」才打扰用户, 其余只写日志"""
+        """检查结果: 自动检查只在「有新版本」时打扰用户; 手动检查则任何结果都要回话"""
+        manual = bool(getattr(self, "_update_manual", False))
+        self._update_manual = False
+        if hasattr(self, "update_btn"):
+            # 检查期间禁用了按钮, 这里恢复 —— 但若此刻正在跑用例(锁定中)必须保持禁用,
+            # 否则会把 _set_locked 刚置的灰又点亮
+            self.update_btn.setEnabled(not getattr(self, "_locked", False))
         log.info(f"[更新] {result.message}")
+
         if result.status != "has_update":
+            if manual:
+                if result.status == "up_to_date":
+                    QMessageBox.information(self, "检查更新", result.message)
+                elif result.status == "error":
+                    QMessageBox.warning(
+                        self, "检查更新失败",
+                        f"{result.message}\n\n"
+                        "常见原因: 网络不通 / 代理拦截 / 镜像站暂时不可用。\n"
+                        "稍后再试即可, 不影响程序正常使用。")
+                else:                      # skipped: 没配仓库
+                    QMessageBox.information(
+                        self, "检查更新",
+                        f"{result.message}\n\n"
+                        "如需启用自动更新, 请在 config/config.yaml 的 update.repository "
+                        "里填入 GitHub 的 owner/repo。")
+                self._set_status("就绪", self.status_label)
             return
+
         info = result.info
         notes = (info.release_notes or "").strip()
         if len(notes) > 600:
@@ -1936,7 +1980,7 @@ class MainWindow(QMainWindow):
         if self.worker:
             QMessageBox.warning(self, "无法更新",
                                 "用例正在执行, 不能现在重启更新。\n"
-                                "请等本轮跑完后再点菜单里的「检查更新」。")
+                                "请等本轮跑完后, 点工具栏的「检查更新」重新操作。")
             return
         bat = getattr(self, "_update_bat_path", "")
         if not bat or not os.path.exists(bat):
@@ -2030,6 +2074,13 @@ class MainWindow(QMainWindow):
         self.stop_btn.setEnabled(False)
         self.stop_btn.clicked.connect(self.on_stop)
         lay.addWidget(self.stop_btn)
+
+        # 手动检查更新: 平时启动后会自动检查(每 8 小时一次, 静默——只在有新版时弹窗);
+        # 手动点这个则**必须有反馈**(已是最新/失败都要说一声), 否则用户以为按钮没反应
+        self.update_btn = QPushButton("检查更新")
+        self.update_btn.setToolTip("立即检查是否有新版本\n(程序启动后会自动检查一次, 之后每 8 小时一次)")
+        self.update_btn.clicked.connect(self.on_check_update)
+        lay.addWidget(self.update_btn)
 
         return bar
 
@@ -3340,7 +3391,10 @@ class MainWindow(QMainWindow):
         widgets = [self.new_btn, self.open_btn, self.save_btn, self.add_btn,
                    self.case_name_edit, self.module_edit, self.priority_combo,
                    self.case_wait_edit, self.case_combo,
-                   self.yaml_refresh_btn, self.yaml_apply_btn]
+                   self.yaml_refresh_btn, self.yaml_apply_btn,
+                   # 用例执行期间「检查更新」置灰: 变了也没法立刻重启安装,
+                   # 点它只会得到一个"请等本轮跑完"的提示 —— 不如直接禁用
+                   self.update_btn]
         widgets += self._quick_btns
         for w in widgets:
             w.setEnabled(not locked)

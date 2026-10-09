@@ -271,6 +271,77 @@ def test_apply_download_prefix():
     assert updater.apply_download_prefix("", "https://p/") == ""
 
 
+# ── 真实路径回归: 只 mock 网络层, 让 race_mirrors/build_url/_test_one_mirror 真跑 ──
+
+def test_race_mirrors_real_path_with_dict_mirrors(monkeypatch):
+    """★ 回归: race_mirrors 收到的是 **dict**(还没测速), 而 build_url 曾按
+    MirrorResult 对象写 → 每个镜像都在 `mirror.base_url` 抛 AttributeError,
+    被 `except Exception: pass` 吞掉 → **所有镜像永久判为不可用**。
+
+    线上实测: 那个 exe 跑了 15 天、每 8 小时准点检查一次, 每次都
+    「所有镜像都取不到版本清单」—— 自动更新从来没成功过一次。
+
+    这个用例**不 mock 内部函数**(之前正是因为把 _test_one_mirror 整个替换掉,
+    真实代码路径从未被执行, 测试全绿却功能全坏)。这里只替换最底层的 `_request`。
+    """
+    import core.updater as up
+    calls = []
+
+    def fake_request(url, method="GET", timeout=0, extra_headers=None):
+        calls.append((method, url))
+        return _Resp(b'{"version":"9.9"}', 200)
+
+    monkeypatch.setattr(up, "_request", fake_request)
+    mirrors = [{"name": "github",
+                "base_url": "https://raw.githubusercontent.com/o/r/master",
+                "download_prefix": ""}]
+    ranked = up.race_mirrors(mirrors, "version.json")
+
+    assert calls, "根本没发出任何请求"
+    assert len(ranked) == 1
+    assert ranked[0].success is True, \
+        f"镜像被判为不可用(真实路径有类型 bug): success={ranked[0].success}"
+    assert ranked[0].latency_ms >= 0
+    assert "version.json" in calls[0][1]
+
+
+def test_check_for_update_end_to_end_with_dict_mirrors(monkeypatch):
+    """端到端(只 mock 网络): 从配置 → 镜像展开 → 测速 → 取清单 → 比版本, 全真跑。
+
+    这条守住的是"整体能工作", 而不只是某个函数不抛异常。
+    """
+    import core.updater as up
+
+    def fake_request(url, method="GET", timeout=0, extra_headers=None):
+        body = b'{"version":"9.9","download_url":"https://e/a.exe","sha256":"x"}'
+        return _Resp(body, 200)
+
+    monkeypatch.setattr(up, "_request", fake_request)
+    cfg = {"update": {"enabled": True, "repository": "o/r", "branch": "master"}}
+    r = up.check_for_update(cfg, current="1.0")
+
+    assert r.status == "has_update", f"{r.status}: {r.message}"
+    assert r.info.version == "9.9"
+    assert r.mirror is not None and r.mirror.base_url.endswith("/master")
+
+
+def test_build_url_accepts_both_dict_and_mirror_result():
+    """两种形态都要能取 URL —— 流程里 dict(build_mirrors 产物)与 MirrorResult
+    (race_mirrors 产物) 都会出现, 只认一种就会在另一处炸。"""
+    import core.updater as up
+    as_dict = {"name": "d", "base_url": "https://a/", "download_prefix": ""}
+    as_obj = up.MirrorResult("o", "https://b/", "", 1.0, True)
+    assert up.build_url(as_dict, "version.json") == "https://a//version.json"
+    assert up.build_url(as_obj, "version.json") == "https://b//version.json"
+
+
+def test_default_mirrors_have_no_leading_slash_issue():
+    """内置镜像 base_url 末尾不能带斜杠(否则拼出 //version.json)"""
+    import core.updater as up
+    for m in up.default_config()["mirrors"]:
+        assert not m["base_url"].endswith("/"), m
+
+
 # ── 新版本 exe 校验(onefile: 安装包就是一个 exe) ──
 
 def test_validate_new_exe_ok(tmp_path):

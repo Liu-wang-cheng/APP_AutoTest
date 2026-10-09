@@ -72,12 +72,17 @@ def _launch_check(exe, app_dir, wait=_LAUNCH_WAIT):
         time.sleep(1)
 
     if proc.poll() is None:
-        proc.terminate()
+        # ★ 必须杀**整棵进程树**: onefile 是"bootloader 父进程 + 真正的应用子进程"
+        #   两段结构, terminate() 只结束父进程, 用 offscreen 启动的应用子进程会活下来
+        #   变成"无窗口僵尸"—— 实测就这样留下过一个跑了 15 天的进程(用户以为程序
+        #   没启动, 其实僵尸占着内存、还锁着 config 等文件)。
+        subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                       capture_output=True, timeout=30)
         try:
             proc.wait(timeout=10)
         except Exception:
             proc.kill()
-        print("   OK 进程稳定运行, 未被终止")
+        print("   OK 进程稳定运行, 已结束(含子进程)")
         print(f"   {'OK' if seeded else '[WARN]'} 首次铺资源(config/config.yaml): "
               + ("已生成" if seeded else "未见生成(可能本就存在)"))
         return [], seeded
