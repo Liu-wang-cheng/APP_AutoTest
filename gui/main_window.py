@@ -1828,6 +1828,52 @@ class MainWindow(QMainWindow):
     # ── 顶部工具栏 ──
     # ── OTA 自动更新 ──
 
+    def _update_message(self, heading, body="", kind="info", buttons=None,
+                        default=0):
+        """与界面主题一致的更新弹窗。
+
+        ★ 裸 QMessageBox 是系统默认的灰色小盒子, 与蓝色主题的界面很违和; 这里统一
+          套一套配色/圆角/中文按钮, 主按钮用主题蓝。
+        kind: info / warn / error —— 只影响图标, 不改布局。
+        返回被点击按钮的文本。
+        """
+        box = QMessageBox(self)
+        box.setWindowTitle("检查更新")
+        box.setIcon({"info": QMessageBox.Information, "warn": QMessageBox.Warning,
+                     "error": QMessageBox.Critical}.get(kind, QMessageBox.Information))
+        box.setText(f"<div style='font-size:14px;font-weight:bold;color:#1f2937'>{heading}</div>")
+        if body:
+            box.setInformativeText(body)
+        box.setStyleSheet("""
+            QMessageBox { background: #ffffff; }
+            QMessageBox QLabel { color: #475569; font-family: "Microsoft YaHei UI";
+                                 font-size: 12px; line-height: 160%; }
+            QMessageBox QPushButton {
+                background: #ffffff; border: 1px solid #d9dee6; border-radius: 6px;
+                padding: 6px 20px; color: #333; min-width: 80px;
+            }
+            QMessageBox QPushButton:hover { border-color: #2563eb; color: #2563eb; }
+            QMessageBox QPushButton#primaryBtn {
+                background: #2563eb; color: white; border: none; font-weight: bold;
+            }
+            QMessageBox QPushButton#primaryBtn:hover { background: #1d4fd7; }
+        """)
+        texts = list(buttons or ["知道了"])
+        made = []
+        for i, t in enumerate(texts):
+            b = box.addButton(t, QMessageBox.AcceptRole if i == default
+                              else QMessageBox.RejectRole)
+            if i == default:
+                b.setObjectName("primaryBtn")     # 主按钮走主题蓝
+            made.append(b)
+        box.setDefaultButton(made[default])
+        box.exec()
+        clicked = box.clickedButton()
+        for b, t in zip(made, texts):
+            if b is clicked:
+                return t
+        return ""
+
     def _setup_update_check(self):
         """启动后延迟检查一次, 之后每 N 小时自动检测(用户要求)。
 
@@ -1858,11 +1904,12 @@ class MainWindow(QMainWindow):
         "没配仓库"都要说一声, 否则点了没反应, 用户会以为按钮坏了。
         """
         if self.worker:
-            QMessageBox.information(self, "检查更新",
-                                    "正在执行用例, 请等本轮跑完再检查。")
+            self._update_message("现在不方便检查",
+                                 "用例正在执行中。等这一轮跑完再点即可 —— "
+                                 "反正更新也要重启程序才能生效。", kind="warn")
             return
         if self._update_thread is not None and self._update_thread.isRunning():
-            QMessageBox.information(self, "检查更新", "正在检查中, 请稍候…")
+            self._set_status("正在检查更新，请稍候…", self.status_label)
             return
         self._update_manual = True
         self.update_btn.setEnabled(False)
@@ -1896,19 +1943,23 @@ class MainWindow(QMainWindow):
         if result.status != "has_update":
             if manual:
                 if result.status == "up_to_date":
-                    QMessageBox.information(self, "检查更新", result.message)
+                    self._update_message(
+                        "已是最新版本",
+                        f"当前版本 v{APP_VERSION} 就是最新的。\n\n"
+                        "程序在启动时、以及之后每 8 小时会自动检查一次，"
+                        "有新版本会第一时间提示你。")
                 elif result.status == "error":
-                    QMessageBox.warning(
-                        self, "检查更新失败",
+                    self._update_message(
+                        "暂时无法检查更新",
                         f"{result.message}\n\n"
-                        "常见原因: 网络不通 / 代理拦截 / 镜像站暂时不可用。\n"
-                        "稍后再试即可, 不影响程序正常使用。")
+                        "多半是网络或代理限制，稍后会自动重试 —— 不影响程序正常使用。",
+                        kind="warn")
                 else:                      # skipped: 没配仓库
-                    QMessageBox.information(
-                        self, "检查更新",
-                        f"{result.message}\n\n"
-                        "如需启用自动更新, 请在 config/config.yaml 的 update.repository "
-                        "里填入 GitHub 的 owner/repo。")
+                    self._update_message(
+                        "未启用自动更新",
+                        "如需启用，请在 config/config.yaml 的 update.repository "
+                        "里填入 GitHub 的 owner/repo。\n\n"
+                        "（企业内网环境如果不方便外联，保持现状即可。）")
                 self._set_status("就绪", self.status_label)
             return
 
@@ -1916,32 +1967,26 @@ class MainWindow(QMainWindow):
         notes = (info.release_notes or "").strip()
         if len(notes) > 600:
             notes = notes[:600] + "…"
-        body = f"当前版本: {APP_VERSION}\n最新版本: {info.version}"
-        if info.release_date:
-            body += f"  ({info.release_date})"
-        if notes:
-            body += f"\n\n更新内容:\n{notes}"
+        head = f"发现新版本 v{info.version}"
         if result.force:
-            body += "\n\n★ 此版本要求强制更新, 请尽快升级。"
-        box = QMessageBox(self)
-        box.setWindowTitle("发现新版本")
-        box.setText(body)
-        download = box.addButton("立即更新", QMessageBox.AcceptRole)
-        if not result.force:
-            box.addButton("稍后再说", QMessageBox.RejectRole)
-        # 强制更新(min_version)只给「立即更新」一个选择 —— 既然标了强制,
-        # 就不能提供一个"点了却什么都不发生"的退出按钮
-        box.exec()
-        if box.clickedButton() is download:
+            head += "（需更新）"
+        body = f"当前版本：v{APP_VERSION}\n最新版本：v{info.version}"
+        if info.release_date:
+            body += f"（{info.release_date}）"
+        if notes:
+            body += f"\n\n更新内容\n{notes}"
+        buttons = ["立即更新"] if result.force else ["立即更新", "稍后再说"]
+        picked = self._update_message(head, body, buttons=buttons, default=0)
+        if picked == "立即更新":
             self._start_update_download(result)
 
     def _start_update_download(self, result):
         """后台下载更新包(下载中再次触发直接忽略)"""
         if getattr(self, "_update_download_thread", None) and \
                 self._update_download_thread.isRunning():
-            QMessageBox.information(self, "正在下载", "更新包正在下载, 请等待完成")
+            self._set_status("更新包正在下载，请稍候…", self.status_label)
             return
-        self._set_status(f"正在下载更新 {result.info.version}...", self.status_label)
+        self._set_status(f"正在下载更新 v{result.info.version}…", self.status_label)
         self._update_download_thread = UpdateDownloadThread(
             load_config(), result.info, result.mirror, self)
         self._update_download_thread.progress.connect(self._on_download_progress)
@@ -1950,41 +1995,46 @@ class MainWindow(QMainWindow):
 
     def _on_download_progress(self, got, total, speed):
         if total > 0:
-            self._set_status(f"下载更新中 {got * 100 // total}%({speed})",
+            self._set_status(f"正在下载更新 {got * 100 // total}%（{speed}）",
                              self.status_label)
         else:
-            self._set_status(f"下载更新中 {speed}", self.status_label)
+            self._set_status(f"正在下载更新… {speed}", self.status_label)
 
     def _on_download_done(self, bat_path, err):
         if err:
-            self._set_status(f"更新失败: {err}", self.status_label)
-            QMessageBox.critical(self, "更新失败", err)
+            self._set_status("更新失败", self.status_label)
+            self._update_message(
+                "更新没有成功",
+                f"{err}\n\n程序仍是可用的，联网正常时再试一次即可。", kind="error")
             return
         self._update_bat_path = bat_path
-        reply = QMessageBox.information(
-            self, "下载完成",
-            "新版本已下载并校验通过。\n"
-            "点击「确定」将重启应用以完成更新(界面会关闭, 请稍候)。",
-            QMessageBox.Ok | QMessageBox.Cancel, QMessageBox.Ok)
-        if reply == QMessageBox.Ok:
+        picked = self._update_message(
+            "更新已就绪",
+            "新版本下载完成并通过校验。\n\n"
+            "点「立即重启」后程序会关闭、自动完成替换并重新启动"
+            "（你的配置、用例、模板都不会动）。",
+            buttons=["立即重启", "稍后"], default=0)
+        if picked == "立即重启":
             self._apply_update_and_restart()
 
     def _apply_update_and_restart(self):
         """启动替换脚本并立刻退出本进程。
 
-        ★ 必须 os._exit 而不是正常退出: _internal/ 里的 Qt/opencv DLL 句柄若不立刻
-          释放, bat 里的 rename/robocopy 会因文件被锁而失败(参考项目实战踩过)。
+        ★ 必须 os._exit 而不是正常退出: 单文件 exe 内已释放的 Qt/opencv DLL 句柄若
+          不立刻释放, bat 里的改名/复制会因文件被锁而失败(参考项目实战踩过)。
         ★ 下载期间用户可能又点了「运行」—— 带着正在执行的用例退出会毁掉这一轮,
           必须拦下(下次定时器到点再提示)。
         """
         if self.worker:
-            QMessageBox.warning(self, "无法更新",
-                                "用例正在执行, 不能现在重启更新。\n"
-                                "请等本轮跑完后, 点工具栏的「检查更新」重新操作。")
+            self._update_message(
+                "现在不能重启更新",
+                "用例正在执行中。等这一轮跑完，再点工具栏的「检查更新」重新操作即可。",
+                kind="warn")
             return
         bat = getattr(self, "_update_bat_path", "")
         if not bat or not os.path.exists(bat):
-            QMessageBox.warning(self, "更新失败", "替换脚本不存在")
+            self._update_message("更新失败", "替换脚本不存在，请重新检查更新。",
+                                 kind="error")
             return
         import subprocess
         subprocess.Popen(
