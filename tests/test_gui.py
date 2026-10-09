@@ -1436,6 +1436,10 @@ def test_collapsed_group_not_marked_empty(qapp, monkeypatch, tmp_path):
             "module: %s\ncases: [{name: a, steps: []}]\n" % n, encoding="utf-8")
     monkeypatch.setattr(mw, "CASES_DIR", str(tmp_path / "Test_cases"), raising=False)
     w = mw.MainWindow()
+    # 从展开态起步(界面默认收起); 本用例稍后自己折叠该组
+    w._collapsed_groups.clear()
+    w._known_groups.update(w._list_group_dirs())
+    w._fill_case_list()
     try:
         # 触发一次箭头移动(order_paths 分支)
         w._move_case(w.case_list.item(case_row_index(w, 0)).data(Qt.UserRole), +1)

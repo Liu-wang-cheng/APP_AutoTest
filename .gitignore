@@ -16,3 +16,6 @@ Test_img/debug/
 build/
 dist/
 *.spec.bak
+
+# 用户数据备份(每次启动自动生成, 含 config 与用例 —— 绝不能入库)
+backups/

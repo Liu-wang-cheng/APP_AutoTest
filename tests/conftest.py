@@ -85,6 +85,43 @@ def _isolate_group_preconditions(monkeypatch, tmp_path):
 
 
 @pytest.fixture(autouse=True)
+def _isolate_qsettings(monkeypatch):
+    """把 QSettings 换成内存替身 —— 测试绝不写用户的注册表。
+
+    ★ 为什么需要: GUI 会把「历史记录」和「APP 组展开/收起状态」存进
+      `HKCU\\Software\\vacuum_test\\case_studio`。测试里大量 `w.close()` 会触发
+      `closeEvent` → `_save_expanded_groups()` 写真实注册表, 把用户"哪些组是展开的"
+      覆盖成测试临时目录里的组(甚至空)。这与项目规则「禁止脚本改动用户真实状态」
+      直接冲突 —— 同 config.yaml 一样, 必须结构性隔离而不是靠每个测试自觉。
+    ★ 少数用例需要真实 QSettings 行为时, 自己 patch 回来(见 test_gui 的 fake_settings)。
+    """
+    from gui import main_window as mw
+
+    class _MemSettings:
+        store = {}
+
+        def __init__(self, *a, **k):
+            pass
+
+        def value(self, key, default=None):
+            return _MemSettings.store.get(key, default)
+
+        def setValue(self, key, val):
+            _MemSettings.store[key] = val
+
+        def sync(self):
+            pass
+
+        def remove(self, key):
+            _MemSettings.store.pop(key, None)
+
+    # ★ patch 模块级名字(gui.main_window.QSettings), **不要**去 setattr PySide6 的
+    #   类型本身 —— 对包装类型改类属性会死锁(项目里踩过)
+    monkeypatch.setattr(mw, "QSettings", _MemSettings, raising=False)
+    yield
+
+
+@pytest.fixture(autouse=True)
 def _expand_groups_in_tests(monkeypatch, request):
     """测试里默认把 APP 组**全部展开**。
 
