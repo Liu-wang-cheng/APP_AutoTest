@@ -94,3 +94,32 @@ def test_room_click_exhausted_raises(runner):
     runner._next_room_idx = 1
     with pytest.raises(RuntimeError, match="无未点击分区可用"):
         runner._execute({"room_click": 1})
+
+
+def test_map_ops_文本判断刻意不接OCR兜底():
+    """★ 守护一个**有意为之的决策**: map_ops 的文本判断不使用 _text_present。
+
+    理由(见 core/actions/map_ops.py 模块 docstring):
+      · 这些动作跑在涂鸦智能的**原生页面**, 无障碍树正常, 用不着 OCR 兜底
+        (那是为 SmartThings 插件页"整页读不到文本"设计的);
+      · 而 _text_present 每次判断都要多 dump 一次层级, 本模块的测试桩用 dump
+        次数驱动状态机 —— 接上去会让阶段错乱、判断永远不成立
+        (实测: test_spot_clean 从 3 秒涨到 77 秒 + 5 个用例失败)。
+
+    这条不是"实现细节不可改", 而是提醒: 要改请先读上面那段理由, 并准备好
+    重做那些靠 dump 次数驱动状态的桩。
+    """
+    import ast
+    import io
+    import os
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    src = io.open(os.path.join(root, "core", "actions", "map_ops.py"),
+                  encoding="utf-8").read()
+    # ★ 用 AST 只看**真实调用**, 不看 docstring/注释 —— 模块 docstring 里正是
+    #   用 "_text_present" 这个词来解释"为什么不接它", 纯文本匹配会误伤自己
+    calls = [n for n in ast.walk(ast.parse(src))
+             if isinstance(n, ast.Attribute) and n.attr == "_text_present"]
+    assert not calls, (
+        "map_ops 里出现了 _text_present —— 若确实要接 OCR 兜底, 请先读 "
+        "core/actions/map_ops.py 模块 docstring 记的两条理由, 并同步重做 "
+        "tests/test_spot_clean.py 里靠 dump 次数驱动状态机的桩。")

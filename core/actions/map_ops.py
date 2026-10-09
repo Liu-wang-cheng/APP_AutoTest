@@ -4,6 +4,16 @@ merge_zones(合并) / split_zone(分割)。
 
 room_zones 只识别并存储坐标,不点击 —— 点击交给 room_click,两者解耦后
 同一份识别结果可以被多次使用(选区清扫逐间点选就是靠这个)。
+
+★ 为什么这里的文本判断**刻意不接** OCR 兜底(`runner._text_present`)
+  1. 这些操作用在**涂鸦智能的原生页面**(地图编辑/分区/指哪扫哪中), 无障碍树
+     正常, 用 `d(textContains=...).exists()` 足够; OCR 兜底是为 SmartThings
+     插件页那种"整页文本读不到"的场景设计的, 这里用不上。
+  2. 接了会更脆: `_text_present` 每次判断都要 dump 一次层级(预热), 而本模块的
+     测试桩用"dump 调用次数"驱动状态机(每次 dump = 推进一个阶段) —— 多出来的
+     dump 会让阶段错乱、判断永远不成立(实测: 接入后 test_spot_clean 从 3 秒涨到
+     77 秒, 且有 5 个用例失败)。
+  结论: 除非 map_ops 也要跑在插件页上, 否则保持现状。
 """
 import math
 import os

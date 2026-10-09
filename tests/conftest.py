@@ -85,6 +85,21 @@ def _isolate_group_preconditions(monkeypatch, tmp_path):
 
 
 @pytest.fixture(autouse=True)
+def _disable_ocr_by_default(monkeypatch):
+    """默认关掉 OCR 兜底 —— 单元测试不该真跑它。
+
+    ★ 为什么必须关: `text_present` 在"原生没命中 **且** 页面文本稀疏(<5 条)"时会去
+      OCR。而测试桩的层级 XML 通常只有一两个节点, 天然满足"稀疏" —— 于是每个判断
+      都会去截图跑识别: 桩没有 screenshot 方法就每次吞一个异常, 一轮测试能拖到
+      60 秒以上(实测: 接入判断类兜底后 test_spot_clean 从 5 秒涨到 77 秒)。
+      真机上的 OCR 行为由 tests/test_ocr_fallback.py 专门覆盖, 那里会自行 mock 启用。
+    """
+    from core import ocr
+    monkeypatch.setattr(ocr, "available", lambda: False, raising=False)
+    yield
+
+
+@pytest.fixture(autouse=True)
 def _isolate_base_dir(monkeypatch, tmp_path):
     """把各模块的 BASE_DIR 钉到临时目录 —— 跑测试绝不往仓库里写产物。
 
