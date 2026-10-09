@@ -19,3 +19,7 @@ dist/
 
 # 用户数据备份(每次启动自动生成, 含 config 与用例 —— 绝不能入库)
 backups/
+
+# 构建/发版日志(偶发产物, 不进仓库)
+build*.log
+release*.log
