@@ -40,10 +40,19 @@ _UA = "AutoTest-Updater"          # 有的 CDN 对空 UA 不友好
 #: 镜像站: base_url 取仓库文件, download_prefix 加速 Release 下载(留空=直连)。
 #: {repo}/{branch} 两个占位符都会被替换 —— 分支**不能写死 main**: 本仓库默认分支
 #: 是 master, 照搬参考项目的 /main 会让版本清单 404(OTA 永远检查失败)。
+#: 实测(2026-10-09, 本机):
+#:   取小文件(version.json): github 直连最快 829ms > ghfast 2096ms > jsdelivr 2395ms
+#:   下载大文件(3MB 实测):  github 直连**几乎不可用**(1.2s 只得到 0 字节)
+#:                          gh-proxy 558 KB/s > ghfast 368 KB/s
+#: 所以两边分开选: 清单优先 GitHub 直连(权威、避开 CDN 缓存), 下载按**下面的顺序**
+#: 取第一个带 download_prefix 的 —— gh-proxy 排在 ghfast 前面就是因为实测它更快。
 DEFAULT_MIRRORS = (
     {"name": "github",
      "base_url": "https://raw.githubusercontent.com/{repo}/{branch}",
      "download_prefix": ""},
+    {"name": "gh-proxy",
+     "base_url": "https://gh-proxy.com/https://raw.githubusercontent.com/{repo}/{branch}",
+     "download_prefix": "https://gh-proxy.com/"},
     {"name": "ghfast",
      "base_url": "https://ghfast.top/https://raw.githubusercontent.com/{repo}/{branch}",
      "download_prefix": "https://ghfast.top/"},
@@ -51,6 +60,23 @@ DEFAULT_MIRRORS = (
      "base_url": "https://cdn.jsdelivr.net/gh/{repo}@{branch}",
      "download_prefix": ""},
 )
+
+
+def pick_download_mirror(ranked):
+    """从测速结果里挑**下载用**的镜像: 可达 + 带加速前缀, 按配置顺序取第一个。
+
+    ★ 为什么按**配置顺序**而不是测速延迟: 延迟测的是 version.json 这种小文件,
+      不代表大文件下载速度 —— 实测 ghfast 延迟更低(2096ms)但下载更慢(368 KB/s),
+      gh-proxy 延迟略高(2520ms)却快得多(558 KB/s)。所以顺序由 DEFAULT_MIRRORS
+      的排列决定(排在前面的优先), 用户也能在 config 里调。
+    ★ 与"取版本清单"分开选: 清单要**最新**(优先 GitHub 直连, 避开 CDN 缓存),
+      下载要**快且下得动**(直连拉大文件实测 3MB 只得到 0 字节)。
+    """
+    usable = [m for m in (ranked or []) if m.success]
+    for m in usable:                      # ranked 已按配置顺序稳定排序
+        if m.download_prefix:
+            return m
+    return usable[0] if usable else None  # 都没有前缀 -> 退回最前面的可用镜像
 
 
 def default_config():
@@ -135,8 +161,9 @@ class CheckResult:
     status: str = "skipped"          # skipped / up_to_date / has_update / error
     message: str = ""                # 给日志/界面看的一句话
     info: VersionInfo = field(default_factory=VersionInfo)
-    mirror: MirrorResult = None      # 命中版本清单的那个镜像
+    mirror: MirrorResult = None      # 命中版本清单的那个(直连优先, 求"最新")
     force: bool = False              # 本地版本低于 min_version -> 强制更新
+    ranked: list = field(default_factory=list)   # 全部镜像测速结果(供**下载**另选)
 
 
 def _base_url_of(mirror):
@@ -214,25 +241,29 @@ def _test_one_mirror(mirror, version_file, timeout=MIRROR_TIMEOUT):
 
 
 def race_mirrors(mirrors, version_file, timeout=MIRROR_TIMEOUT):
-    """并发测所有镜像, 按"可用优先、延迟升序"返回"""
+    """并发测所有镜像; 结果按"可用优先 + **配置顺序**"返回。
+
+    ★ 组内按配置顺序(不是延迟)排: 下载选源靠这个顺序表达优先级 —— 延迟只反映
+      小文件请求, 不代表下载速度(实测 ghfast 延迟低但下载慢)。取版本清单那边
+      另有自己的"直连优先"逻辑, 不受此顺序影响。
+    """
     mirrors = list(mirrors or [])
     if not mirrors:
         return []
     results = []
     with ThreadPoolExecutor(max_workers=len(mirrors)) as pool:
-        futs = {pool.submit(_test_one_mirror, m, version_file, timeout): m
-                for m in mirrors}
+        futs = {pool.submit(_test_one_mirror, m, version_file, timeout): (i, m)
+                for i, m in enumerate(mirrors)}
         for fut in as_completed(futs):
+            idx, m = futs[fut]
             try:
-                results.append(fut.result())
+                results.append((idx, fut.result()))
             except Exception:                       # 线程内兜底
-                m = futs[fut]
-                results.append(MirrorResult(
+                results.append((idx, MirrorResult(
                     m.get("name") or m.get("base_url", ""), m.get("base_url", ""),
-                    m.get("download_prefix", ""), -1.0, False))
-    results.sort(key=lambda r: (not r.success,
-                                r.latency_ms if r.latency_ms > 0 else 1e9))
-    return results
+                    m.get("download_prefix", ""), -1.0, False)))
+    results.sort(key=lambda pair: (not pair[1].success, pair[0]))
+    return [r for _idx, r in results]
 
 
 def parse_version_info(data):
@@ -363,7 +394,8 @@ def check_for_update(cfg, current=None):
 
         got = fetch_version_info(ranked, version_file)
         if not got:
-            return CheckResult("error", f"所有镜像都取不到版本清单({detail})")
+            return CheckResult("error", f"所有镜像都取不到版本清单({detail})",
+                               ranked=ranked)
         info, mirror = got
         log.info(f"[更新] 取到版本清单: 远程 v{info.version}"
                  f"{'(发布于 %s)' % info.release_date if info.release_date else ''}"
@@ -371,13 +403,13 @@ def check_for_update(cfg, current=None):
         if not is_newer(info.version, cur):
             return CheckResult("up_to_date",
                                f"已是最新(本地 v{cur}, 远程 v{info.version})",
-                               info, mirror)
+                               info, mirror, ranked=ranked)
         # 本地版本低于 min_version -> 强制更新(不允许继续用旧版)
         force = bool(info.min_version) and is_newer(info.min_version, cur)
         return CheckResult("has_update",
                            f"发现新版本 {info.version}(当前 {cur})"
                            + ("，需强制更新" if force else ""),
-                           info, mirror, force)
+                           info, mirror, force, ranked=ranked)
     except Exception as e:
         log.warning(f"[更新] 检查过程异常: {type(e).__name__}: {e}")
         return CheckResult("error", f"检查更新失败: {e}")

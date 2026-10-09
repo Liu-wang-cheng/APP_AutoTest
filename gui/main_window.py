@@ -950,11 +950,12 @@ class UpdateDownloadThread(QThread):
     progress = Signal(int, int, str)   # (已下载字节, 总字节, 速度文本; 总未知=0)
     done = Signal(str, str)            # (bat 路径, ""=成功 / 失败原因)
 
-    def __init__(self, cfg, info, mirror, parent=None):
+    def __init__(self, cfg, info, mirror, parent=None, ranked=None):
         super().__init__(parent)
         self._cfg = cfg
         self._info = info
         self._mirror = mirror
+        self._ranked = ranked      # 全部镜像测速结果: 下载时另选最快的(见 run)
 
     def run(self):
         from core import updater
@@ -962,7 +963,15 @@ class UpdateDownloadThread(QThread):
         try:
             conf = updater.load_update_config(self._cfg)
             # 下载走镜像加速: 版本清单所在的镜像若配了 download_prefix 就用它
-            prefix = getattr(self._mirror, "download_prefix", "") or ""
+            # ★ 但**下载要独立选源**, 不能跟着"取版本清单"那个走 —— 清单优先 GitHub
+            #   直连(求最新、避开 CDN 缓存), 而直连拉大文件实测几乎不可用(3MB 只得到
+            #   0 字节); 跟着走就等于下载走直连, 永远下不完。这里挑带加速前缀、
+            #   延迟最低的那个。
+            dmirror = updater.pick_download_mirror(self._ranked)
+            prefix = getattr(dmirror, "download_prefix", "") or ""
+            if dmirror is not None:
+                log.info(f"[更新] 下载走镜像: {dmirror.name}"
+                         f"(加速前缀 {prefix or '无, 直连'})")
             url = updater.apply_download_prefix(self._info.download_url, prefix)
             if not url:
                 self.done.emit("", "版本清单里没有 download_url")
@@ -1996,7 +2005,8 @@ class MainWindow(QMainWindow):
             return
         self._set_status(f"正在下载更新 v{result.info.version}…", self.status_label)
         self._update_download_thread = UpdateDownloadThread(
-            load_config(), result.info, result.mirror, self)
+            load_config(), result.info, result.mirror, self,
+            ranked=getattr(result, "ranked", None))
         self._update_download_thread.progress.connect(self._on_download_progress)
         self._update_download_thread.done.connect(self._on_download_done)
         self._update_download_thread.start()

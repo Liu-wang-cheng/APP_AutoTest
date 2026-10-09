@@ -129,20 +129,71 @@ def test_parse_version_info_tolerates_garbage(data):
 
 # ── 测速排序 ──
 
-def test_race_mirrors_orders_by_availability_then_latency(monkeypatch):
+def test_race_mirrors_orders_by_availability_then_config_order(monkeypatch):
+    """可用优先; 组内按**配置顺序**(不是延迟)。
+
+    ★ 为什么按配置顺序: 延迟只反映小文件请求, 不代表大文件下载速度 —— 实测
+      ghfast 延迟更低但下载更慢(368 vs 558 KB/s)。下载选源靠这个顺序表达优先级,
+      所以不能按延迟重排(否则会选中下载更慢的那个)。
+    """
     def fake(mirror, version_file, timeout=0):
-        name = mirror["name"]
-        if name == "dead":
-            return updater.MirrorResult(name, mirror["base_url"], "", -1.0, False)
-        return updater.MirrorResult(name, mirror["base_url"], "",
-                                    100.0 if name == "slow" else 20.0, True)
+        return updater.MirrorResult(mirror["name"], mirror["base_url"], "",
+                                    # 故意让"慢的"排在前面: 若按延迟排就会反过来
+                                    900.0 if mirror["name"] == "first" else 20.0,
+                                    True)
 
     monkeypatch.setattr(updater, "_test_one_mirror", fake)
-    mirrors = [{"name": "dead", "base_url": "https://d"},
-               {"name": "slow", "base_url": "https://s"},
-               {"name": "fast", "base_url": "https://f"}]
+    mirrors = [{"name": "first", "base_url": "https://1"},
+               {"name": "second", "base_url": "https://2"}]
     got = [r.name for r in updater.race_mirrors(mirrors, "version.json")]
-    assert got == ["fast", "slow", "dead"], got
+    assert got == ["first", "second"], f"应保持配置顺序(不按延迟重排): {got}"
+
+    # 不可用的排到后面
+    def fake2(mirror, version_file, timeout=0):
+        ok = mirror["name"] != "dead"
+        return updater.MirrorResult(mirror["name"], mirror["base_url"], "", 10.0, ok)
+    monkeypatch.setattr(updater, "_test_one_mirror", fake2)
+    mirrors2 = [{"name": "dead", "base_url": "https://d"},
+                {"name": "live", "base_url": "https://l"}]
+    assert [r.name for r in updater.race_mirrors(mirrors2, "v.json")] == ["live", "dead"]
+
+
+def test_pick_download_mirror_prefers_config_order(monkeypatch):
+    """★ 下载选源: 取第一个"可达且带加速前缀"的, 按配置顺序 —— 与取版本清单分开。
+
+    清单要最新(优先 GitHub 直连, 避开 CDN 缓存), 下载要快且下得动(直连拉大文件
+    实测 3MB 只得到 0 字节)。两者混用会让下载走直连、永远下不完。
+    """
+    ranked = [
+        updater.MirrorResult("github", "https://gh/", "", 100.0, True),      # 无前缀
+        updater.MirrorResult("ghfast", "https://gf/", "https://gf/", 50.0, True),
+        updater.MirrorResult("ghproxy", "https://gp/", "https://gp/", 900.0, True),
+    ]
+    # ghfast 延迟更低, 但 gh-proxy 配在它前面 -> 应选 gh-proxy(顺序即优先级)
+    assert updater.pick_download_mirror(ranked).name == "ghfast"
+    reordered = [ranked[0], ranked[2], ranked[1]]
+    assert updater.pick_download_mirror(reordered).name == "ghproxy"
+
+    # 全都没前缀 -> 退回第一个可用的; 全失败 -> None
+    noprefix = [updater.MirrorResult("github", "https://gh/", "", 100.0, True)]
+    assert updater.pick_download_mirror(noprefix).name == "github"
+    assert updater.pick_download_mirror(
+        [updater.MirrorResult("x", "https://x/", "", -1.0, False)]) is None
+    assert updater.pick_download_mirror([]) is None
+    assert updater.pick_download_mirror(None) is None
+
+
+def test_default_mirrors_download_order_is_by_measured_speed():
+    """默认镜像顺序要按**实测下载速度**排: gh-proxy(558 KB/s) 在 ghfast(368 KB/s) 前
+
+    顺序即下载优先级, 排错了就会选中较慢的那个(延迟低≠下载快)。
+    """
+    names = [m["name"] for m in updater.default_config()["mirrors"]]
+    assert "gh-proxy" in names and "ghfast" in names
+    assert names.index("gh-proxy") < names.index("ghfast"), names
+    # 直连排在最前(取清单优先用它), 但它没有下载前缀
+    assert names[0] == "github"
+    assert updater.default_config()["mirrors"][0]["download_prefix"] == ""
 
 
 def test_race_mirrors_empty_is_safe():
