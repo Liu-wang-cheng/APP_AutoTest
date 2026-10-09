@@ -1,0 +1,4 @@
+# Windows 批处理必须是 CRLF: cmd 读裸 LF 的 .bat 会把命令切成碎片执行 ——
+# 实测 2026-10-09 build.bat 被写成纯 LF, 发版流程直接跑不起来。
+# 显式钉住, 不依赖 core.autocrlf(它只在 git 写文件时才转换, 工具直接写盘就是 LF)。
+*.bat text eol=crlf

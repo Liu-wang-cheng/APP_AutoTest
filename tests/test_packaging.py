@@ -814,3 +814,25 @@ def test_download_worker_reports_sha_mismatch(monkeypatch, tmp_path):
     assert results and results[0][0] == "" and "校验失败" in results[0][1]
     assert removed, "坏包没被删除"
 
+
+
+def test_all_bat_files_use_crlf():
+    r"""★ 仓库里的 .bat 必须是 CRLF 换行。
+
+    cmd 读裸 LF 的批处理会**把行切成碎片**执行 —— 实测(2026-10-09) build.bat 被写成
+    纯 LF(49 个裸 LF、0 个 CRLF), 一跑就是
+        '\python.exe' is not recognized as an internal or external command
+        '包依赖检查...' is not recognized ...
+    整个发版流程根本跑不起来。core/updater.generate_update_bat 早就为此统一写 CRLF,
+    但仓库里手写的 .bat 没人守 —— 而 core.autocrlf=true 只在 git 写文件时才转 CRLF,
+    用工具直接写盘就是 LF。
+    """
+    import glob
+    bad = []
+    for p in glob.glob(os.path.join(ROOT, "*.bat")):
+        data = open(p, "rb").read()
+        if not data:
+            continue
+        if data.count(b"\n") != data.count(b"\r\n"):
+            bad.append(os.path.basename(p))
+    assert not bad, f"这些 .bat 不是 CRLF 换行(cmd 会把命令切碎): {bad}"
