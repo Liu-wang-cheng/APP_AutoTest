@@ -563,7 +563,7 @@ def main(argv=None):
         update_version_json_and_tag(repo, args.version, compute_sha256(exe_path),
                                     download_url, notes)
         if args.verify:
-            print("[5/5] 校验用户那条链路(取清单 -> sha256 -> 资产 -> MZ 头)...")
+            print("[5/5] 校验用户那条链路(取清单 -> sha256 -> 资产 -> zip 头)...")
             ok, out = run_post_release_verify(args.version, deep=args.deep)
             print(out)
             if not ok:
