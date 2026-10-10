@@ -1,5 +1,7 @@
 # APP 自动化测试平台 (v1.0)
 
+[![测试](https://github.com/Liu-wang-cheng/APP_AutoTest/actions/workflows/tests.yml/badge.svg)](https://github.com/Liu-wang-cheng/APP_AutoTest/actions/workflows/tests.yml)
+
 用 YAML 描述操作步骤 → 驱动真机/模拟器上的扫地机 APP → 产出 Excel 报告。
 
 蓝本为 `D:\AI_Test\vacuum_app_test`(纯 uiautomator2 + SIFT 方案),本版按新架构重写:
