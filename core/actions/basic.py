@@ -7,7 +7,12 @@ click 值支持四种形态:
   "确认"          textContains(回退 description);"=确认" 精确 text;"确认#2" 第2个
   [x, y]          坐标直点(v1.4 Appium 用例转换而来,硬编码坐标先用坐标跑通,
                   后续逐步替换成模板图)
+  "x,y"           坐标直点的**字符串写法**(界面上的字段是文本框, 用户按提示写坐标
+                  得到的就是它);"x，y"(全角逗号)、"x y"(空格) 同样认
+★ 坐标在 click/long_click/swipe 里都同时认列表与字符串 —— 曾经只认列表, 于是界面上
+  写的 "x,y" 会掉进"按文本找元素"的分支, 轮询到超时报错(用户实测「点击坐标点不动」)。
 """
+import re
 import time
 
 from core import registry as reg
@@ -17,13 +22,48 @@ from core.logger import get_logger
 log = get_logger()
 
 
+def parse_xy(value, n):
+    """把坐标解析成 n 个整数; 不像坐标(方向/按钮名/图片名)返回 None。
+
+    ★ 为什么需要(2026-10-10 用户实测「点击坐标不能正常执行」):
+      界面上 click/long_click/swipe 这些字段是**文本框**, 用户按提示写 "x,y 坐标"
+      得到的是**字符串**; 而实现原来只认 YAML 列表 `[x, y]`(v1.4 Appium 用例转换来的
+      那种写法) —— 字符串会掉进"按文本找元素"的分支, 找不到就轮询到超时报错。
+      两种写法都支持: [x, y] / "x,y" / "x，y"(全角) / "x y"。
+    """
+    if isinstance(value, (list, tuple)):
+        if len(value) < n:
+            return None
+        try:
+            return [int(float(v)) for v in value[:n]]
+        except (TypeError, ValueError):
+            return None
+    text = str(value or "").strip()
+    # 只由数字/分隔符组成才算坐标 —— 含字母或中文的一律不是(left/fast-up/按钮名/图片名)
+    if not text or not re.fullmatch(r"[\d\s,，.]+", text):
+        return None
+    parts = [x for x in re.split(r"[\s,，]+", text) if x]
+    if len(parts) != n:
+        return None
+    try:
+        return [int(float(x)) for x in parts]
+    except ValueError:
+        return None
+
+
+def looks_like_numbers(value):
+    """整串就是数字与分隔符(用于报错时区分"坐标给少了"和"方向名不认识")"""
+    return bool(re.fullmatch(r"[\d\s,，.]+", str(value or "").strip()))
+
+
 @reg.action("click", priority=5)
 def do_click(runner, step):
     value = step["click"]
     timeout = step.get("timeout", runner.click_timeout)
-    if isinstance(value, (list, tuple)) and len(value) >= 2:
-        runner.d.click(int(value[0]), int(value[1]))
-        runner.last_click = (int(value[0]), int(value[1]), "坐标")
+    xy = parse_xy(value, 2)
+    if xy:
+        runner.d.click(xy[0], xy[1])
+        runner.last_click = (xy[0], xy[1], "坐标")
         return
     if runner._is_image(value):
         runner._click_by_template(value, timeout)
@@ -43,10 +83,18 @@ def do_click_template(runner, step):
 def do_long_click(runner, step):
     value = step["long_click"]
     duration = step.get("duration", 2)
-    if isinstance(value, (list, tuple)):
-        x, y = int(value[0]), int(value[1])
-        if len(value) >= 3:
-            duration = value[2]
+    xy = parse_xy(value, 2)
+    dur3 = None
+    if isinstance(value, str):
+        three = parse_xy(value, 3)
+        if three:                         # "x,y,时长" 也认(与 [x, y, 时长] 一致)
+            xy, dur3 = three[:2], three[2]
+    if xy:
+        x, y = xy
+        if dur3 is not None:
+            duration = dur3
+        elif isinstance(value, (list, tuple)) and len(value) >= 3:
+            duration = value[2]           # 老写法允许 [x, y, duration]
     elif runner._is_image(value):
         pos = runner._assert_template(value, step.get("timeout", runner.click_timeout))
         runner.last_click = (pos[0], pos[1], str(value))
@@ -87,8 +135,12 @@ def do_swipe(runner, step):
     列表翻页和地图拖动经常带不动。
     """
     value = step["swipe"]
-    if isinstance(value, (list, tuple)):
-        runner.d.swipe(*[int(v) for v in value[:4]])
+    xy = parse_xy(value, 4)
+    if xy:
+        runner.d.swipe(*xy)
+    elif looks_like_numbers(value):
+        # 是数字但个数不对(如写了 3 个) —— 报清楚, 别让人以为是"方向名不认识"
+        raise ValueError(f"swipe 坐标要 4 个数字(sx,sy,ex,ey), 收到: {value!r}")
     else:
         speed = 0.3 if str(value).startswith("fast-") else 0.5
         name = str(value).replace("fast-", "")

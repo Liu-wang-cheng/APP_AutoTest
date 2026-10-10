@@ -163,3 +163,48 @@ def test_if_branch_skips_when_condition_present(runner):
         "else": [{"desc": "不该执行", "click": [99, 99]}],
     })
     assert runner.d.clicked_at is None
+
+
+# ── 坐标的两种写法(用户实测: 界面上写 "x,y" 点不动) ──
+
+@pytest.mark.parametrize("value", ["531,1900", "531，1900", "531 1900", [531, 1900]])
+def test_click_coordinates_accept_string_and_list(runner, value):
+    """★ 界面上这些字段是**文本框**, 用户按提示写 "x,y" 得到的是字符串;
+
+    实现原来只认 YAML 列表 [x, y](v1.4 Appium 用例转换来的写法), 字符串会掉进
+    "按文本找元素"的分支 -> 轮询到超时报错(用户实测「点击坐标不能正常执行」)。
+    """
+    runner._execute({"click": value})
+    assert runner.d.clicked_at == (531, 1900), runner.d.clicked_at
+
+
+def test_click_non_coordinate_string_still_goes_text_path(runner):
+    """含字母/中文的不是坐标 —— 不能被当成坐标解析"""
+    runner._execute({"click": "确认"})
+    assert runner.d.last_kw.get("textContains") == "确认"
+    assert runner.d.clicked_at is None
+
+
+@pytest.mark.parametrize("value", ["100,200", "100,200,3"])
+def test_long_click_coordinates_accept_string(runner, value):
+    runner._execute({"long_click": value})
+    x1, y1, x2, y2 = runner.d.swiped          # 原地滑动 = 长按
+    assert (x1, y1) == (100, 200) and (x2, y2) == (100, 200)
+
+
+def test_swipe_coordinates_accept_string(runner):
+    runner._execute({"swipe": "82,2101,82,1601"})
+    assert runner.d.swiped == (82, 2101, 82, 1601)
+
+
+def test_swipe_coordinates_wrong_count_says_so(runner):
+    """数字个数不对时要报"坐标要 4 个", 别让人以为是"方向名不认识" """
+    with pytest.raises(ValueError, match="4 个数字"):
+        runner._execute({"swipe": "82,2101,82"})
+
+
+def test_swipe_direction_still_works_after_coordinate_support(runner):
+    """"left" 这类方向名不能被坐标解析吃掉"""
+    runner._execute({"swipe": "left"})
+    sx, sy, ex, ey = runner.d.swiped
+    assert ex < sx and sy == ey
