@@ -342,6 +342,9 @@ def test_main_orchestration_order_and_wiring(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(release, "ensure_clean_tree", lambda: None)
     monkeypatch.setattr(release, "gh_available", lambda: False)      # 走 API 分支
     monkeypatch.setattr(release, "get_token", lambda: "tok")
+    # CI 闸门也要打桩 —— 它是"发版前必须过 CI"的接线, 单独有测试覆盖
+    monkeypatch.setattr(release, "check_ci_green",
+                        lambda *a, **k: (True, "CI 全绿(测试#1)"))
     monkeypatch.setattr(release.subprocess, "run",
                         lambda *a, **k: sp.CompletedProcess(a[0] if a else [], 0,
                                                             "", ""))
@@ -393,3 +396,111 @@ def test_main_orchestration_order_and_wiring(tmp_path, monkeypatch, capsys):
     rc = release.main(["--version", version_, "--repo", "o/r"])
     out = capsys.readouterr().out
     assert rc == 1 and "未通过" in out, out
+
+
+# ── 发版闸门: 该提交必须先过 CI(用户要求 2026-10-10) ──
+
+def _ci_run(conclusion="success", status="completed", number=7, name="测试"):
+    return {"name": name, "run_number": number, "status": status,
+            "conclusion": conclusion,
+            "html_url": f"https://github.com/o/r/actions/runs/{number}"}
+
+
+def test_ci_gate_passes_when_all_runs_green(monkeypatch):
+    monkeypatch.setattr(release, "_git", lambda a: "sha123\n")
+    monkeypatch.setattr(release.subprocess, "run",
+                        lambda *a, **k: __import__("subprocess").CompletedProcess(
+                            a[0], 0, "sha123\trefs/heads/master\n", ""))
+    monkeypatch.setattr(release, "_api_get",
+                        lambda url, token, **k: {"workflow_runs": [_ci_run()]})
+    ok, msg = release.check_ci_green("o/r", "tok", "sha123")
+    assert ok and "全绿" in msg, msg
+
+
+def test_ci_gate_refuses_on_failed_run(monkeypatch):
+    """★ 红的就是不放行, 且要把运行页地址带出来"""
+    monkeypatch.setattr(release, "_git", lambda a: "sha123\n")
+    monkeypatch.setattr(release.subprocess, "run",
+                        lambda *a, **k: __import__("subprocess").CompletedProcess(
+                            a[0], 0, "sha123\trefs/heads/master\n", ""))
+    monkeypatch.setattr(release, "_api_get",
+                        lambda url, token, **k: {"workflow_runs": [
+                            _ci_run("failure", number=9)]})
+    ok, msg = release.check_ci_green("o/r", "tok", "sha123")
+    assert not ok and "未通过" in msg and "runs/9" in msg, msg
+
+
+def test_ci_gate_waits_for_running_then_passes(monkeypatch):
+    """还在跑 -> 等; 等到了绿 -> 放行"""
+    monkeypatch.setattr(release, "_git", lambda a: "sha123\n")
+    monkeypatch.setattr(release.subprocess, "run",
+                        lambda *a, **k: __import__("subprocess").CompletedProcess(
+                            a[0], 0, "sha123\trefs/heads/master\n", ""))
+    seq = [{"workflow_runs": [_ci_run(status="in_progress", conclusion=None)]},
+           {"workflow_runs": [_ci_run()]}]
+    monkeypatch.setattr(release, "_api_get", lambda url, token, **k: seq.pop(0))
+    monkeypatch.setattr(release.time, "sleep", lambda s: None)
+    ok, msg = release.check_ci_green("o/r", "tok", "sha123", wait_seconds=60)
+    assert ok, msg
+
+
+def test_ci_gate_fails_closed_without_records_or_token(monkeypatch):
+    """★ fail-closed: 没有记录(等超时)/没有 token 都**不放行**"""
+    monkeypatch.setattr(release, "_git", lambda a: "sha123\n")
+    monkeypatch.setattr(release.subprocess, "run",
+                        lambda *a, **k: __import__("subprocess").CompletedProcess(
+                            a[0], 0, "sha123\trefs/heads/master\n", ""))
+    monkeypatch.setattr(release, "_api_get", lambda url, token, **k: {"workflow_runs": []})
+    ok, msg = release.check_ci_green("o/r", "tok", "sha123", wait_seconds=0)
+    assert not ok and "仍未拿到绿灯" in msg, msg
+
+    ok, msg = release.check_ci_green("o/r", "", "sha123")
+    assert not ok and "token" in msg, msg
+
+
+def test_ci_gate_pushes_head_if_not_on_remote(monkeypatch):
+    """本地 HEAD 没推上去时先推 —— 不推就永远没有它的 CI 记录"""
+    pushed = []
+    monkeypatch.setattr(release, "_git",
+                        lambda a: pushed.append(a) or "sha123\n")
+    monkeypatch.setattr(release.subprocess, "run",
+                        lambda *a, **k: __import__("subprocess").CompletedProcess(
+                            a[0], 0, "OLD999\trefs/heads/master\n", ""))
+    monkeypatch.setattr(release, "_api_get",
+                        lambda url, token, **k: {"workflow_runs": [_ci_run()]})
+    ok, _ = release.check_ci_green("o/r", "tok", "sha123")
+    assert ok and ["push", "origin", "master"] in pushed, pushed
+
+
+def test_release_refuses_to_publish_when_ci_red(tmp_path, monkeypatch, capsys):
+    """★ 闸门接在 main() 里: CI 红 -> 直接返回 1, 连 Release 都不建"""
+    import subprocess as sp
+    exe = tmp_path / "AutoTest.exe"
+    exe.write_bytes(b"MZ" + b"x" * 2048)
+    called = []
+    monkeypatch.setattr(release, "check_version_consistency", lambda r, v: [])
+    monkeypatch.setattr(release, "find_dist_exe", lambda d: str(exe))
+    monkeypatch.setattr(release, "load_changelog_section", lambda p, v: ("2026-10-10", "说明"))
+    monkeypatch.setattr(release, "get_token", lambda: "tok")
+    monkeypatch.setattr(release, "check_ci_green",
+                        lambda *a, **k: (False, "CI 未通过: 测试 #9"))
+    monkeypatch.setattr(release, "create_release",
+                        lambda *a, **k: called.append("create") or 1)
+    monkeypatch.setattr(release.subprocess, "run",
+                        lambda *a, **k: sp.CompletedProcess(a[0], 0, "", ""))
+    rc = release.main(["--version", "1.5", "--repo", "o/r"])
+    out = capsys.readouterr().out
+    assert rc == 1 and not called, out
+    assert "拒绝发版" in out, out
+
+    # --no-ci-check 时闸门被跳过(紧急逃生口)
+    called.clear()
+    monkeypatch.setattr(release, "ensure_clean_tree", lambda: None)
+    monkeypatch.setattr(release, "update_version_json_and_tag", lambda *a, **k: None)
+    monkeypatch.setattr(release, "run_post_release_verify", lambda v, deep=False: (True, "ok"))
+    monkeypatch.setattr(release, "upload_asset",
+                        lambda *a, **k: "https://e/AutoTest_v1.5.exe")
+    monkeypatch.setattr(release, "gh_available", lambda: False)
+    rc = release.main(["--version", "1.5", "--repo", "o/r", "--no-ci-check",
+                       "--no-verify"])
+    assert rc == 0 and called == ["create"], (rc, called)

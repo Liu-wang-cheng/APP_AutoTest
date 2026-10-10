@@ -17,9 +17,12 @@ import pytest
 ROOT = str(Path(__file__).resolve().parent.parent)
 
 
-def _run_tool(*args, timeout=180):
+def _run_tool(*args, timeout=180, env=None):
+    # ★ 显式按 UTF-8 解码: 工具入口都会把 stdout 切成 UTF-8(core.console), 而 text=True
+    #   在本机(中文系统)会用 cp936 去解 —— 两边对不上就会解出乱码, 断言随之失真。
     return subprocess.run([sys.executable] + list(args), cwd=ROOT,
-                          capture_output=True, text=True, timeout=timeout)
+                          capture_output=True, timeout=timeout,
+                          encoding="utf-8", errors="replace", env=env)
 
 
 def test_check_compat_actually_scans_the_cases():
@@ -88,3 +91,36 @@ def test_verify_package_skips_launch_when_static_fails():
     assert r.returncode == 1, r.stdout[-300:]
     assert "不再启动" in r.stdout, r.stdout[-300:]
     assert "启动验证" not in r.stdout, "静态没过还是去启动了"
+
+
+@pytest.mark.parametrize("script,args", [
+    ("check_compat.py", []),
+    ("verify_release.py", ["--help"]),
+    ("verify_package.py", ["--help"]),
+    ("verify_update_download.py", ["--help"]),
+])
+def test_tools_survive_non_chinese_console(script, args):
+    """★ 英文 Windows 的控制台代码页是 cp1252, 打印中文直接 UnicodeEncodeError 崩掉
+    —— **重定向到文件/管道时同样按 ANSI 代码页**, 所以 CI(windows-latest) 上所有会打印
+    中文的工具都崩(实测 2026-10-10: CI #4 全红, 本地却完全正常)。
+
+    用 PYTHONIOENCODING=cp1252 精确复现那个环境。工具入口靠 core.console.
+    force_utf8_stdout() 把 stdout 切成 UTF-8 来兜底。
+    """
+    env = dict(os.environ, PYTHONIOENCODING="cp1252")
+    r = _run_tool(f"tools/{script}", *args, env=env)
+    out = (r.stdout or "") + (r.stderr or "")
+    assert "UnicodeEncodeError" not in out, \
+        f"{script} 在 cp1252 环境下编码崩了(工具入口少了 force_utf8_stdout?):\n{out[-500:]}"
+    assert "Traceback" not in out, out[-500:]
+
+
+def test_app_entry_also_guards_stdout_encoding():
+    """应用入口(gui/main.py)同样要兜底: 用户把输出重定向走时不会因为中文崩"""
+    src = open(os.path.join(ROOT, "gui", "main.py"), encoding="utf-8").read()
+    assert "force_utf8_stdout" in src, "gui/main.py 没有做输出编码兜底"
+    for script in ("check_compat.py", "release.py", "verify_package.py",
+                   "verify_release.py", "verify_update_download.py",
+                   "check_render.py"):
+        text = open(os.path.join(ROOT, "tools", script), encoding="utf-8").read()
+        assert "force_utf8_stdout" in text, f"tools/{script} 没有做输出编码兜底"

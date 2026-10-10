@@ -49,6 +49,12 @@ def _run_backup_async():
 def main():
     _detach_console()
 
+    # ★ stdout/stderr 编码兜底: 英文 Windows(cp1252)下打印中文会 UnicodeEncodeError;
+    #   把输出重定向到文件/管道时同样按 ANSI 代码页 —— 不看有没有控制台, 所以这条
+    #   对"用户把程序输出接到别处"的情形同样有用(2026-10-10 在 CI 上实测踩到)
+    from core.console import force_utf8_stdout
+    force_utf8_stdout()
+
     from PySide6.QtWidgets import QApplication
 
     from core.bootstrap import cleanup_update_leftovers, ensure_data_dirs

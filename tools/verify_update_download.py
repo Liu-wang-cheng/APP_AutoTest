@@ -20,6 +20,11 @@ import urllib.request
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
+
+# ★ 控制台编码兜底: 英文 Windows(cp1252)下打印中文会 UnicodeEncodeError 崩掉,
+#   重定向到文件/管道时同样按 ANSI 代码页 —— CI(windows-latest) 实测全崩。
+from core.console import force_utf8_stdout          # noqa: E402
+force_utf8_stdout()
 from core import updater                                          # noqa: E402
 
 REPO = os.environ.get("AUTOTEST_REPO") or "Liu-wang-cheng/APP_AutoTest"

@@ -165,6 +165,62 @@ def upload_via_gh(repo, version, asset, exe_path, notes):
     return release_download_url(repo, version, asset)
 
 
+def _api_get(url, token, timeout=30):
+    with _request_json(url, token, timeout=timeout) as r:
+        return json.load(r)
+
+
+def check_ci_green(repo, token, sha, wait_seconds=1200, poll_seconds=20, log=print):
+    """★ 发版闸门: 这个提交必须**跑过 CI 且全绿**(用户要求 2026-10-10)。
+
+    返回 (是否放行, 说明)。发出去的版本收不回来, 而 CI 是唯一能证明"换台干净机器也跑得通"
+    的环节 —— 所以这里**fail-closed**: 查不到、还在跑、有失败, 一律不放行。
+      ① 本地 HEAD 还没推上去 -> 先 push(不推就没有它的 CI 记录, 门永远等不到)
+      ② 轮询该 sha 的运行记录, 还在跑就等(最多 wait_seconds 秒)
+      ③ 全绿 -> 放行; 有失败或超时 -> 拒绝, 并把运行页地址带出来方便定位
+    """
+    if not token:
+        return False, "没有 GitHub token, 查不了 CI(设 GITHUB_TOKEN 或 ~/.github_token)"
+    # ① 先确保这个提交推上去了
+    try:
+        r = subprocess.run(["git", "ls-remote", "origin", "master"], cwd=ROOT,
+                           capture_output=True, text=True, timeout=120)
+        if sha not in (r.stdout or ""):
+            log(f"   本地 HEAD({sha[:7]}) 还没推到 origin/master, 先推上去让 CI 跑")
+            _git(["push", "origin", "master"])
+    except Exception as e:
+        return False, f"确认远端状态失败: {e}"
+
+    url = f"{API}/repos/{repo}/actions/runs?head_sha={sha}&per_page=50"
+    deadline = time.monotonic() + max(0, wait_seconds)
+    last = ""
+    while True:
+        try:
+            runs = _api_get(url, token).get("workflow_runs") or []
+        except Exception as e:
+            return False, f"查询 CI 运行记录失败: {type(e).__name__}: {e}"
+        if runs:
+            running = [x for x in runs if x.get("status") != "completed"]
+            bad = [x for x in runs
+                   if x.get("status") == "completed"
+                   and x.get("conclusion") != "success"]
+            if bad:
+                x = bad[0]
+                return False, (f"CI 未通过: {x.get('name')} #{x.get('run_number')} "
+                               f"结论={x.get('conclusion')}\n         {x.get('html_url')}")
+            if not running:
+                names = ", ".join(f"{x.get('name')}#{x.get('run_number')}" for x in runs)
+                return True, f"CI 全绿({names})"
+            last = f"{len(running)} 个运行还在跑"
+        else:
+            last = "还没有该提交的 CI 记录"
+        if time.monotonic() >= deadline:
+            return False, (f"等了 {wait_seconds} 秒仍未拿到绿灯({last}) —— "
+                           f"先确认 CI 是否正常触发: {ROOT}/.github/workflows/tests.yml")
+        log(f"   {last}, 等 {poll_seconds} 秒再看…")
+        time.sleep(poll_seconds)
+
+
 def run_post_release_verify(version, deep=False):
     """发版最后一步: 跑"用户那条链路"的校验; 返回 (是否全过, 输出文本)。
 
@@ -353,6 +409,10 @@ def ensure_clean_tree():
 # ── 主流程 ──
 
 def main(argv=None):
+    # ★ 输出编码兜底: 英文 Windows(cp1252)下打印中文会 UnicodeEncodeError 崩掉;
+    #   重定向到文件/管道时同样按 ANSI 代码页, 与有没有控制台无关(CI 上实测全崩)
+    from core.console import force_utf8_stdout
+    force_utf8_stdout()
     # ★ 输出重定向到文件时 stdout 是**块缓冲**: 208MB 要传几分钟, 日志一直空白, 看着
     #   像卡死(实测被骗过)。改行缓冲, 进度实时可见。
     try:
@@ -367,6 +427,10 @@ def main(argv=None):
                     help="asset 文件名(默认 AutoTest_v{ver}.exe —— onefile 发布物就是 exe)")
     ap.add_argument("--notes", default="", help="更新说明(默认取 CHANGELOG 该节)")
     ap.add_argument("--min-version", default="1.0", help="低于此版本强制更新")
+    ap.add_argument("--ci-check", action=argparse.BooleanOptionalAction, default=True,
+                    help="发版前要求该提交 CI 全绿(默认开; --no-ci-check 跳过)")
+    ap.add_argument("--ci-wait", type=int, default=1200,
+                    help="等 CI 出结论的最长秒数(默认 1200)")
     ap.add_argument("--verify", action=argparse.BooleanOptionalAction, default=True,
                     help="发布后校验用户那条链路(默认开; --no-verify 关掉)")
     ap.add_argument("--deep", action="store_true",
@@ -413,6 +477,17 @@ def main(argv=None):
     print(f"[3/4] 发布到 {repo} (v{args.version}, 分支 master)"
           + ("  [dry-run: 不执行]" if args.dry_run else ""))
     if not args.dry_run:
+        if args.ci_check:
+            print("[0/5] CI 闸门: 这个提交必须跑过 CI 且全绿")
+            ok, msg = check_ci_green(repo, get_token(),
+                                     _git(["rev-parse", "HEAD"]).strip(),
+                                     wait_seconds=args.ci_wait)
+            print("   " + msg)
+            if not ok:
+                print("\n[ERROR] CI 未通过, 拒绝发版 —— 发出去的版本收不回来。")
+                print("        修好后重新提交推送, 等 CI 绿了再发;")
+                print("        确有必要时用 --no-ci-check 跳过(请先想清楚为什么)。")
+                return 1
         ensure_clean_tree()
         if gh_available():
             download_url = upload_via_gh(repo, args.version, asset, exe_path, notes)

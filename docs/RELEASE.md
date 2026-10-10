@@ -36,6 +36,12 @@ python tools/release.py --version 1.1 --dry-run
 python tools/release.py --version 1.1
 ```
 
+**发版前必须先过 CI**(默认强制): 脚本第 0 步会查这个提交的 CI 记录 ——
+本地 HEAD 还没推就先推上去, 然后等它跑完(默认最多等 20 分钟);
+**红的、还在跑、查不到, 一律拒绝发版**(发出去的版本收不回来)。
+理由: CI 是唯一能证明"换台干净机器也跑得通"的环节。紧急情况用 `--no-ci-check` 跳过。
+`--ci-wait N` 可改等待秒数。
+
 脚本会依次: 校验三处版本一致 → 打 `dist\AutoTest_v1.1.zip`(**只装 exe +
 _internal/**, 运行时生成的 config/backups 绝不进包) → 传 GitHub Release →
 写仓库根 `version.json`(含 sha256) → commit → push master + tag v1.1。
