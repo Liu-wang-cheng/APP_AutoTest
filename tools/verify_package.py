@@ -14,6 +14,7 @@
   ② 动态: offscreen 真启动一次, 进程稳定运行到超时(缺 DLL/缺插件会当场崩);
   ③ 启动后会顺带验证"首次铺资源": exe 旁应生成 config/(缺才补的默认文件)。
 """
+import argparse
 import os
 import subprocess
 import sys
@@ -145,10 +146,16 @@ def _launch_check(exe, app_dir, wait=_LAUNCH_WAIT):
     return [f"启动后自行退出(returncode={proc.returncode}); 输出尾部: {tail}"], False
 
 
-def main():
-    exe = sys.argv[1] if len(sys.argv) > 1 else os.path.join(ROOT, "dist",
-                                                             "AutoTest.exe")
-    exe = os.path.abspath(exe)
+def main(argv=None):
+    # ★ argparse: 裸 sys.argv 时 `--help` 会被当成"要验证的产物路径", 报一堆
+    #   "产物不存在: D:\...\--help"(实测 2026-10-10)
+    ap = argparse.ArgumentParser(
+        description="验证打包产物: 静态检查(大小/MZ 头) + offscreen 真启动一次")
+    ap.add_argument("exe", nargs="?",
+                    default=os.path.join(ROOT, "dist", "AutoTest.exe"),
+                    help="产物路径(默认 dist/AutoTest.exe)")
+    args = ap.parse_args(argv)
+    exe = os.path.abspath(args.exe)
     app_dir = os.path.dirname(exe)
     if not os.path.isdir(app_dir):
         print(f"[FAIL] 目录不存在: {app_dir}\n       先构建: "
@@ -157,8 +164,14 @@ def main():
 
     print(f"验证产物: {exe}")
     bad = _static_checks(exe)
+    if bad:
+        # ★ 静态就不合格的产物没必要再花几十秒去启动它(还会铺出 config/ 等沙箱数据),
+        #   而且"启动验证"那几行输出会让人以为问题在后面(实测: 传个不存在的路径,
+        #   它照样去打启动验证, 报的却是"产物不存在")
+        print("\n存在问题, 见上面 [FAIL](静态检查没过, 不再启动)")
+        return 1
     launch_bad, _seeded = _launch_check(exe, app_dir)
-    ok = not bad and not launch_bad
+    ok = not launch_bad
     print("\n" + ("全部通过" if ok else "存在问题, 见上面 [FAIL]"))
     return 0 if ok else 1
 

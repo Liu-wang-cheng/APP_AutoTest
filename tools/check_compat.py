@@ -17,8 +17,18 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import core.actions  # noqa: F401 触发动作注册
-from core import registry as reg
+# ★ 这一行**不是**没用的 import: `import core.actions` 会注册全部动作, 下面
+#   `reg.dispatch_order()` 才有内容 —— 没有它, 所有动作的 priority 会退化成兜底 999,
+#   "只会执行哪个" 的判断就错了。
+#   实测(2026-10-10): 拿掉它输出不变, 因为同模块的 `from gui import schema` /
+#   `tests.test_yaml_runner` 也顺带注册了 —— 也就是说**今天冗余, 但删了就是埋雷**
+#   (哪天那两个 import 变少, 这个检查器会静默失准)。用 importlib 显式表达"为副作用
+#   而导入", 比 `# noqa` 好: noqa 是给 flake8 看的, pyflakes 不认, 会被当成垃圾 import
+#   反复提醒, 下一个人"顺手清掉"就出事。
+import importlib
+
+importlib.import_module("core.actions")          # 注册动作(必须, 见上)
+from core import registry as reg                 # noqa: E402
 from core.driver import BASE_DIR, load_yaml_file
 from gui import schema
 from tests.test_yaml_runner import count_steps, iter_all_steps, iter_modules
@@ -65,22 +75,62 @@ def check_step(step):
     return problems
 
 
-def main():
-    only = sys.argv[1] if len(sys.argv) > 1 else None
-    cases_dir = os.path.join(BASE_DIR, "Test_cases")
+def iter_case_files(cases_dir, only=None):
+    """Test_cases/ 下的用例文件路径。
+
+    ★ 必须**递归进 APP 组目录**: 用例早先是平铺的 `Test_cases/*.yaml`, 现在按 APP 分组
+      放成 `Test_cases/<组>/<用例>.yaml`。老写法只 listdir 顶层、再筛 .yaml —— 组目录
+      一律被筛掉, 于是"扫描 0 个文件"却打印"全部兼容"(实测 2026-10-10 撞到: 一个
+      只会说 OK 的检查器比没有更糟)。组目录判定与 GUI 的 _list_group_dirs 一致。
+    """
     if only:
-        files = [os.path.basename(only)]
-    else:
-        files = [f for f in sorted(os.listdir(cases_dir)) if f.endswith((".yaml", ".yml"))]
+        if os.path.isfile(only):                 # 直接给了文件路径
+            return [os.path.abspath(only)]
+        want = os.path.basename(only)            # 只按文件名过滤(在组目录里找)
+        return [p for p in _walk(cases_dir) if os.path.basename(p) == want]
+    return _walk(cases_dir)
+
+
+def _walk(cases_dir):
+    out = []
+    for base, dirs, names in os.walk(cases_dir):
+        dirs[:] = [d for d in dirs if not d.startswith((".", "_"))]
+        for n in names:
+            if n.endswith((".yaml", ".yml")):
+                out.append(os.path.join(base, n))
+    return sorted(out)
+
+
+def main(argv=None):
+    # ★ 用 argparse 而不是裸 sys.argv: 至少 `--help` 得给出说明, 而不是被当成"要查的
+    #   用例文件名"(那样会老老实实报"扫描 0 个文件", 让人以为没问题)
+    import argparse
+    ap = argparse.ArgumentParser(
+        description="检查用例步骤与执行引擎的兼容性(多动作共存 / 参数形态)")
+    ap.add_argument("case", nargs="?", default="",
+                    help="只查某个用例(文件名或其路径); 省略则查 Test_cases/ 下全部")
+    args = ap.parse_args(argv)
+    only = args.case or None
+    cases_dir = os.path.join(BASE_DIR, "Test_cases")
+    files = iter_case_files(cases_dir, only)
+    if only and not files:
+        # ★ 指名要查的用例找不到 -> 必须报错退出, 不能"扫 0 个文件 + 全部兼容 + 返回 0"
+        #   (那正是这个脚本刚犯过的毛病: 一个只会说 OK 的检查器比没有更糟)
+        print(f"[ERROR] 没找到用例: {only}(它不在 Test_cases/ 下?)")
+        return 1
 
     multi_action = 0
     type_issues = 0
     total_steps = 0
     top_steps = 0
 
-    for fn in files:
+    for path in files:
         try:
-            data = load_yaml_file(os.path.join(cases_dir, fn))
+            fn = os.path.relpath(path, cases_dir)  # 显示成 <组>/<用例>.yaml, 便于定位
+        except ValueError:                         # 不同盘符(传了别的盘的用例)时会抛
+            fn = os.path.abspath(path)
+        try:
+            data = load_yaml_file(path)
         except Exception as e:
             print(f"[跳过] {fn}: {e}")
             continue

@@ -30,7 +30,7 @@ import time
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
-from PySide6.QtCore import QPoint, Qt                          # noqa: E402
+from PySide6.QtCore import QPoint                              # noqa: E402
 from PySide6.QtGui import QCursor                              # noqa: E402
 from PySide6.QtWidgets import QApplication                     # noqa: E402
 

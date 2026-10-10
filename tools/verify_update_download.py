@@ -10,6 +10,7 @@
 
 只落临时目录, 不碰程序与用户数据, **不运行**替换脚本。约需几分钟(208MB)。
 """
+import argparse
 import json
 import os
 import sys
@@ -24,10 +25,17 @@ from core import updater                                          # noqa: E402
 REPO = os.environ.get("AUTOTEST_REPO") or "Liu-wang-cheng/APP_AutoTest"
 
 
-def main():
-    print(f"仓库: {REPO}")
+def main(argv=None):
+    # ★ 必须有 argparse: 这个脚本一跑就是几分钟、会真下 200MB+。原先不认参数 ——
+    #   `--help` 会被当成"无参数"直接开始下载(实测 2026-10-10 被自己的测试踩到)。
+    ap = argparse.ArgumentParser(
+        description="端到端真下一遍线上安装包(用程序自己的 OTA 代码, 走镜像)")
+    ap.add_argument("--repo", default=REPO, help=f"owner/repo(默认 {REPO})")
+    args = ap.parse_args(argv)
+    repo = args.repo
+    print(f"仓库: {repo}")
     t0 = time.time()
-    raw = (f"https://raw.githubusercontent.com/{REPO}/master/version.json"
+    raw = (f"https://raw.githubusercontent.com/{repo}/master/version.json"
            f"?t={int(time.time())}")
     with urllib.request.urlopen(raw, timeout=20) as r:
         info = updater.parse_version_info(json.loads(r.read().decode("utf-8")))
@@ -35,8 +43,8 @@ def main():
     print(f"原始地址: {info.download_url}")
 
     conf = updater.default_config()
-    conf["repository"] = REPO
-    mirrors = updater.build_mirrors(conf, REPO)
+    conf["repository"] = repo
+    mirrors = updater.build_mirrors(conf, repo)
     ranked = updater.race_mirrors(mirrors, conf["version_file"])
     print("镜像测速:", ", ".join(
         f"{m.name}{'%.0fms' % m.latency_ms if m.success else '不可达'}" for m in ranked))
@@ -93,4 +101,4 @@ def main():
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(main() or 0)
