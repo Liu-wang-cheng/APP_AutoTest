@@ -1,0 +1,34 @@
+name: 测试
+
+# CI = push/PR 之后 GitHub 自动用一台**干净机器**跑一遍测试。
+# 为什么需要: 本地跑靠"记得跑"; 换机器、别人提交、改完忘了跑, 都靠它兜住。
+# 为什么用 windows 而不是 ubuntu: 这程序是 Windows 专用的 —— 替换脚本是 cmd 批处理、
+#   打包产物是 exe、还有一批 test_updater 的用例标了 WIN_ONLY(在 Linux 上会被跳过),
+#   在 Linux 上跑等于"过滤掉了最容易坏的那部分"。
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+  workflow_dispatch:          # 也允许在 Actions 页面手动点一下跑
+
+jobs:
+  pytest:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+          cache: pip                     # 依赖装了 200MB+, 缓存能省几分钟
+
+      - name: 安装依赖
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: 跑测试
+        # 失败时把日志一起贴出来, 免得还要自己复现
+        run: python -m pytest -q

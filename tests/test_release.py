@@ -376,8 +376,9 @@ def test_main_orchestration_order_and_wiring(tmp_path, monkeypatch, capsys):
     assert calls[1][4] == f"AutoTest_v{version_}.exe", calls[1]   # 资产名
     assert calls[2][4].endswith(f"/v{version_}/AutoTest_v{version_}.exe"), calls[2]
     assert calls[3][1] == version_ and calls[3][2] is False, calls[3]
+    # ★ 只断言**默认值**等于 dist/(原来它停在 onedir 时代的 dist/AutoTest, 拼出不存在的
+    #   路径)。不要断言目录存在 —— dist/ 是构建产物, 全新检出(CI/新机器)里本来就没有。
     assert dist_args == [os.path.join(release.ROOT, "dist")], dist_args
-    assert os.path.isdir(dist_args[0]), "默认产物目录不是个真实目录"
 
     # --no-verify: 不发版后校验(dry-run 之外的逃生口)
     calls.clear()
