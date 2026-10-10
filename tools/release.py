@@ -21,8 +21,10 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
+import tempfile
 import urllib.error
 import urllib.request
 from urllib.parse import quote
@@ -104,6 +106,42 @@ def find_dist_exe(dist_dir):
         if f.read(2) != b"MZ":
             raise ValueError(f"{exe} 不是 Windows 可执行文件")
     return exe
+
+
+def release_download_url(repo, version, asset):
+    """Release 资产的下载地址(= 写进 version.json、客户端 OTA 去下的那一条)。"""
+    return (f"https://github.com/{repo}/releases/download/"
+            f"v{version}/{quote(asset)}")
+
+
+def stage_asset_for_gh(exe_path, asset_name):
+    """把产物摆成**资产同名**的临时文件, 供 gh CLI 上传; 返回该路径。
+
+    ★ 为什么必须这一步: `gh release create <tag> <文件>` 是拿**文件的 basename**
+      当资产名的, 直接传 `dist/AutoTest.exe` 就会传成 `AutoTest.exe` —— 而
+      version.json 里写的是 `AutoTest_v{ver}.exe`, 客户端按它下载必然 404。走 API
+      分支时资产名是我们自己指定的(所以从前没暴露), 一旦机器上装了 gh 就会踩。
+    ★ 名字已经一致就原样返回, 不白复制 208MB。
+    """
+    if os.path.basename(exe_path) == asset_name:
+        return exe_path
+    d = tempfile.mkdtemp(prefix="release_asset_")
+    dst = os.path.join(d, asset_name)
+    shutil.copy2(exe_path, dst)
+    return dst
+
+
+def upload_via_gh(repo, version, asset, exe_path, notes):
+    """用 gh CLI 建 Release 并上传资产; 返回下载地址(与 version.json 里写的一致)。"""
+    staged = stage_asset_for_gh(exe_path, asset)
+    try:
+        subprocess.run(["gh", "release", "create", f"v{version}",
+                        "--target", "master", "--title", f"v{version}",
+                        "--notes", notes, staged], cwd=ROOT, check=True)
+    finally:
+        if staged != exe_path:                 # 临时副本用完即删(208MB 别留着)
+            shutil.rmtree(os.path.dirname(staged), ignore_errors=True)
+    return release_download_url(repo, version, asset)
 
 
 def compute_sha256(path):
@@ -292,12 +330,7 @@ def main(argv=None):
     if not args.dry_run:
         ensure_clean_tree()
         if gh_available():
-            subprocess.run(["gh", "release", "create", f"v{args.version}",
-                            "--target", "master", "--title", f"v{args.version}",
-                            "--notes", notes, exe_path],
-                           cwd=ROOT, check=True)
-            download_url = (f"https://github.com/{repo}/releases/download/"
-                            f"v{args.version}/{asset}")
+            download_url = upload_via_gh(repo, args.version, asset, exe_path, notes)
         else:
             token = get_token()
             if not token:

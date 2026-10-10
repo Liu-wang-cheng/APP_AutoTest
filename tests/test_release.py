@@ -131,3 +131,53 @@ def test_build_mirrors_substitutes_branch():
 def test_build_mirrors_empty_repo_gives_no_urls():
     from core.updater import build_mirrors, default_config
     assert build_mirrors(default_config(), "") == []
+
+
+# ── gh CLI 分支: 资产名必须与下载地址一致(否则用户 404) ──
+
+def test_stage_asset_renames_to_asset_name(tmp_path):
+    """gh 拿**文件名**当资产名 —— 必须先把产物摆成资产同名, 否则传上去叫
+    AutoTest.exe, 而 version.json 写的是 AutoTest_v1.5.exe, 客户端必然 404。"""
+    exe = tmp_path / "AutoTest.exe"
+    exe.write_bytes(b"MZ" + b"x" * 128)
+    staged = release.stage_asset_for_gh(str(exe), "AutoTest_v1.5.exe")
+    assert os.path.basename(staged) == "AutoTest_v1.5.exe"
+    assert open(staged, "rb").read() == exe.read_bytes(), "内容必须原样"
+    assert staged != str(exe)                      # 没有动原产物
+    # 名字本来就一致 -> 原样返回, 不白复制 208MB
+    same = tmp_path / "AutoTest_v1.5.exe"
+    same.write_bytes(b"MZ")
+    assert release.stage_asset_for_gh(str(same), "AutoTest_v1.5.exe") == str(same)
+
+
+def test_upload_via_gh_uploads_file_named_as_download_url(tmp_path, monkeypatch):
+    """★ 回归守护: 上传的文件名与返回的下载地址里的名字必须是同一个。
+
+    曾经 gh 分支直接传 dist/AutoTest.exe, 资产名就成了 AutoTest.exe, 而地址拼的是
+    AutoTest_v{ver}.exe —— 这条 404 只有等用户点「立即更新」才会发现。
+    """
+    import subprocess as sp
+    exe = tmp_path / "AutoTest.exe"
+    exe.write_bytes(b"MZ" + b"x" * 128)
+    seen = {}
+
+    def fake_run(args, **kw):
+        seen["args"] = list(args)
+        return sp.CompletedProcess(args, 0)
+
+    monkeypatch.setattr(release.subprocess, "run", fake_run)
+    url = release.upload_via_gh("o/r", "1.5", "AutoTest_v1.5.exe", str(exe), "说明")
+    uploaded = [a for a in seen["args"] if str(a).lower().endswith(".exe")]
+    assert uploaded, f"没找到上传的文件参数: {seen['args']}"
+    assert os.path.basename(uploaded[-1]) == url.rsplit("/", 1)[-1], \
+        f"上传名({os.path.basename(uploaded[-1])})与下载地址({url})对不上 -> 404"
+    assert url == ("https://github.com/o/r/releases/download/"
+                   "v1.5/AutoTest_v1.5.exe")
+    # 临时副本要清掉(208MB 不能留在临时目录里)
+    assert not os.path.exists(uploaded[-1]), "上传用的临时副本没删"
+
+
+def test_release_download_url_escapes_asset_name():
+    """资产名里的空格/中文要转义, 否则地址不是合法 URL"""
+    u = release.release_download_url("o/r", "1.5", "我的 包.exe")
+    assert " " not in u and u.endswith("%E5%8C%85.exe")
