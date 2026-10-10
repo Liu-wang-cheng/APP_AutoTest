@@ -46,6 +46,11 @@ def _clean_registry():
     reg.ACTIONS.update(backup)
 
 
+#: 本文件有 autouse 夹具**故意清空注册表**(每个测试只注册自己造的假动作) ——
+#: 需要真动作的测试从这里按需补回来(模块导入时先存一份完整的)。
+_REAL_ACTIONS = dict(reg.ACTIONS)
+
+
 @pytest.fixture
 def runner():
     cfg = {"step_interval": 0, "default_timeout": 1, "click_timeout": 1}
@@ -222,3 +227,29 @@ def test_if_retry_success_leaves_no_ghost_failure():
     assert ok is True, f"该用例整体应通过: {r.results}"
     ghosts = [x for x in r.results if not x["passed"]]
     assert not ghosts, f"整体通过却留下 FAIL 行(会让 Excel 把该用例标 FAIL): {ghosts}"
+
+
+def test_sleep_step_goes_through_the_cancel_aware_sleep(runner, monkeypatch):
+    """★ 「延时等待」必须走 runner._sleep(按 0.2 秒切片轮询停止标志), 而不是 time.sleep
+
+    以前它是伪键 {"wait": N}(卡片显示「未知」)。这里断言的是**接线**:
+    延时动作 -> runner._sleep。真实计时不在这里断言 —— 本文件有 autouse 夹具把
+    _sleep 换成"立即返回但仍响应停止标志", 免得测试变慢。
+    """
+    import time as _t
+    from core.runner import UserStopped
+    reg.ACTIONS.update({k: v for k, v in _REAL_ACTIONS.items() if k == "sleep"})
+    slept = []
+    real = runner._sleep        # ★ 挂**实例**上: 本文件有 autouse 夹具改类属性,
+                                #   改类会在夹具之后被覆盖(实测: 探针一次都没被调到)
+    runner._sleep = lambda seconds: (slept.append(seconds), real(seconds))[1]
+    runner._execute({"sleep": 0.4, "desc": "延时等待"})
+    assert slept == [0.4], slept
+
+    # 停止后长等待要立刻退出
+    runner.stopped = True
+    t0 = _t.monotonic()
+    with pytest.raises(UserStopped):
+        runner._execute({"sleep": 600, "desc": "延时等待"})
+    assert _t.monotonic() - t0 < 1.0, "停止没打断等待"
+    runner.stopped = False

@@ -3322,3 +3322,48 @@ def test_template_dropdown_does_not_rebuild_while_open(win, monkeypatch, tmp_pat
     after = [combo.itemText(i) for i in range(combo.count())]
     assert after == before, f"弹层开着时重建了名单(会被关掉): {before} -> {after}"
     combo.hidePopup()
+
+
+def test_sleep_step_roundtrip_through_ui(win):
+    """★ 延时等待(新动作)在界面上往返: 加步骤 → 改秒数 → YAML 文本 → 再解析回来
+
+    覆盖"UI 交互"这一侧: 卡片能认出它、字段能改、序列化与回填都不丢。
+    """
+    win.create_case("测试组", group="测试组")
+    win.add_step("sleep")
+    assert win.steps[0].get("sleep") == 10, win.steps[0]      # 默认 10 秒
+    win.steps[0]["sleep"] = 7
+    win._refresh_yaml_text()
+    assert "sleep: 7" in win.yaml_edit.toPlainText(), win.yaml_edit.toPlainText()
+    win._apply_yaml_text()
+    assert win.steps[0]["sleep"] == 7
+    from gui import schema
+    assert next((k for k in win.steps[0] if k in schema.ACTION_BY_KEY), None) == "sleep"
+
+
+def test_grab_step_two_fields_roundtrip(win):
+    """★ 抓取清扫数据: 面积/时间两个框在界面上往返, 且老写法仍能解析"""
+    win.create_case("测试组", group="测试组")
+    win.add_step("grab")
+    # 新建的步骤是 {desc, grab: True} —— 可选文本字段不预填 key(项目约定),
+    # 卡片按 schema 渲染出「面积」「时间」两个框, 用户填了才写进 step
+    from gui import schema as _schema
+    assert win.steps[0].get("grab") is True, win.steps[0]
+    assert [f["key"] for f in _schema.ACTION_BY_KEY["grab"]["fields"]] ==         ["grab_area", "grab_time"]
+    win.steps[0]["grab_area"] = "真空吸尘器"
+    win.steps[0]["grab_time"] = "时间"
+    win._refresh_yaml_text()
+    text = win.yaml_edit.toPlainText()
+    assert "grab_area: 真空吸尘器" in text and "grab_time: 时间" in text, text
+    win._apply_yaml_text()
+    assert win.steps[0]["grab_area"] == "真空吸尘器"
+    assert win.steps[0]["grab_time"] == "时间"
+
+    # 老写法(一个框里写 面积,时间)照样能解析、也照样被认成抓取步骤
+    win.yaml_edit.setPlainText(
+        "module: 测试组\ncases:\n- name: 老写法\n  steps:\n  - desc: 抓取\n"
+        "    grab: 面积,时间\n")
+    win._apply_yaml_text()
+    from gui import schema
+    assert win.steps[0]["grab"] == "面积,时间"
+    assert next((k for k in win.steps[0] if k in schema.ACTION_BY_KEY), None) == "grab"
