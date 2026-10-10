@@ -16,6 +16,25 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "tools"))
 import release  # noqa: E402
 
 
+@pytest.fixture(autouse=True)
+def _never_touch_the_real_release_state(monkeypatch):
+    """★ 结构性兜底: 本文件的任何测试都不许动仓库根的 version.json, 也不许真跑 git。
+
+    事故(2026-10-10): 一条新写的 main() 测试**漏打桩**, 于是 main() 真去写了
+    version.json —— 内容变成测试用的假地址(download_url 指向 github.com/o/r, sha 是
+    测试造的假产物 b'MZ'+b'x'*2048 的 sha), 还随提交推了上去。后果很实: 线上 v1.4
+    用户检查更新会拿到"v1.5", 点更新就是 404。
+
+    version.json 是**线上 OTA 的唯一依据**, 写坏它等于把所有用户的更新打歪, 所以这里
+    默认把两个写盘/执行入口换成空操作; 要验它们的测试自己再打桩即可(自己的桩后生效)。
+    """
+    monkeypatch.setattr(release, "update_version_json_and_tag",
+                        lambda *a, **k: None, raising=False)
+    monkeypatch.setattr(release, "_git", lambda *a, **k: "", raising=False)
+    yield
+
+
+
 # ── remote 解析: 发错仓库 = 版本发到别人家去 ──
 
 @pytest.mark.parametrize("url,want", [
@@ -504,3 +523,25 @@ def test_release_refuses_to_publish_when_ci_red(tmp_path, monkeypatch, capsys):
     rc = release.main(["--version", "1.5", "--repo", "o/r", "--no-ci-check",
                        "--no-verify"])
     assert rc == 0 and called == ["create"], (rc, called)
+
+
+def test_committed_version_json_points_at_our_repo():
+    """★ 提交进仓库的 version.json 必须是**真东西** —— 它是线上 OTA 的唯一依据,
+    被测试写坏过一次(2026-10-10: 地址成了 github.com/o/r 的假地址, 提交推送后
+    v1.4 用户会收到一个下载 404 的"新版本")。
+    """
+    import json
+    import re
+    import subprocess
+    path = os.path.join(release.ROOT, "version.json")
+    d = json.load(open(path, encoding="utf-8"))
+    url = d.get("download_url", "")
+    assert re.match(r"^https://github\.com/[^/]+/[^/]+/releases/download/v[\d.]+/\S+$",
+                    url), f"download_url 不像真的: {url!r}"
+    assert "/o/r/" not in url, f"version.json 被测试污染了: {url}"
+    r = subprocess.run(["git", "remote", "get-url", "origin"], cwd=release.ROOT,
+                       capture_output=True, text=True)
+    repo = release.parse_repo_from_remote(r.stdout)
+    assert repo and repo in url, f"下载地址指向的不是本仓库({repo}): {url}"
+    assert re.fullmatch(r"[0-9a-f]{64}", str(d.get("sha256", ""))), d.get("sha256")
+    assert d.get("release_notes"), "发布说明不能是空的"
