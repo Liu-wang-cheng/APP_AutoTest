@@ -1,8 +1,8 @@
 {
-  "version": "1.6",
-  "sha256": "5eb64c16398e160bb1c90dce678014b626473d76232b6ee0dc1cf09cf83eae92",
-  "download_url": "https://github.com/Liu-wang-cheng/APP_AutoTest/releases/download/v1.6/AutoTest_v1.6.exe",
+  "version": "1.7",
+  "sha256": "afd05fc796248f0684c95ed4779c73b34f618956bfafe3307cbf9fa57e550ba6",
+  "download_url": "https://github.com/Liu-wang-cheng/APP_AutoTest/releases/download/v1.7/AutoTest_v1.7.zip",
   "release_date": "2026-10-10",
-  "release_notes": "### ★ 修复: 打包版一执行真机用例就报 \"Resource assets/u2.jar not found\"\n\n打包时漏收了 `uiautomator2` 的 `assets/u2.jar` 与 `app-uiautomator.apk` —— 那是真机\n执行时**要推给手机**的驱动文件。开发环境里 `site-packages` 目录是存在的, 本地怎么跑都\n正常, 所以这个问题**只有\"打包后 + 真机执行\"才暴露**: v1.3 / v1.4 / v1.5 都带着它发布。\n\n- 打包收集规则补上 `uiautomator2` 的数据文件(与 OCR 模型同样的处理方式)\n- **构建期新增\"资源清点\"闸门**: 逐个核对运行期要读的资源(u2.jar、自带 adb、OCR 模型、\n  拼音词典、定位器配置、Qt 窗口插件…), 少任何一项**直接构建失败**。这类\"打包漏文件\"\n  以后在构建时就被拦下, 不用等到现场才发现\n- 顺带完整核对过: 自有模块、第三方模块、Qt 插件、其它数据文件都在包里\n\n### 说明\n\n- 装了 v1.5 的用户**可以直接点「立即更新」**升到本版(自动更新从 v1.4 起已可用)。",
+  "release_notes": "### ★★★ 本版换了分发形态: 已装旧版的用户请**手动换一次**\n\n启动速度实测: 旧形态每次启动要解压 400MB(约 2.8 秒), 新形态直接跑(**约 0.7 秒**)。\n\n**这一版开始, 程序文件从\"一个 exe\"改成\"一个目录\"(exe + `_internal\\\\`), 分发物是 zip。**\n已经装了 v1.6 及更早版本的机器**没法自动升上来**(旧版的更新逻辑只认 exe, 遇到 zip 会报\n\"不是 Windows 可执行文件\")。请到本项目的 Release 页下载 `AutoTest_v1.7.zip`:\n\n1. 解压到任意目录(建议一个空目录, 或直接盖在原来的目录上)\n2. 把**你原来的 config\\、Test_cases\\、Test_preconditions\\、Test_img\\** 一起放进去\n   (整个目录一起覆盖更省事 —— 更新从不碰这些)\n3. 双击 `AutoTest.exe`\n\n**从 v1.7 起, 自动更新继续可用**(点「立即更新」即可), 以后不用再手动。\n\n### 改进\n\n- **启动快 2.1 秒**: 换成目录模式后不再每次解压; 实测 2.82 秒 → 0.66 秒(3 次取中位)\n- **不再往系统临时目录写 400MB**: 顺带解决了旧形态每次启动/更新残留 400MB 的问题\n  (%TEMP% 里长期堆着几个 GB 的就是它)\n- **更新改成\"两次改名\"**: 下载的 zip 由程序**自己解压并校验**(版本号、关键资源、\n  zip 内部路径合法性), 替换脚本只做两次瞬时改名(旧载荷→`_internal_old`, 新载荷→就位)\n  + 复制一个小 exe。比\"让脚本拷 400MB\"快得多, 中途被打断的窗口也从分钟级降到毫秒级\n- 新版本起不来时**整体回滚**(载荷与 exe 一起换回更新前的样子), 并保留 2 分钟退路\n\n### 说明\n\n- 目录模式下 `_internal\\` 是程序文件, **用户数据仍在 exe 这一层**, 更新不碰 ✓",
   "min_version": "1.0"
 }
