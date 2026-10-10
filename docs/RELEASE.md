@@ -20,9 +20,19 @@
 build.bat
 ```
 
-自动: 跑全部测试(不过就中止) → PyInstaller 打包 → 验证产物
-(模型文件/关键 DLL/offscreen 启动)。产物是**单个** `dist\AutoTest.exe`。
-**发布前手动双击它跑一遍真机用例** —— 自动验证只保证"能力都在", 不保证"行为正确"。
+自动: 跑全部测试(不过就中止) → PyInstaller 打包(**目录模式 onedir**) → 验证产物
+(资源清点/offscreen 启动) → 打分发 zip。
+
+产物有两份:
+- `dist\AutoTest\`  可运行目录(双击里面的 `AutoTest.exe`)—— **先手动双击跑一遍真机用例**,
+  自动验证只保证"能力都在", 不保证"行为正确"
+- `dist\AutoTest_v{版本}.zip`  **发布用**的分发包(只装 `AutoTest.exe` + `_internal\`,
+  用户数据不进包)
+
+★ 为什么是目录模式: 单文件 exe 每次启动都要解压 400MB(实测约 2.8 秒), 目录模式直接跑
+  (约 0.7 秒)。代价是分发物变成 zip —— 从 1.7 起就是它。
+★ `dist\AutoTest\` 里同时放着**用户数据**(跑一次打包版就会生成 config\ 用例\ 备份\):
+  清理只许删 `AutoTest.exe` 与 `_internal\`, 绝不能整目录删(仓里有守护测试)。
 
 ★ `build.bat` 必须是 CRLF 换行(仓里有守护测试)。裸 LF 会被 cmd 把每行切成碎片执行,
   表现为 `'python.exe' is not recognized` 之类, 第一步就过不去。
@@ -42,7 +52,7 @@ python tools/release.py --version 1.1
 理由: CI 是唯一能证明"换台干净机器也跑得通"的环节。紧急情况用 `--no-ci-check` 跳过。
 `--ci-wait N` 可改等待秒数。
 
-脚本会依次: 校验三处版本一致 → 打 `dist\AutoTest_v1.1.zip`(**只装 exe +
+脚本会依次: 校验三处版本一致 → 打 `dist\AutoTest_v{版本}.zip`(**只装 exe +
 _internal/**, 运行时生成的 config/backups 绝不进包) → 传 GitHub Release →
 写仓库根 `version.json`(含 sha256) → commit → push master + tag v1.1。
 
@@ -55,13 +65,17 @@ _internal/**, 运行时生成的 config/backups 绝不进包) → 传 GitHub Rel
 python tools/verify_release.py --version 1.4      # 等 1~2 分钟让 CDN 生效
 ```
 
-自动查四项(取清单 / sha256 与产物一致 / 资产 200 且大小一致 / 前 1KB 是 MZ),
+自动查四项(取清单 / sha256 与分发包一致 / 资产 200 且大小一致 / 前 1KB 是 PK zip),
 全过就说明客户端那条路能拿到**内容正确**的包。仍建议在**旧版本**的 GUI 里实点一次:
-点「立即更新」走完下载→校验→重启, 复查标题栏版本号, 且 `Test_cases/`、
-`config/config.yaml` 原样未动(更新只换 exe)。
+点「立即更新」走完下载→校验→解压→重启, 复查标题栏版本号, 且 `Test_cases/`、
+`config/config.yaml` 原样未动(更新只换 `AutoTest.exe` 与 `_internal\`)。
 
 大文件下载想更快时用镜像前缀下(如 `https://gh-proxy.com/<原地址>`): 实测直连拉
-208MB 几乎不可用, gh-proxy 约 1.2 MB/s。
+大包几乎不可用, gh-proxy 约 1.2 MB/s。
+
+★ **形态切换只发生过一次**(v1.6 单文件 -> v1.7 目录): 那次的更新说明里必须写清
+  "已装旧版请手动下载 zip 换一次", 否则用户的「立即更新」会报"不是 Windows
+  可执行文件"(旧版的校验只认 exe, 被 zip 挡下, 不会破坏现有程序)。
 
 ## 用户侧如何收到更新
 

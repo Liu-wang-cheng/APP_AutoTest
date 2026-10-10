@@ -4,7 +4,7 @@
     python tools/verify_update_download.py            # 版本以线上清单为准
 
 与 tools/verify_release.py 的分工: 那个只查"清单/资产/大小/MZ 头"; 这个真的把
-整包拉下来并跑 `updater.download` + `verify_sha256` + `validate_new_exe` —— 镜像选源、
+整包拉下来并跑 `updater.download` + `verify_sha256` + `validate_update_zip` + `extract_update` —— 镜像选源、
 流式下载、加速前缀这些**只在真下载里才暴露**的环节靠它(教训: 直连拉 208MB 实测下不动,
 而清单走直连最快, 两者必须分开选源)。
 
@@ -60,7 +60,7 @@ def main(argv=None):
     print(f"实际下载: {url}")
 
     tmp = tempfile.mkdtemp(prefix="ota_e2e_")
-    dest = os.path.join(tmp, "_update_download.exe")
+    dest = os.path.join(tmp, "_update_download.zip")
     last = [0.0]
 
     def prog(got, total, speed):
@@ -81,10 +81,12 @@ def main(argv=None):
     else:
         print("sha256 与清单一致")
     try:
-        updater.validate_new_exe(dest)
-        print("MZ 头与大小校验通过")
+        updater.validate_update_zip(dest, info.version)
+        updater.extract_update(dest, os.path.join(tmp, "_extracted"))
+        print(f"zip 校验通过, 解压后 _internal/VERSION = "
+              f"{updater.read_zip_version(dest)}")
     except ValueError as e:
-        print(f"[FAIL] validate_new_exe: {e}")
+        print(f"[FAIL] 更新包校验/解压失败: {e}")
         ok = False
 
     exe_name = "AutoTest.exe"

@@ -594,15 +594,14 @@ def test_cleanup_update_leftovers_at_startup_is_conservative(tmp_path):
     `_update.bat` 此刻**正在运行**(就是它把本进程拉起来的), 删它会让 cmd 读不到下一行。
     """
     from core import bootstrap
-    (tmp_path / "_update_download.exe").write_bytes(b"partial")
-    (tmp_path / "_update_download.exe.part").write_bytes(b"half")
+    (tmp_path / "_update_download.zip").write_bytes(b"partial")
+    (tmp_path / "_update_download.zip.part").write_bytes(b"half")
     (tmp_path / "_update_target.txt").write_text("AutoTest.exe", encoding="utf-8")
-    (tmp_path / "_update_tempdir.txt").write_text("C:/Temp/_MEI1", encoding="utf-8")
     (tmp_path / "AutoTest.exe.bak").write_bytes(b"old")
     (tmp_path / "_update.bat").write_bytes(b"@echo off")
     cleaned = bootstrap.cleanup_update_leftovers(app_dir=str(tmp_path))
-    for gone in ("_update_download.exe", "_update_download.exe.part",
-                 "_update_target.txt", "_update_tempdir.txt"):
+    for gone in ("_update_download.zip", "_update_download.zip.part",
+                 "_update_target.txt"):
         assert gone in cleaned and not (tmp_path / gone).exists(), gone
     assert (tmp_path / "AutoTest.exe.bak").exists(), "启动就删了唯一的退路"
     assert (tmp_path / "_update.bat").exists(), "删了正在运行的替换脚本"
@@ -615,12 +614,18 @@ def test_cleanup_old_backup_runs_late(tmp_path):
     from core import bootstrap
     (tmp_path / "AutoTest.exe.bak").write_bytes(b"old")
     (tmp_path / "_update.bat").write_bytes(b"@echo off")
-    (tmp_path / "_update_download.exe").write_bytes(b"pkg")
+    (tmp_path / "_update_download.zip").write_bytes(b"pkg")
+    (tmp_path / "_internal_old").mkdir()
+    (tmp_path / "_internal_old" / "VERSION").write_text("1.5", encoding="utf-8")
+    (tmp_path / "_update_extracted").mkdir()
     cleaned = bootstrap.cleanup_old_backup(app_dir=str(tmp_path))
     assert "AutoTest.exe.bak" in cleaned and "_update.bat" in cleaned
+    assert "_internal_old" in cleaned and "_update_extracted" in cleaned
     assert not (tmp_path / "AutoTest.exe.bak").exists()
     assert not (tmp_path / "_update.bat").exists()
-    assert not (tmp_path / "_update_download.exe").exists()
+    assert not (tmp_path / "_update_download.zip").exists()
+    assert not (tmp_path / "_internal_old").exists()
+    assert not (tmp_path / "_update_extracted").exists()
     assert bootstrap.cleanup_old_backup(app_dir=str(tmp_path)) == []
 
 
@@ -756,16 +761,18 @@ def test_download_worker_emits_bat(monkeypatch, tmp_path):
                         lambda u, p: u or "https://e/AutoTest.exe")
     monkeypatch.setattr(updater, "download", lambda url, dest, progress_cb=None: None)
     monkeypatch.setattr(updater, "verify_sha256", lambda f, s: True)
-    monkeypatch.setattr(updater, "validate_new_exe", lambda p: p)
-    seen_exe = {}
+    # ★ 目录模式的接线: 校验 zip -> 解压 -> 生成替换脚本。三个都要打桩并留下痕迹,
+    #   否则"更新包根本没校验/没解压"这种事测试也发现不了。
+    seen = {}
+    monkeypatch.setattr(updater, "validate_update_zip",
+                        lambda p, v="": seen.setdefault("zip", p) or p)
+    monkeypatch.setattr(updater, "extract_update",
+                        lambda z, d: seen.setdefault("extract", (z, d)) or d)
 
-    def fake_bat(app, pid, exe_name=None, temp_dir=None):
+    def fake_bat(app, pid, exe_name=None):
         # ★ F3 的接线: 必须把"正在运行的那个 exe 名"交给替换脚本, 否则它只能靠
         #   字母序猜目标, 目录里多一个 exe 就换错文件
-        seen_exe["name"] = exe_name
-        # ★ 也要把一次性解压目录交出去(onefile 的 _MEIPASS): 我们随后 os._exit(0),
-        #   跳过 bootloader 的清理, 不交就每更新一次漏 400MB
-        seen_exe["temp_dir"] = temp_dir
+        seen["name"] = exe_name
         return str(tmp_path / "_update.bat")
 
     monkeypatch.setattr(updater, "generate_update_bat", fake_bat)
@@ -781,9 +788,9 @@ def test_download_worker_emits_bat(monkeypatch, tmp_path):
     th.done.connect(lambda bat, err: results.append((bat, err)))
     th.run()      # 直接调 run(QThread.start 会真开线程, 时序不好控制)
     assert results == [(str(tmp_path / "_update.bat"), "")], results
-    assert seen_exe.get("name") == os.path.basename(sys.executable), seen_exe
-    # temp_dir 要传(getattr 取的 sys._MEIPASS, 开发环境没有就是 ""), 不传就漏 400MB
-    assert seen_exe.get("temp_dir") == getattr(sys, "_MEIPASS", ""), seen_exe
+    assert seen.get("name") == os.path.basename(sys.executable), seen
+    assert str(seen.get("zip", "")).endswith("_update_download.zip"), seen
+    assert str(seen["extract"][1]).endswith("_update_extracted"), seen
 
 
 def test_download_worker_reports_sha_mismatch(monkeypatch, tmp_path):
@@ -844,18 +851,20 @@ def test_all_bat_files_use_crlf():
     assert not bad, f"这些 .bat 不是 CRLF 换行(cmd 会把命令切碎): {bad}"
 
 
-def test_build_bat_only_removes_the_exe_not_the_whole_dist():
-    r"""★ build.bat 只许删程序文件, 不许删整个 dist\。
+def test_build_bat_only_removes_program_files():
+    r"""★ build.bat 只许删**程序文件**(exe + _internal\), 不许删 dist\AutoTest\ 整个目录。
 
-    在 dist\ 里跑一次打包版就会生成 config\ Test_cases\ Test_img\ backups\ reports\
-    —— 那是使用者的数据(可能填过设备/APP 配置)。原来那句 `rmdir /s /q dist` 会连带
-    删掉(实测: 2026-10-09 构建前得先手动把这些挪走才敢跑)。build\ 是 PyInstaller
-    中间产物, 删它没问题。
+    目录模式下用户数据(config\ Test_cases\ backups\ ...)就跑在**同一个目录里**,
+    整目录删除会连带毁掉(实测踩过: 构建前得先把它们挪走才敢跑)。
+    同时钉住新形态的两个关键动作: 验证 onedir 产物 + 打分发 zip。
     """
     text = open(os.path.join(ROOT, "build.bat"), encoding="utf-8",
                 errors="replace").read().lower()
-    for bad in ("rmdir /s /q dist", "rd /s /q dist", 'rmdir /s /q "dist"'):
-        assert bad not in text, f"build.bat 又在整目录删 dist 了: {bad}"
-    # ★ 反斜杠要用 raw 字符串: "dist\autotest.exe" 里的 \a 会被当成响铃字符(踩过)
-    assert r"dist\autotest.exe" in text, r"没有删旧的 dist\AutoTest.exe"
+    for bad in (r"rmdir /s /q dist", r"rd /s /q dist", r'rmdir /s /q "dist"',
+                r"rmdir /s /q distutotest"):
+        assert bad not in text, f"build.bat 又在整目录删了: {bad}"
+    assert "_internal" in text, r"没有清 _internal\ 载荷目录"
+    assert r"auto" + "testutotest.exe" in text or "autotest.exe" in text,         "没有删旧的 exe"
     assert r"rmdir /s /q build" in text, r"build\ 中间产物该删(可再生产)"
+    assert "verify_package.py" in text, "没有验证产物"
+    assert "--pack-only" in text, "没有打分发 zip 这一步"

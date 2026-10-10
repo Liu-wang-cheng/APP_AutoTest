@@ -98,36 +98,67 @@ def test_version_consistency_catches_drift(tmp_path, monkeypatch):
 
 # ── 产物校验: onefile 的发布物就是一个 exe ──
 
-def _make_dist(root):
-    """造一份合法的打包产物(dist/AutoTest.exe)"""
-    root.mkdir(parents=True, exist_ok=True)
-    (root / "AutoTest.exe").write_bytes(b"MZ" + b"x" * (2 << 20))
+def _make_dist(root, payload_mb=2):
+    r"""造一份合法的**目录模式**产物(dist\AutoTest\AutoTest.exe + _internal\)"""
+    app = root / "AutoTest"
+    (app / "_internal").mkdir(parents=True, exist_ok=True)
+    (app / "AutoTest.exe").write_bytes(b"MZ" + b"x" * 2048)
+    (app / "_internal" / "VERSION").write_text("1.6", encoding="utf-8")
+    (app / "_internal" / "pad.bin").write_bytes(os.urandom(payload_mb << 20))
+    return app
 
 
 def test_find_dist_exe_ok(tmp_path):
     _make_dist(tmp_path)
     p = release.find_dist_exe(str(tmp_path))
     assert os.path.isfile(p) and p.endswith("AutoTest.exe")
+    assert "_internal" in os.listdir(os.path.dirname(p))
 
 
 def test_find_dist_exe_rejects_bad_artifacts(tmp_path):
-    """缺 exe / 太小 / 不是可执行文件, 都必须在发布前拦下(不能发个坏包)"""
+    """没打包 / 缺载荷 / 不是可执行文件, 都必须在发布前拦下(不能发个坏包)"""
     d = tmp_path / "empty"
     d.mkdir()
     with pytest.raises(FileNotFoundError):
         release.find_dist_exe(str(d))            # 没打包就发布
 
-    d2 = tmp_path / "small"
-    d2.mkdir()
-    (d2 / "AutoTest.exe").write_bytes(b"MZ")
-    with pytest.raises(ValueError, match="字节"):
-        release.find_dist_exe(str(d2))           # 构建中断的半成品
+    d2 = tmp_path / "nopayload"
+    (d2 / "AutoTest").mkdir(parents=True)
+    (d2 / "AutoTest" / "AutoTest.exe").write_bytes(b"MZ" + b"x" * 2048)
+    with pytest.raises(ValueError, match="_internal"):
+        release.find_dist_exe(str(d2))           # 目录模式打包没生效
 
     d3 = tmp_path / "notexe"
-    d3.mkdir()
-    (d3 / "AutoTest.exe").write_bytes(b"<html>error</html>" + b"x" * (2 << 20))
+    (d3 / "AutoTest").mkdir(parents=True)
+    (d3 / "AutoTest" / "AutoTest.exe").write_bytes(b"<html>error</html>" + b"x" * (2 << 20))
     with pytest.raises(ValueError, match="可执行"):
         release.find_dist_exe(str(d3))           # 未知内容
+
+
+def test_make_package_zip_contains_only_program_files(tmp_path, monkeypatch):
+    monkeypatch.setattr(release, "_MIN_PAYLOAD_MB", 0)   # 单测不造 150MB
+    r"""★ 分发包只许装 exe + _internal\ —— 用户数据与它们**在同一个目录里**, 一旦整目录
+    打包就会把使用者的 config/用例/备份发出去。"""
+    import zipfile
+    app = _make_dist(tmp_path, payload_mb=0)
+    (app / "_internal" / "pad.bin").write_bytes(os.urandom(1 << 20))
+    (app / "config").mkdir(); (app / "config" / "config.yaml").write_text("secret")
+    (app / "Test_cases").mkdir(); (app / "Test_cases" / "a.yaml").write_text("secret")
+    (app / "backups").mkdir(); (app / "backups" / "2026.zip").write_bytes(b"secret")
+    zp = release.make_package_zip("1.6", str(tmp_path))
+    names = set(zipfile.ZipFile(zp).namelist())
+    assert "AutoTest.exe" in names and "_internal/VERSION" in names
+    leaked = [n for n in names if n.startswith(("config/", "Test_cases/", "backups/"))]
+    assert not leaked, f"分发包里混进了用户数据: {leaked}"
+    assert zp.endswith("AutoTest_v1.6.zip")
+
+
+def test_make_package_zip_refuses_thin_payload(tmp_path, monkeypatch):
+    monkeypatch.setattr(release, "_MIN_PAYLOAD_MB", 150)
+    """载荷小得不像话(打包没打全)时拒绝出包"""
+    _make_dist(tmp_path, payload_mb=0)
+    with pytest.raises(ValueError, match="低于"):
+        release.make_package_zip("1.6", str(tmp_path))
 
 
 # ── 更新器的分支支持: 本仓库默认分支是 master, 不是 main ──
@@ -351,6 +382,8 @@ def test_main_orchestration_order_and_wiring(tmp_path, monkeypatch, capsys):
     import subprocess as sp
     exe = tmp_path / "AutoTest.exe"
     exe.write_bytes(b"MZ" + b"x" * 2048)      # 小文件即可(真产物由 find_dist_exe 校验)
+    pkg = tmp_path / "AutoTest_v1.5.zip"      # make_package_zip 的替身返回它
+    pkg.write_bytes(b"PK" + b"x" * 4096)
     calls = []
 
     monkeypatch.setattr(release, "check_version_consistency", lambda root, v: [])
@@ -361,6 +394,8 @@ def test_main_orchestration_order_and_wiring(tmp_path, monkeypatch, capsys):
         dist_args.append(d)
         return str(exe)
     monkeypatch.setattr(release, "find_dist_exe", fake_find_dist)
+    monkeypatch.setattr(release, "make_package_zip",
+                        lambda v, d, o=None: str(pkg))
     monkeypatch.setattr(release, "load_changelog_section",
                         lambda p, v: ("2026-10-10", "本次更新说明"))
     monkeypatch.setattr(release, "ensure_clean_tree", lambda: None)
@@ -399,9 +434,9 @@ def test_main_orchestration_order_and_wiring(tmp_path, monkeypatch, capsys):
     order = [c[0] for c in calls]
     assert order == ["create_release", "upload_asset", "version_json", "verify"], order
     assert calls[0][3] == "本次更新说明", calls[0]     # 说明取 CHANGELOG 该节
-    assert calls[1][3] == "AutoTest.exe", calls[1]     # 上传的就是产物
-    assert calls[1][4] == f"AutoTest_v{version_}.exe", calls[1]   # 资产名
-    assert calls[2][4].endswith(f"/v{version_}/AutoTest_v{version_}.exe"), calls[2]
+    assert calls[1][3].endswith(".zip"), calls[1]     # 上传的是分发包 zip
+    assert calls[1][4] == f"AutoTest_v{version_}.zip", calls[1]   # 资产名
+    assert calls[2][4].endswith(f"/v{version_}/AutoTest_v{version_}.zip"), calls[2]
     assert calls[3][1] == version_ and calls[3][2] is False, calls[3]
     # ★ 只断言**默认值**等于 dist/(原来它停在 onedir 时代的 dist/AutoTest, 拼出不存在的
     #   路径)。不要断言目录存在 —— dist/ 是构建产物, 全新检出(CI/新机器)里本来就没有。
@@ -501,9 +536,13 @@ def test_release_refuses_to_publish_when_ci_red(tmp_path, monkeypatch, capsys):
     import subprocess as sp
     exe = tmp_path / "AutoTest.exe"
     exe.write_bytes(b"MZ" + b"x" * 2048)
+    pkg = tmp_path / "AutoTest_v1.5.zip"          # main() 会拿去上传的就是它
+    pkg.write_bytes(b"PK" + b"x" * 4096)
     called = []
     monkeypatch.setattr(release, "check_version_consistency", lambda r, v: [])
     monkeypatch.setattr(release, "find_dist_exe", lambda d: str(exe))
+    monkeypatch.setattr(release, "make_package_zip",
+                        lambda v, d, o=None: str(pkg))
     monkeypatch.setattr(release, "load_changelog_section", lambda p, v: ("2026-10-10", "说明"))
     monkeypatch.setattr(release, "get_token", lambda: "tok")
     monkeypatch.setattr(release, "check_ci_green",

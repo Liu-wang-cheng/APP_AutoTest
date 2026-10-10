@@ -92,7 +92,7 @@ for _base, _dirs, _files in os.walk(os.path.join(ROOT, "Test_img", "templates"))
         datas.append((_full, os.path.relpath(os.path.dirname(_full), ROOT)))
 
 a = Analysis(
-    ["gui/main.py"],
+    [r"D:\claude_test\Auto_test\gui\main.py"],
     pathex=[ROOT],
     binaries=[],
     datas=datas,
@@ -129,13 +129,7 @@ a.datas = [d for d in a.datas if _keep(d)]
 
 pyz = PYZ(a.pure)
 
-# ★ 目录模式(onedir): DLL 与数据直接铺在 exe 旁边的 _internal\, 启动时**不需要解压**。
-#   实测对比(2026-10-10, 同一台机器, 取 3 次中位):
-#       onefile(每次解压 400MB)  2.82 秒
-#       onedir(直接跑)           0.66 秒      ← 快 2.15 秒
-#   代价: 分发物从"一个 exe"变成"一个目录"(打包成 zip), 更新时替换的是 exe + _internal\
-#   —— 更新链见 core/updater.generate_update_bat 与 docs/RELEASE.md。
-#   用户数据(config/ Test_cases/ ...)仍在 exe 这一层, 不在 _internal\ 里, 更新不碰 ✓
+# onefile: 所有内容打进单个 exe(无 COLLECT 段)
 exe = EXE(
     pyz,
     a.scripts,
@@ -150,6 +144,7 @@ exe = EXE(
     icon=os.path.join(ROOT, "gui", "assets", "app_icon.ico"),
 )
 
+# ★ 对照构建用: 目录模式(onedir)。DLL 与数据直接铺在 exe 旁边, 启动时不需要解压。
 coll = COLLECT(
     exe,
     a.binaries,

@@ -23,6 +23,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
+import zipfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from urllib.parse import urlparse
@@ -441,30 +442,118 @@ def apply_download_prefix(url, prefix):
     return prefix + str(url)
 
 
-def validate_new_exe(path):
-    """校验下载下来的**新版本 exe**(onefile: 安装包就是一个 exe)。
+#: 分发包(zip)里必须有的**文件**条目: (相对路径, 说明)。少一样就说明包不对, 宁可不更新。
+#: ★ 不要在这里放 `_internal` —— zip 里未必有"目录条目"(zipfile.writestr 就不会生成),
+#:   真实分发包只有 `_internal/xxx` 这样的文件条目; 载荷目录的存在性用下面的前缀判断。
+_REQUIRED_IN_ZIP = (
+    ("AutoTest.exe", "程序本体"),
+    ("_internal/VERSION", "版本号(用它核对「确实是清单里那一版」)"),
+)
+#: 载荷目录里的条目必须以此开头(证明 `_internal\` 真有东西)
+_PAYLOAD_PREFIX = "_internal/"
+#: 更新时额外抽查的运行期资源(打包漏了它们会"能启动、真机才炸")
+_SPOT_RESOURCES = (
+    "_internal/uiautomator2/assets/u2.jar",
+    "_internal/rapidocr_onnxruntime/models/ch_PP-OCRv3_rec_infer.onnx",
+    "_internal/adbutils/binaries/adb.exe",
+    "_internal/config/locators.yaml",
+)
 
-    校验通过原样返回 path; 不符抛 ValueError。更新流程由此把"下载的文件"
-    变成"可直接替换的程序文件" —— onefile 没有解包步骤。
+
+def read_zip_version(zip_path):
+    """读分发包里的 `_internal/VERSION`(不落盘); 读不到返回 ""。"""
+    try:
+        with zipfile.ZipFile(zip_path) as z:
+            for name in ("_internal/VERSION", "_internal\\VERSION"):
+                try:
+                    return z.read(name).decode("utf-8", "replace").strip()
+                except KeyError:
+                    continue
+    except Exception:
+        return ""
+    return ""
+
+
+def validate_update_zip(path, expected_version=""):
+    """校验下载下来的**分发包 zip**; 通过返回 path, 不符抛 ValueError。
+
+    ★ 只验"是不是一个像样的包": zip 能打开 + 该有的东西都在 + 版本号与清单一致。
+      这样即使镜像给了一个错误页/半截包/别的版本, 也会在**替换之前**被挡下 ——
+      而不是等 bat 把 _internal 换掉之后才发现装的是坏的。
     """
     if not os.path.isfile(path):
-        raise ValueError(f"下载的新版本文件不存在: {path}")
+        raise ValueError(f"下载的更新包不存在: {path}")
     if os.path.getsize(path) < 1 << 20:
-        raise ValueError(f"新版本文件只有 {os.path.getsize(path)} 字节, 不像程序文件")
+        raise ValueError(f"更新包只有 {os.path.getsize(path)} 字节, 不像完整包")
     with open(path, "rb") as f:
-        if f.read(2) != b"MZ":
-            raise ValueError("新版本文件不是 Windows 可执行文件(缺少 MZ 头) —— "
-                             "可能是错误页/镜像报错页, 请稍后重试")
+        if f.read(2) != b"PK":
+            raise ValueError("更新包不是 zip(缺少 PK 头) —— 可能是错误页/镜像报错页")
+    try:
+        with zipfile.ZipFile(path) as z:
+            names = {n.replace("\\", "/") for n in z.namelist()}
+            for rel, why in _REQUIRED_IN_ZIP:
+                if rel not in names:
+                    raise ValueError(f"更新包里缺少 {rel}({why}) —— 包不完整")
+            if not any(n.startswith(_PAYLOAD_PREFIX) for n in names):
+                raise ValueError("更新包里没有载荷目录 _internal —— 包不完整")
+            exe = z.read("AutoTest.exe")[:2]
+            if exe != b"MZ":
+                raise ValueError("更新包里的 AutoTest.exe 不是 Windows 程序")
+            missing = [r for r in _SPOT_RESOURCES if r not in names]
+            if missing:
+                raise ValueError("更新包里缺少运行期资源(打包规则漏了?): "
+                                 + ", ".join(missing))
+            got = read_zip_version(path)
+            if expected_version and got and got != str(expected_version).strip():
+                raise ValueError(f"更新包里是 v{got}, 但清单说是 v{expected_version} —— "
+                                 f"包与清单不符, 拒绝更新")
+    except zipfile.BadZipFile as e:
+        raise ValueError(f"更新包不是有效的 zip: {e}")
     return path
+
+
+def extract_update(zip_path, dest_dir):
+    """把更新包解压到 dest_dir(会先清空它); 返回解压出来的程序目录。
+
+    ★ 自己解压而不是让 bat 解压: 解压是最容易失败的一步(磁盘满/杀软拦/包损坏),
+      放在**程序还活着**的时候做, 失败就直接报错、什么都不用改;
+      bat 那边只剩两次瞬时 rename, 越快越不容易被打断(TB 的做法是让 bat 拷 400MB,
+      中途一断就是半截程序)。
+    ★ 防 zip slip: 压缩包里的路径能带 `..\\` 或绝对路径 —— 不校验的话, 一个恶意/损坏的
+      包可以把文件写到程序目录之外。
+    """
+    import shutil
+    dest_dir = os.path.abspath(dest_dir)
+    if os.path.isdir(dest_dir):
+        shutil.rmtree(dest_dir, ignore_errors=True)
+    os.makedirs(dest_dir, exist_ok=True)
+    with zipfile.ZipFile(zip_path) as z:
+        for info in z.infolist():
+            name = info.filename
+            if name.endswith("/"):
+                continue
+            norm = os.path.normpath(name.replace("\\", "/"))
+            if os.path.isabs(norm) or norm.startswith("..") or ":" in norm:
+                raise ValueError(f"更新包里有非法路径, 拒绝解压: {name}")
+            target = os.path.join(dest_dir, norm)
+            if not os.path.abspath(target).startswith(dest_dir + os.sep):
+                raise ValueError(f"更新包里有越界路径, 拒绝解压: {name}")
+            os.makedirs(os.path.dirname(target), exist_ok=True)
+            with z.open(info) as src, open(target, "wb") as out:
+                shutil.copyfileobj(src, out, 1 << 20)
+    exe = os.path.join(dest_dir, "AutoTest.exe")
+    if not os.path.isfile(exe) or open(exe, "rb").read(2) != b"MZ":
+        raise ValueError("解压后没找到可用的 AutoTest.exe")
+    return exe
 
 
 #: 传给替换脚本的「目标程序名」标记文件(见 write_target_marker / generate_update_bat)
 TARGET_MARKER = "_update_target.txt"
-#: 传给替换脚本的「本进程一次性解压目录」标记(见 write_tempdir_marker)
-TEMPDIR_MARKER = "_update_tempdir.txt"
+#: 传给替换脚本的「目标程序名」标记文件(见 write_target_marker / generate_update_bat)
+TARGET_MARKER = "_update_target.txt"
 #: 目标名里**绝不能有**的字符: 这个名字会被 cmd 再解析一次(% 会二次展开, 引号/
-#: 重定向/管道符能改变命令结构) —— 遇到这类名字就不写标记文件, 让 bat 走"唯一候选"
-#: 兜底(并因此拒绝在有多候选时动手), 绝不冒险把名字拼进命令行。
+#: 重定向/管道符能改变命令结构) —— 遇到这类名字就不写标记文件, 让 bat 走默认名兜底,
+#: 绝不冒险把名字拼进命令行。
 _MARKER_BAD_CHARS = set('%"&|<>^!\r\n\t')
 
 
@@ -476,8 +565,7 @@ def write_target_marker(app_dir, exe_name):
       更新循环, 重则把用户另一个程序覆盖掉。
     ★ 编码 UTF-8 + bat 在 `chcp 65001` **之后**读: 实测(2026-10-09, Win10 19045)
       `set /p` 读文件是**字节透明**的, 而 cmd 在 65001 下能把 UTF-8 字节的变量正确
-      转成文件名; ANSI 字节同样可行, 但非中文系统的 ANSI 代码页根本编不出中文名 ——
-      所以选覆盖面最大的 UTF-8。bat 那边另有 `if not exist` 校验兜底。
+      转成文件名; bat 那边另有 `if not exist` 校验兜底。
     """
     name = os.path.basename(str(exe_name or "").strip())
     if not name or set(name) & _MARKER_BAD_CHARS:
@@ -487,98 +575,51 @@ def write_target_marker(app_dir, exe_name):
         with open(path, "w", encoding="utf-8", newline="\r\n") as f:
             f.write(name)
     except OSError as e:
-        log.warning(f"[更新] 写目标程序名标记失败(将退回候选匹配): {e}")
+        log.warning(f"[更新] 写目标程序名标记失败(将按默认名兜底): {e}")
         return ""
     return path
 
 
-def write_tempdir_marker(app_dir, temp_dir):
-    """把**本进程的一次性解压目录**(onefile 的 sys._MEIPASS)写给替换脚本; 写不了返回 ""。
+def generate_update_bat(app_dir, pid, exe_name=None, probe_seconds=8):
+    """生成**目录替换**版自更新脚本, 返回 bat 路径(写在 app_dir 下)。
 
-    ★ 为什么需要它: onefile 每次启动都把约 400MB 载荷解压到 `%TEMP%\\_MEIxxxx`, 正常
-      退出时 bootloader 会清掉 —— 而**自动更新走的正是 `os._exit(0)`**, 跳过清理,
-      于是每更新一次就漏 400MB(实测: 两天攒到 2.36GB)。
-    ★ 只写"名字确实像 _MEI* 的目录": 脚本那边还会再校验一次, 双保险 —— 这个文件的内容
-      会被脚本拿去 `rd /s /q`, 绝不允许多删别的东西。
-    """
-    d = str(temp_dir or "").strip()
-    if not d or not os.path.isdir(d):
-        return ""
-    if not os.path.basename(os.path.normpath(d)).startswith("_MEI"):
-        return ""
-    if set(d) & _MARKER_BAD_CHARS:
-        return ""
-    path = os.path.join(os.path.abspath(app_dir), TEMPDIR_MARKER)
-    try:
-        with open(path, "w", encoding="utf-8", newline="\r\n") as f:
-            f.write(d)
-    except OSError as e:
-        log.warning(f"[更新] 写解压目录标记失败(将留下临时目录): {e}")
-        return ""
-    return path
+    目录模式(onedir)的更新: 程序文件是 `AutoTest.exe` + `_internal\\`, 用户数据
+    (config/ Test_cases/ ...)在同一层但**不在** `_internal\\` 里, 所以替换程序文件天然
+    不碰用户数据。
 
+    流程: 等 PID 退出 -> 旧 `_internal\\` 改名 `_internal_old` -> 新载荷 move 到位 ->
+          exe 备份成 `.bak` 并复制新的 -> 启动 -> **确认新进程活着**(没起来就整体回滚)
+          -> 清理 -> 自删。
 
-def generate_update_bat(app_dir, pid, exe_name=None, probe_seconds=8,
-                        temp_dir=None):
-    """生成单文件版自替换 bat, 返回 bat 路径(写在 app_dir 下)。
+    ★ 为什么用 move 而不是复制: 同盘 move 是**瞬时改名**, 不搬一个字节。参考的
+      TB_Import_tool 是 `rename 旧 _internal` + `robocopy 新 _internal`(400MB、几千个
+      文件), 中途被打断就是半截程序; 我们这边两次改名, 窗口只有毫秒级。
+    ★ 解压**不在这里做**: 由程序自己(还活着的时候)解压 + 校验(见 extract_update),
+      失败就什么都没动; bat 只做"改名 + 复制一个小 exe"。
+    ★ 启动后必须确认新进程活着(两道判据), 失败则把 `_internal_old` 与 `.bak` 都换回来。
+    ★ `.bak` 与 `_internal_old` 成功后**不删**: 新版本可能几十秒后才崩, 那时它们是唯一
+      的退路; 由新版本自己跑稳之后删(core.bootstrap.cleanup_old_backup)。
 
-    流程: 等 PID 退出 -> 旧 exe 改名 .bak(原子, 被锁也能成功) -> 复制新 exe ->
-          启动新版本 -> **确认新进程活着**(没起来就回滚) -> 清理 -> 自删。
-    新 exe 固定名 `_update_download.exe`(下载线程落盘时命名), 与 bat 同目录;
-    只碰 exe 本身, 用户数据(config/ Test_cases/ 等)天然不碰。
-
-    ★ 目标程序名(F3): 优先用 exe_name(默认取 sys.executable, 即**本进程自己**)
-      写下的标记文件; 读不到才退回"目录里唯一的 .exe", 多个候选直接停手报错 ——
-      绝不靠字母序猜。
-    ★ 启动确认与回滚(F2): `start` 之后固定 3 秒就无条件删 .bak 是**没有退路**的
-      写法 —— 新版本因缺 DLL/被杀软隔离/包损坏而起不来时, 用户手里只剩一个坏程序。
-      现在必须**两道判据都指向"没起来"**才回滚:
-        ① 进程列表里查不到它  ② 它的文件删得掉(= 没被占用 = 确实没在跑)。
-      判据②既是补充也是保险: 万一 tasklist 判断失误, 删得掉才敢回滚。
-    ★ 等待用 ping 不用 timeout: timeout 在 stdin 被重定向时会立刻报错退出, 观察窗口
-      会缩成 0 秒 —— 判据①就变成"start 后立刻查一次"的竞态(2026-10-09 实测: 测试里
-      根本没等到 probe_seconds, 全靠替身进程死得快才侥幸通过)。
-    ★ .bak 在成功后**不由 bat 删**: 新版本可能几十秒后才崩, 那时 .bak 是唯一退路。
-      改由新版本自己跑稳之后删(core.bootstrap.cleanup_old_backup)。同理,
-      core.bootstrap 的启动清理也**不再碰** .bak —— 启动(约 1 秒)就删等于把退路拆了。
-
-    ★ bat 里绝不嵌入绝对/中文路径 —— UTF-8 写入的 bat 在 GBK 代码页系统会被 cmd
-      读乱码, rename/copy 的路径就失效了(参考项目实战踩过)。全部用 %~dp0。
-
-    ★★ echo 文本里**绝不能出现**半角圆括号/&/|/</>/^ (2026-10-09 实证, 血的教训)
-      这些字符在 `if (...)` 块里会被 cmd **当成命令结构**: 一个半角 `)` 就把块提前
-      闭合, cmd 随即报 "xxx was unexpected at this time" 并**整个批处理中止**(rc=255,
-      与代码页无关, 已用最小样例逐条验证)。
-      曾经的 "无法重命名当前程序(权限不足/杀毒锁定?)" 就踩了这个坑 —— 而它偏偏在
-      `ren` **之后**, 于是每次更新都是: 旧 exe 已被改名成 .bak -> bat 静默死掉 ->
-      新版本没复制、没启动、没回滚, 用户手里一个 exe 都不剩。这行字从 v1.0 起就在,
-      直到 2026-10-09 真跑一遍 cmd 才暴露(纯文本断言**证明不了** bat 能跑完)。
-      规矩: 要写括号就用全角（）, 或改成破折号; test_updater 里有一条扫描守护。
+    ★ 见 _BAT_RULES: echo 文本禁半角括号/外部命令走绝对路径/等待用 ping/CRLF 等。
     """
     if exe_name is None and getattr(sys, "frozen", False):
         exe_name = os.path.basename(sys.executable)
-    marker = write_target_marker(app_dir, exe_name) if exe_name else ""
+    name = os.path.basename(str(exe_name or "").strip())
+    marker = write_target_marker(app_dir, name) if name else ""
     if not marker:
-        log.warning("[更新] 未能写下目标程序名, 替换脚本将按「目录里唯一的 .exe」匹配")
-    if temp_dir is None:
-        temp_dir = getattr(sys, "_MEIPASS", "")     # onefile 的一次性解压目录
-    write_tempdir_marker(app_dir, temp_dir)
-    # ping -n N 用时约 N-1 秒(第一次立刻发包), 所以想等 N 秒要给 N+1
+        log.warning("[更新] 未能写下目标程序名, 替换脚本将按 AutoTest.exe 兜底")
     probe_pings = max(2, int(probe_seconds) + 1)
     bat = f"""@echo off
 chcp 65001 >nul 2>&1
 title 正在更新 APP 自动化测试平台
 cd /d "%~dp0"
 
-REM ★ chcp 必须紧跟在 @echo off 之后: 本文件是 UTF-8, 而 cmd 是按**当前代码页**
-REM   边读边解析的 —— 切换代码页之前出现中文, 就会被按旧代码页读成乱码。切换之后
-REM   %~dp0 的展开也才与文件的 UTF-8 一致(中文安装路径靠这一点)。
-REM ★ 外部命令一律走系统绝对路径: 开发机若把 Git/MSYS 放在 PATH 前面, 裸写
-REM   find/ping 会命中 coreutils, 于是"等待"变成立即返回、判断全部失真 —— 而这个
-REM   脚本正握着用户的程序文件。
-REM ★ 等待用 ping 而不是 timeout: timeout 在 stdin 被重定向时(服务/脚本/测试里
-REM   拉起)会立刻打印 "Input redirection is not supported" 并退出 —— 等待等于没有,
-REM   "等够时间再看新版本活没活"的判断会变成一场竞态。ping 不受重定向影响。
+REM ★ chcp 必须紧跟 @echo off: 本文件是 UTF-8, 而 cmd 是按**当前代码页**边读边解析的 ——
+REM   切换代码页之前出现中文, 就会被按旧代码页读成乱码。切换之后 %~dp0 的展开也才与
+REM   文件的 UTF-8 一致(中文安装路径靠这一点)。
+REM ★ 外部命令一律走系统绝对路径: 开发机若把 Git/MSYS 放在 PATH 前面, 裸写 find/ping
+REM   会命中 coreutils, "等待"变成立即返回、判断全部失真。
+REM ★ 等待用 ping 不用 timeout: timeout 在 stdin 被重定向时会立刻报错退出。
 if not defined SystemRoot set "SystemRoot=C:\\Windows"
 set "SYS=%SystemRoot%\\System32"
 
@@ -602,82 +643,65 @@ if %errorlevel% equ 0 (
 )
 echo [OK] 原进程已退出
 "%SYS%\\ping.exe" -n 3 127.0.0.1 >nul 2>&1
-
-REM ★ 原进程已退出 -> 它的一次性解压目录(onefile 约 400MB)随之作废, 顺手收掉。
-REM   旧版本走的是 os._exit(0)(为了立刻释放 DLL 句柄), 这会跳过 bootloader 自己的
-REM   清理, 不收就每更新一次漏 400MB(实测两天攒到 2.36GB)。
-REM   两道保险: 标记文件只由本程序写, 且这里再验一次"名字里必须带 _MEI"。
-REM ★ 逐行 goto 而不是把三个条件串成一行: 条件链会**整行解析**, 而空变量展开出的
-REM   "%OLDTMP%\" 会被 cmd 当成被转义的引号 -> "The syntax of the command is
-REM   incorrect."(实测 rc=255, 整个更新中止)。逐行时每行只在执行到才展开, 安全的
-REM   前提是前面已经确认它非空。if exist 对目录同样成立, 不需要尾随反斜杠。
-set "OLDTMP="
-if exist "_update_tempdir.txt" set /p OLDTMP=<"_update_tempdir.txt"
-if not defined OLDTMP goto :skip_tmpclean
-if "%OLDTMP%"=="%OLDTMP:_MEI=%" goto :skip_tmpclean
-if not exist "%OLDTMP%" goto :skip_tmpclean
-rd /s /q "%OLDTMP%"
-:skip_tmpclean
 echo.
 
-if not exist "_update_download.exe" (
-    echo [ERROR] 未找到新版本程序文件, 更新取消
-    pause
-    goto :cleanup
-)
-
-REM 目标程序名 = Python 写下的标记文件(就是当时正在运行的那个 exe)。
-REM 读不到就退回"目录里唯一的 .exe"; 有多个候选直接停手 —— 宁可不更新, 也不换错文件。
+REM 目标程序名由程序写下(用户可能把 exe 改过名); 读不到就按默认名兜底
 set "EXE_NAME="
-if exist "{TARGET_MARKER}" set /p EXE_NAME=<"{TARGET_MARKER}"
-if defined EXE_NAME if /i "%EXE_NAME%"=="_update_download.exe" set "EXE_NAME="
-if defined EXE_NAME if not exist "%EXE_NAME%" set "EXE_NAME="
-
-set "CAND2="
-if not defined EXE_NAME (
-    for %%f in ("%~dp0*.exe") do (
-        if /i not "%%~nxf"=="_update_download.exe" (
-            if not defined EXE_NAME (
-                set "EXE_NAME=%%~nxf"
-            ) else (
-                set "CAND2=%%~nxf"
-            )
-        )
-    )
-)
+if exist "_update_target.txt" set /p EXE_NAME=<"_update_target.txt"
+if not defined EXE_NAME if exist "AutoTest.exe" set "EXE_NAME=AutoTest.exe"
 if not defined EXE_NAME (
     echo [ERROR] 未找到当前程序文件, 更新取消
     pause
     goto :cleanup
 )
-if defined CAND2 (
-    echo [ERROR] 目录里有多个程序文件, 无法确认该替换哪一个:
-    echo         %EXE_NAME%
-    echo         %CAND2%
-    echo   这次没有改动任何文件。请只保留要更新的那个 exe 后再试。
+
+REM 新版本要已经解压好(程序自己解压并校验过)
+if not exist "_update_extracted\\_internal" (
+    echo [ERROR] 没找到已解压的新版本, 请重新检查更新
+    pause
+    goto :cleanup
+)
+if not exist "_update_extracted\\%EXE_NAME%" (
+    echo [ERROR] 新版本里没有 %EXE_NAME%, 更新取消
     pause
     goto :cleanup
 )
 
-REM rename 是原子操作, 即使文件被杀软等锁住也能成功
-echo 正在替换程序文件...
+REM 上次留下的旧载荷先清掉(只清我们自己写的这个名字)
+if exist "_internal_old" rmdir /s /q "_internal_old" 2>nul
+
+echo 正在切换程序文件...
+if exist "_internal" (
+    ren "_internal" "_internal_old"
+    if %errorlevel% neq 0 (
+        echo [ERROR] 无法重命名 _internal 目录 -- 权限不足或被杀毒锁定? 更新取消
+        pause
+        goto :cleanup
+    )
+)
+move "_update_extracted\\_internal" "_internal" >nul
+if %errorlevel% neq 0 (
+    echo [ERROR] 新载荷就位失败, 正在回滚...
+    if exist "_internal_old" ren "_internal_old" "_internal"
+    pause
+    goto :cleanup
+)
+
 if exist "%EXE_NAME%.bak" del /f /q "%EXE_NAME%.bak" 2>nul
 ren "%EXE_NAME%" "%EXE_NAME%.bak"
 if %errorlevel% neq 0 (
-    echo [ERROR] 无法重命名当前程序 -- 权限不足或被杀毒锁定? 更新取消
+    echo [ERROR] 无法备份当前程序 -- 权限不足或被杀毒锁定? 正在回滚...
+    if exist "_internal" rmdir /s /q "_internal" 2>nul
+    if exist "_internal_old" ren "_internal_old" "_internal"
     pause
     goto :cleanup
 )
-if not exist "%EXE_NAME%.bak" (
-    echo [ERROR] 备份当前程序失败, 更新取消, 未改动任何文件
-    pause
-    goto :cleanup
-)
-
-copy /y "_update_download.exe" "%EXE_NAME%" >nul
+copy /y "_update_extracted\\%EXE_NAME%" "%EXE_NAME%" >nul
 if %errorlevel% neq 0 (
     echo [ERROR] 新程序复制失败, 正在回滚...
     ren "%EXE_NAME%.bak" "%EXE_NAME%"
+    if exist "_internal" rmdir /s /q "_internal" 2>nul
+    if exist "_internal_old" ren "_internal_old" "_internal"
     pause
     goto :cleanup
 )
@@ -687,7 +711,6 @@ echo 正在启动新版本...
 start "" "%EXE_NAME%"
 
 REM ★ 启动后必须确认新进程活着才敢收工
-echo 正在确认新版本是否正常启动, 约 {probe_seconds} 秒...
 "%SYS%\\ping.exe" -n {probe_pings} 127.0.0.1 >nul 2>&1
 "%SYS%\\tasklist.exe" /FI "IMAGENAME eq %EXE_NAME%" /FO CSV /NH 2>nul | "%SYS%\\find.exe" /i "%EXE_NAME%" >nul
 if not errorlevel 1 goto :started
@@ -700,9 +723,12 @@ if not exist "%EXE_NAME%.bak" (
     goto :cleanup
 )
 echo [ERROR] 新版本没有正常启动, 正在回滚到更新前的版本...
+if exist "_internal" rmdir /s /q "_internal" 2>nul
+if exist "_internal_old" ren "_internal_old" "_internal"
 ren "%EXE_NAME%.bak" "%EXE_NAME%"
 if not exist "%EXE_NAME%" (
     echo [ERROR] 回滚失败! 请手工把 "%EXE_NAME%.bak" 改名为 "%EXE_NAME%"
+    echo       并把 _internal_old 改名为 _internal
     pause
     goto :cleanup
 )
@@ -713,13 +739,13 @@ goto :cleanup
 
 :started
 echo [OK] 新版本已启动
-REM .bak 这里**不删**: 新版本若在后面几十秒里崩了, 它是唯一的退路。
-REM 删它由新版本自己跑稳之后做(core.bootstrap.cleanup_old_backup)
+REM _internal_old 与 %EXE_NAME%.bak 这里**不删**: 新版本若在后面几十秒里崩了, 它们是
+REM 唯一的退路。删它们由新版本自己跑稳之后做(core.bootstrap.cleanup_old_backup)
 
 :cleanup
-if exist "_update_download.exe" del /f /q "_update_download.exe"
-if exist "{TARGET_MARKER}" del /f /q "{TARGET_MARKER}"
-if exist "{TEMPDIR_MARKER}" del /f /q "{TEMPDIR_MARKER}"
+if exist "_update_extracted" rmdir /s /q "_update_extracted"
+if exist "_update_download.zip" del /f /q "_update_download.zip"
+if exist "_update_target.txt" del /f /q "_update_target.txt"
 (goto) 2>nul & del /f /q "%~f0"
 """
     bat_path = os.path.join(os.path.abspath(app_dir), "_update.bat")

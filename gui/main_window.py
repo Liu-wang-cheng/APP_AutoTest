@@ -980,25 +980,28 @@ class UpdateDownloadThread(QThread):
             if not url:
                 self.done.emit("", "版本清单里没有 download_url")
                 return
-            # onefile: 安装包就是 exe 本体, 直接下成固定名, 替换脚本按它工作
-            new_exe = os.path.join(DATA_DIR, "_update_download.exe")
-            updater.download(url, new_exe,
+            # 目录模式: 下载的是分发包 zip(内含 AutoTest.exe + _internal\)
+            pkg = os.path.join(DATA_DIR, "_update_download.zip")
+            updater.download(url, pkg,
                              progress_cb=lambda d, t, s: self.progress.emit(d, t, s))
-            if not updater.verify_sha256(new_exe, self._info.sha256):
+            if not updater.verify_sha256(pkg, self._info.sha256):
                 try:
-                    os.remove(new_exe)
+                    os.remove(pkg)
                 except OSError:
                     pass
                 self.done.emit("", "下载包校验失败(sha256 不符), 已删除")
                 return
-            updater.validate_new_exe(new_exe)
-            # ★ 把**正在运行的 exe 名**交给替换脚本(F3): 不然它只能靠"目录里字母序
-            #   第一个 .exe"猜, 目录里多一个 exe 就会换错文件
-            # ★ 顺带把本进程的一次性解压目录交出去(onefile 的 sys._MEIPASS): 我们马上
-            #   要 os._exit(0), 跳过 bootloader 的清理, 不交就每更新一次漏 400MB
+            # ★ 校验 + 解压都在**程序还活着**的时候做: 失败就报错收场, 一个文件都没动;
+            #   等 bat 那边只剩两次瞬时改名, 被中途打断的窗口最小
+            updater.validate_update_zip(pkg, self._info.version)
+            self.progress.emit(0, 0, "正在解压更新包…")
+            extracted = os.path.join(DATA_DIR, "_update_extracted")
+            updater.extract_update(pkg, extracted)
+            log.info(f"[更新] 更新包已解压并校验: v{self._info.version}")
+            # ★ 把**正在运行的 exe 名**交给替换脚本(F3): 用户可能把 exe 改过名,
+            #   bat 不该靠"目录里字母序第一个 .exe"猜
             bat = updater.generate_update_bat(
-                DATA_DIR, os.getpid(), os.path.basename(sys.executable),
-                temp_dir=getattr(sys, "_MEIPASS", ""))
+                DATA_DIR, os.getpid(), os.path.basename(sys.executable))
             self.done.emit(bat, "")
         except Exception as e:
             self.done.emit("", f"下载/准备更新失败: {e}")

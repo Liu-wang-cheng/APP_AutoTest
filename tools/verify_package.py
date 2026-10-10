@@ -28,25 +28,45 @@ sys.path.insert(0, ROOT)
 from core.console import force_utf8_stdout          # noqa: E402
 force_utf8_stdout()
 
-#: onefile 产物体积的合理下限(MB)。Qt 精简后约 250MB; 掉到几十 MB 说明
-#: 依赖没打全(比如某个 hook 失效把大头丢了), 启动也大概率缺 DLL
-_MIN_SIZE_MB = 100
-#: 启动稳定判定窗口(秒)。onefile 每次启动要先解压载荷, 给足余量
+#: 目录模式(onedir)下**载荷**(_internal\)的合理下限(MB)。Qt 精简+模型后约 400MB;
+#: 掉到几十 MB 说明依赖没打全(某个 hook 失效把大头丢了), 启动也大概率缺 DLL
+_MIN_PAYLOAD_MB = 150
+#: 启动稳定判定窗口(秒)。目录模式启动很快, 给 40 秒是为了容忍机械盘/杀软扫描
 _LAUNCH_WAIT = 40
 
 
+def _dir_size(path):
+    t = 0
+    for base, _dirs, files in os.walk(path):
+        for f in files:
+            try:
+                t += os.path.getsize(os.path.join(base, f))
+            except OSError:
+                pass
+    return t
+
+
 def _static_checks(exe):
+    """① 静态: exe 是 Windows 程序 + `_internal\\` 载荷看起来是完整的。
+
+    ★ 目录模式(onedir)下"产物"是 exe + `_internal\\`, 只量 exe 没意义(exe 只有一两 MB)。
+    """
     bad = []
     if not os.path.isfile(exe):
         return [f"产物不存在: {exe}"]
-    size_mb = os.path.getsize(exe) / 1048576
-    if size_mb < _MIN_SIZE_MB:
-        bad.append(f"exe 只有 {size_mb:.0f}MB(低于合理下限 {_MIN_SIZE_MB}MB) —— "
-                   f"依赖可能没打全")
     with open(exe, "rb") as f:
         if f.read(2) != b"MZ":
             bad.append("不是 Windows 可执行文件(缺少 MZ 头)")
-    print(f"① 静态: {size_mb:.0f}MB "
+    payload = os.path.join(os.path.dirname(exe), "_internal")
+    if not os.path.isdir(payload):
+        bad.append(f"缺少载荷目录 _internal\\ —— 目录模式打包没生效? ({payload})")
+        size_mb = 0
+    else:
+        size_mb = _dir_size(payload) / 1048576
+        if size_mb < _MIN_PAYLOAD_MB:
+            bad.append(f"_internal\\ 只有 {size_mb:.0f}MB(低于下限 {_MIN_PAYLOAD_MB}MB)"
+                       f" —— 依赖可能没打全")
+    print(f"① 静态: exe {os.path.getsize(exe)/1048576:.1f}MB + _internal\\ {size_mb:.0f}MB "
           + ("OK" if not bad else "有问题"))
     for b in bad:
         print(f"   [FAIL] {b}")
@@ -76,19 +96,20 @@ _REQUIRED_RESOURCES = (
 
 
 def _resource_checks(exe):
-    """清点运行期资源是否都在包里(PyInstaller 只做静态分析, 数据文件得靠收集规则)。"""
-    try:
-        from PyInstaller.archive.readers import CArchiveReader
-    except Exception as e:                       # 没装 PyInstaller 时别把验证搞崩
-        print(f"② 资源完整性: 跳过(读不了归档: {e})")
-        return []
-    names = [str(n).replace("\\", "/") for n in CArchiveReader(exe).toc]
+    """清点运行期资源是否都在**载荷目录**(`_internal\\`)里。
+
+    ★ 目录模式下资源是磁盘上的真文件, 直接核对文件系统 —— 比读归档更直接。
+    ★ 为什么非查不可: PyInstaller 只做静态分析, 数据文件靠收集规则; 漏了的话**能启动、
+      能开界面**, 直到真机执行/OCR 才炸(实测: v1.3~v1.5 都漏了 uiautomator2 的 u2.jar)。
+    """
+    root = os.path.join(os.path.dirname(os.path.abspath(exe)), "_internal")
     bad = []
     for rel, why in _REQUIRED_RESOURCES:
-        if not any(n == rel or n.startswith(rel + "/") for n in names):
-            bad.append(f"缺资源 {rel}({why}) —— 打包收集规则漏了它")
+        p = os.path.join(root, rel.replace("/", os.sep))
+        if not os.path.exists(p):
+            bad.append(f"缺资源 {rel}({why}) —— 打包收集规则漏了它(在 {root} 下没找到)")
     print(f"② 资源完整性: {len(_REQUIRED_RESOURCES) - len(bad)}/"
-          f"{len(_REQUIRED_RESOURCES)} 项在包里" + ("" if not bad else " ← 有问题"))
+          f"{len(_REQUIRED_RESOURCES)} 项在载荷里" + ("" if not bad else " ← 有问题"))
     for b in bad:
         print(f"   [FAIL] {b}")
     return bad
@@ -141,7 +162,7 @@ def _launch_check(exe, app_dir, wait=_LAUNCH_WAIT):
 
     同时确认"首次铺资源"生效: 启动后 exe 旁应有 config/(缺才补的默认文件)。
     """
-    print(f"③ 启动验证(offscreen, 最多等 {wait}s, onefile 首次解压会慢)...")
+    print(f"③ 启动验证(offscreen, 最多等 {wait}s)...")
     env = dict(os.environ)
     env["QT_QPA_PLATFORM"] = "offscreen"
     mei_before = _mei_dirs()          # 收尾时要认准"本次新增"的解压目录
@@ -199,8 +220,8 @@ def main(argv=None):
     ap = argparse.ArgumentParser(
         description="验证打包产物: 静态检查(大小/MZ 头) + offscreen 真启动一次")
     ap.add_argument("exe", nargs="?",
-                    default=os.path.join(ROOT, "dist", "AutoTest.exe"),
-                    help="产物路径(默认 dist/AutoTest.exe)")
+                    default=os.path.join(ROOT, "dist", "AutoTest", "AutoTest.exe"),
+                    help=r"产物路径(默认 dist\AutoTest\AutoTest.exe, 目录模式)")
     args = ap.parse_args(argv)
     exe = os.path.abspath(args.exe)
     app_dir = os.path.dirname(exe)

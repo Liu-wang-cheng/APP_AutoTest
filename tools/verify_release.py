@@ -8,7 +8,7 @@
   ① 直连 raw.githubusercontent.com 取 version.json(OTA 取清单就走这条, 带 ?t= 破 CDN 缓存)
   ② version == 期望版本; sha256 == 本地产物(否则用户下到的包与清单对不上, 更新白装)
   ③ download_url HEAD 得 200, 且 content-length 与本地产物一致
-  ④ 真拉前 1KB, 确认是 `MZ` 开头的可执行文件(不是镜像报错页/错误页)
+  ④ 真拉前 1KB, 确认是 `PK` 开头的 zip(分发包; 不是镜像报错页/错误页)
 
 只读, 不改任何东西。返回码非 0 = 有项不通过。
 """
@@ -66,16 +66,16 @@ def main(argv=None):
     ap.add_argument("--version", required=True, help="期望的版本号, 如 1.4")
     ap.add_argument("--repo", default="", help="owner/repo(默认从 git remote 解析)")
     ap.add_argument("--branch", default="master", help="version.json 所在分支")
-    ap.add_argument("--exe", default="", help="本地产物(默认 dist/AutoTest.exe)")
+    ap.add_argument("--pkg", default="", help=r"本地产物(默认 dist\AutoTest_v{版本}.zip)")
     args = ap.parse_args(argv)
 
     repo = args.repo or repo_from_git_remote()
     if not repo:
         print("[ERROR] 解析不出 owner/repo(--repo 或 git remote origin)")
         return 1
-    exe = args.exe or os.path.join(ROOT, "dist", "AutoTest.exe")
+    exe = args.pkg or os.path.join(ROOT, "dist", f"AutoTest_v{args.version}.zip")
     if not os.path.isfile(exe):
-        print(f"[ERROR] 找不到本地产物 {exe}(先构建)")
+        print(f"[ERROR] 找不到本地产物 {exe}(先构建: build.bat)")
         return 1
     want_sha, want_size = local_sha256(exe)
     print(f"本地产物: {want_size} 字节, sha256 {want_sha[:16]}…")
@@ -126,11 +126,11 @@ def main(argv=None):
     # ④ 真读一小段, 确认不是错误页
     try:
         _r, head = _get(dl, extra={"Range": "bytes=0-1023"}, limit=1024)
-        if head[:2] != b"MZ":
-            print(f"[FAIL] 前两字节是 {head[:2]!r}, 不是 Windows 可执行文件")
+        if head[:2] != b"PK":
+            print(f"[FAIL] 前两字节是 {head[:2]!r}, 不是 zip 分发包")
             ok = False
         else:
-            print("④ 前 1024 字节是 MZ 可执行文件")
+            print("④ 前 1024 字节是 zip 分发包")
     except Exception as e:
         print(f"[FAIL] 试读失败: {type(e).__name__}: {e}")
         ok = False

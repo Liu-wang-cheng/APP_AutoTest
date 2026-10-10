@@ -28,6 +28,7 @@ import tempfile
 import time
 import urllib.error
 import urllib.request
+import zipfile
 from urllib.parse import quote
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -93,20 +94,64 @@ def check_version_consistency(root, version):
 
 
 def find_dist_exe(dist_dir):
-    """定位并校验打包产物(onefile: 就是一个 exe); 返回其路径。
+    """定位并校验打包产物(目录模式: dist/AutoTest/AutoTest.exe + _internal\\)。
 
-    校验 MZ 头与基本大小 —— 打包失败/产物不完整必须在这里拦下, 而不是发个坏包。
+    校验 exe 的 MZ 头与载荷目录是否在 —— 打包失败/产物不完整必须在这里拦下,
+    而不是发个坏包。
     """
-    exe = os.path.join(dist_dir, "AutoTest.exe")
+    exe = os.path.join(dist_dir, "AutoTest", "AutoTest.exe")
     if not os.path.isfile(exe):
         raise FileNotFoundError(
-            f"{exe} 不存在(先跑构建: pytest 后 pyinstaller AutoTest.spec)")
-    if os.path.getsize(exe) < 1 << 20:
-        raise ValueError(f"{exe} 只有 {os.path.getsize(exe)} 字节, 不像完整产物")
+            f"{exe} 不存在(先跑构建: build.bat 或 pyinstaller AutoTest.spec)")
     with open(exe, "rb") as f:
         if f.read(2) != b"MZ":
             raise ValueError(f"{exe} 不是 Windows 可执行文件")
+    if not os.path.isdir(os.path.join(os.path.dirname(exe), "_internal")):
+        raise ValueError(f"{os.path.dirname(exe)} 下没有 _internal\\ —— 目录模式打包没生效")
     return exe
+
+
+#: 打进 zip 的**程序文件**: exe + _internal\(其余是用户数据, 绝不进包)
+_PACKAGE_ITEMS = ("AutoTest.exe", "_internal")
+
+#: 载荷(_internal)的合理下限, 防止把半截产物发出去(与 verify_package 一致)
+_MIN_PAYLOAD_MB = 150
+
+
+def make_package_zip(version, dist_dir, out_dir=None):
+    """把目录模式产物打成分发包 `AutoTest_v{ver}.zip`; 返回 zip 路径。
+
+    ★ 只装 `AutoTest.exe` + `_internal\\` —— 用户数据(config/ Test_cases/ Test_img/
+      backups/ reports/)与它们在同一个目录里, 一旦整目录打包就会把**使用者的数据**
+      发出去, 也会在更新时覆盖掉别人的数据。
+    ★ zip 内的布局 = 解压后直接可运行(exe 与 _internal 在根), 更新脚本据此做目录切换。
+    """
+    exe = find_dist_exe(dist_dir)
+    app_dir = os.path.dirname(exe)
+    payload = os.path.join(app_dir, "_internal")
+    mb = sum(os.path.getsize(os.path.join(b, f))
+             for b, _d, fs in os.walk(payload) for f in fs) / 1048576
+    if mb < _MIN_PAYLOAD_MB:
+        raise ValueError(f"_internal\\ 只有 {mb:.0f}MB(低于 {_MIN_PAYLOAD_MB}MB), "
+                         f"像是没打全, 拒绝打包")
+    out_dir = out_dir or dist_dir
+    os.makedirs(out_dir, exist_ok=True)
+    zip_path = os.path.join(out_dir, f"AutoTest_v{version}.zip")
+    n = 0
+    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as z:
+        for item in _PACKAGE_ITEMS:
+            src = os.path.join(app_dir, item)
+            if os.path.isfile(src):
+                z.write(src, item)
+                n += 1
+            else:
+                for base, _dirs, files in os.walk(src):
+                    for fn in files:
+                        full = os.path.join(base, fn)
+                        rel = os.path.relpath(full, app_dir).replace(os.sep, "/")
+                        z.write(full, rel)
+                        n += 1
+    return zip_path
 
 
 def release_download_url(repo, version, asset):
@@ -425,7 +470,7 @@ def main(argv=None):
         sys.stdout.reconfigure(line_buffering=True)
     except Exception:
         pass
-    ap = argparse.ArgumentParser(description="打包并发布一个版本")
+    ap = argparse.ArgumentParser(description="校验产物、打分发 zip 并发布一个版本")
     ap.add_argument("--version", required=True, help="要发布的版本号, 如 1.1")
     ap.add_argument("--dist", default=os.path.join(ROOT, "dist"),
                     help="产物目录(内含 AutoTest.exe, 默认 dist/)")
@@ -442,6 +487,8 @@ def main(argv=None):
     ap.add_argument("--deep", action="store_true",
                     help="连「整包真下一遍」也校验(几分钟, 需网络)")
     ap.add_argument("--repo", default="", help="owner/repo(默认从 git remote 解析)")
+    ap.add_argument("--pack-only", action="store_true",
+                    help="只校验产物并打成分发 zip(不联网、不改 git; build.bat 用)")
     ap.add_argument("--dry-run", action="store_true", help="只打印将做什么")
     args = ap.parse_args(argv)
 
@@ -452,16 +499,21 @@ def main(argv=None):
             print(f"[ERROR] {e}")
         return 1
 
-    # ② 产物校验(onefile: 发布物就是一个 exe)
-    asset = args.asset or f"AutoTest_v{args.version}.exe"
-    print(f"[1/4] 校验产物 {args.dist}")
+    # ② 产物校验 + 打分发包(目录模式: exe + _internal\ -> zip)
+    asset = args.asset or f"AutoTest_v{args.version}.zip"
+    print(f"[1/4] 校验产物并打包: {args.dist}")
     if args.dry_run:
         if not os.path.isdir(args.dist):
             print(f"  [dry-run] {args.dist} 不存在, 实际运行会在这里失败")
-        exe_path = os.path.join(args.dist, "AutoTest.exe")
+        exe_path = os.path.join(args.dist, asset)
     else:
-        exe_path = find_dist_exe(args.dist)
-        print(f"  {os.path.getsize(exe_path) / 1048576:.0f} MB")
+        find_dist_exe(args.dist)                  # 产物不完整 -> 直接抛, 不发坏包
+        exe_path = make_package_zip(args.version, args.dist)
+        print(f"  发布包 {os.path.getsize(exe_path) / 1048576:.0f} MB"
+              f" ({os.path.basename(exe_path)})")
+    if args.pack_only:
+        print(f"完成(只打包, 不联网不发版): {exe_path}")
+        return 0
 
     # ③ 更新说明: 默认取 CHANGELOG 对应节
     date, notes = load_changelog_section(os.path.join(ROOT, "CHANGELOG.md"),

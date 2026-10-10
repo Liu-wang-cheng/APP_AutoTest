@@ -45,17 +45,21 @@ _CONFIG_TARGET = "config/config.yaml"
 #:   ② `_update.bat` —— **它此刻正在运行**(就是它把本进程拉起来的)。删一个正在执行
 #:      的 bat 会让 cmd 后续读不到下一行, 更新流程可能断在半路。它自己会自删,
 #:      真残留了也由 cleanup_old_backup() 收尾。
-#:   ③ 目录里的其它文件一律不碰。
-_UPDATE_LEFTOVERS = ("_update_download.exe",        # 下好的新版本(已复制或已作废)
-                     "_update_download.exe.part",   # 下载中断留下的半截(200MB)
-                     "_update_target.txt",          # 目标程序名标记
-                     "_update_tempdir.txt")         # 本进程一次性解压目录的标记
-#: 旧程序备份(onefile 更新把当前 exe 改名成 <名>.exe.bak); 名字不固定(用户可能
-#: 重命名过 exe), 用 glob 找。只在 cleanup_old_backup() 里用。
+#:   ③ `_internal_old` —— 与 .bak 同理, 是目录模式下"新版本起不来就换回来"的退路。
+#:   ④ `_update_extracted` —— 更新脚本刚用它把新载荷 move 到位; 虽然它只做 rmdir,
+#:      但没必要跟正在跑的脚本抢。
+#:   ⑤ 目录里的其它文件一律不碰。
+_UPDATE_LEFTOVERS = ("_update_download.zip",        # 下好的分发包(已解压或已作废)
+                     "_update_download.zip.part",   # 下载中断留下的半截(200MB)
+                     "_update_target.txt")          # 目标程序名标记
+#: 旧程序备份: 目录模式把当前 exe 改名成 `<名>.exe.bak`。名字不固定(用户可能重命名过
+#: exe), 用 glob 找。只在 cleanup_old_backup() 里用。
 _LEFTOVER_GLOB = "*.exe.bak"
-#: 延迟清理时一并收尾的更新残渣
-_LEFTOVER_LATE = ("_update.bat", "_update_download.exe", "_update_download.exe.part",
-                  "_update_target.txt", "_update_tempdir.txt")
+#: 延迟清理时一并收尾的更新残渣(跑稳 2 分钟后 / 正常关窗时)
+_LEFTOVER_LATE = ("_internal_old",                  # 旧载荷(回滚用, 跑稳后才删)
+                  "_update.bat", "_update_download.zip", "_update_download.zip.part",
+                  "_update_extracted",              # 解压出来的新版本
+                  "_update_target.txt")
 
 
 def cleanup_old_backup(app_dir=None):

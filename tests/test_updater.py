@@ -395,141 +395,13 @@ def test_default_mirrors_have_no_leading_slash_issue():
 
 # ── 新版本 exe 校验(onefile: 安装包就是一个 exe) ──
 
-def test_validate_new_exe_ok(tmp_path):
-    p = tmp_path / "_update_download.exe"
-    p.write_bytes(b"MZ" + b"x" * (2 << 20))        # MZ 头 + 足够大
-    assert updater.validate_new_exe(str(p)) == str(p)
 
 
-def test_validate_new_exe_rejects_bad_files(tmp_path):
-    """错误页/截断文件/不存在的文件都必须拦下, 不能让它们流进替换流程"""
-    small = tmp_path / "small.exe"
-    small.write_bytes(b"MZ")                        # 太小
-    with pytest.raises(ValueError, match="字节"):
-        updater.validate_new_exe(str(small))
-
-    txt = tmp_path / "fake.exe"
-    txt.write_bytes(b"<html>502 Bad Gateway</html>" + b"x" * (2 << 20))
-    with pytest.raises(ValueError, match="MZ"):
-        updater.validate_new_exe(str(txt))          # 镜像报错页被当成程序
-
-    with pytest.raises(ValueError, match="不存在"):
-        updater.validate_new_exe(str(tmp_path / "nope.exe"))
-
-
-def test_generate_update_bat_structure(tmp_path):
-    """★ bat 必须包含完整的单文件替换与回滚流程, 且**不含绝对路径**(GBK 代码页下
-    会被 cmd 读乱码 —— 参考项目实战踩过)。"""
-    app_dir = tmp_path / "app"
-    app_dir.mkdir()
-    (app_dir / "AutoTest.exe").write_bytes(b"MZ")   # 当前程序(供动态定位语义)
-    bat = updater.generate_update_bat(str(app_dir), pid=12345,
-                                      exe_name="AutoTest.exe")
-    text = open(bat, encoding="utf-8").read()
-    lines = text.splitlines()      # 文本模式读取已把 CRLF 归一成 \n, 别按 \r\n 切
-    # 完整流程的关键步骤(含反斜杠的一律用 raw string, 别被 Python 转义坑了)
-    for must in (r'"%SYS%\tasklist.exe" /FI "PID eq 12345"',  # 等 PID 退出
-                 '.bak"',                                    # 旧 exe 改名备份
-                 'copy /y "_update_download.exe"',           # 复制新程序
-                 "正在回滚",                                 # 失败回滚
-                 "start \"\"",                               # 启动新版本
-                 "del /f /q \"%~f0\""):                      # 自删
-        assert must in text, f"bat 缺少关键步骤: {must}"
-    # ★ 外部命令必须是绝对路径: 裸写 find/timeout 会被 PATH 里的 Git/MSYS 抢占
-    #   (实测 "timeout: invalid time interval '/t'" -> 等待变成立即返回)
-    for name in ("tasklist", "find", "ping"):
-        assert f'%SYS%\\{name}.exe' in text, f"{name} 没有走绝对路径"
-    assert "\t" not in text and "\f" not in text, \
-        "bat 里混进了制表符/换页符 —— f-string 把 \\t \\f 当转义了"
-    # ★ 等待必须是 ping: timeout 在 stdin 被重定向时立刻报错退出, 观察窗口缩成 0 秒,
-    #   判据①("等够时间还活着吗")就退化成"start 后立刻查一次"的竞态 —— 而真实执行
-    #   测试在这种环境下恰好捕捉不到它(退回去照样全绿), 所以在这里显式钉住。
-    assert "timeout.exe" not in text, "等待退回 timeout 了 —— 重定向下等待为 0 秒"
-    assert r'"%SYS%\ping.exe"' in text, "没有走 ping 计时"
-    # ★ 变量展开后紧跟 \" 的写法: 变量为空时展开成 "\" 会被 cmd 当成转义引号,
-    #   整行判定 "The syntax of the command is incorrect." → 整个更新中止(实测 rc=255)
-    trap = [ln.strip() for ln in text.splitlines() if '%\\"' in ln]
-    assert not trap, f'这些行有 "%VAR%\\" 陷阱(空变量时 bat 会中止): {trap}'
-    # ★ chcp 必须紧跟 @echo off: 切换代码页之前出现中文会被按旧代码页读乱码
-    assert lines[0] == "@echo off" and lines[1].startswith("chcp 65001"), \
-        f"chcp 位置不对: {lines[:2]}"
-    # ── F3: 目标程序名走标记文件, 不靠"目录里字母序第一个 .exe"猜 ──
-    assert 'set /p EXE_NAME=<"_update_target.txt"' in text, \
-        "没有从标记文件读目标程序名 —— 目录里多一个 exe 就会换错文件"
-    assert "无法确认该替换哪一个" in text, "多个候选时没有停手(会换错文件)"
-    assert (app_dir / "_update_target.txt").read_text(encoding="utf-8") == "AutoTest.exe"
-    # ── F2: 启动后必须确认新进程活着, 否则回滚 ──
-    assert '/FI "IMAGENAME eq %EXE_NAME%" /FO CSV /NH' in text, \
-        "没有确认新版本是否真的起来了 —— 新版本起不来时没有回滚"
-    assert "if not errorlevel 1 goto :started" in text
-    assert "回滚失败" in text, "回滚本身失败时必须告诉用户手工怎么办"
-    # 成功后**不再由 bat 删 .bak**(新版本可能几十秒后才崩, 那时它是唯一退路)
-    assert ":old_cleanup_loop" not in text, \
-        "bat 又开始无条件删旧版本备份了 —— 新版本起不来就没退路了"
-    # 用户数据绝不出现在替换范围里(bat 只碰 exe)
-    assert "Test_cases" not in text and "Test_preconditions" not in text
-    assert "config.yaml" not in text
-    # 不嵌绝对路径: app_dir 是含盘符的绝对路径, 不得出现在 bat 里(全用 %~dp0)
-    assert str(app_dir) not in text and "%~dp0" in text
-    # CRLF: cmd 对裸 LF 的 bat 兼容性差
-    raw = open(bat, "rb").read()
-    assert b"\r\n" in raw and b"\n" not in raw.replace(b"\r\n", b"")
-
-
-def test_update_bat_echoes_contain_no_cmd_metachars(tmp_path):
-    """★ 扫描守护: bat 的 echo 文本里不得出现半角 () & | < > ^。
-
-    2026-10-09 实证: `if 1 neq 0 ( echo 坏(括号?), 走开 )` 在 cmd 里 **必定** 中止整个
-    批处理(rc=255, 与代码页无关) —— 一个半角 `)` 就把 if 块提前闭合了。原脚本里
-    "无法重命名当前程序(权限不足/杀毒锁定?)" 正是这样, 而它紧跟 `ren`: 每次更新都是
-    旧 exe 已改名 .bak -> bat 静默死掉 -> 新版没复制/没启动/没回滚, 用户一个 exe 都不剩。
-    纯文本断言证明不了"bat 能跑完", 这条扫描是第二道网(第一道是下面的真实执行)。
-    """
-    app = tmp_path / "app"
-    app.mkdir()
-    (app / "AutoTest.exe").write_bytes(b"MZ")
-    bat = updater.generate_update_bat(str(app), pid=1, exe_name="AutoTest.exe")
-    bad = []
-    for ln in open(bat, encoding="utf-8"):
-        s = ln.strip()
-        if not s.lower().startswith("echo"):
-            continue
-        body = s[4:].lstrip(".").lstrip()
-        hit = sorted(set(body) & set("()&|<>^"))
-        if hit:
-            bad.append((s, hit))
-    assert not bad, f"这些 echo 会让 cmd 中止批处理: {bad}"
 
 
 # ── 目标程序名的传递(F3) ──
 
-def test_target_marker_holds_running_exe_name(tmp_path):
-    """标记文件 = 当时正在运行的那个 exe 名; bat 用它替换, 不再猜"""
-    p = updater.write_target_marker(str(tmp_path), "APP_AutoTest.exe")
-    assert p and open(p, encoding="utf-8").read() == "APP_AutoTest.exe"
-    # 中文名同样要能传达(实测: cmd 在 chcp 65001 下能正确用 UTF-8 字节的变量操作文件)
-    updater.write_target_marker(str(tmp_path), "自动化测试平台.exe")
-    assert open(p, encoding="utf-8").read() == "自动化测试平台.exe"
 
-
-@pytest.mark.parametrize("name", [
-    "", "   ", None,
-    'a"b.exe',                    # 引号能改变 cmd 的命令结构
-    "a%b.exe",                    # % 会被 cmd 二次展开
-    "a&b.exe", "a|b.exe", "a<b.exe", "a>b.exe", "a^b.exe", "a!b.exe",
-    "a\r\nb.exe",                 # 换行 -> 变量里多出命令
-])
-def test_target_marker_refuses_dangerous_names(tmp_path, name):
-    """名字里含 cmd 会二次解析的字符时**不写标记文件** —— 宁可退回"唯一候选"
-    逻辑(有歧义就停手), 也不能把危险字符拼进命令行"""
-    assert updater.write_target_marker(str(tmp_path), name) == ""
-    assert not (tmp_path / "_update_target.txt").exists()
-
-
-def test_target_marker_uses_only_basename(tmp_path):
-    """只取文件名: bat 在 %~dp0 下工作, 传绝对路径没有意义还可能带来编码问题"""
-    updater.write_target_marker(str(tmp_path), r"D:\some dir\App.exe")
-    assert open(tmp_path / "_update_target.txt", encoding="utf-8").read() == "App.exe"
 
 
 # ── 下载进度节流(F8) ──
@@ -594,39 +466,6 @@ def _run_bat(app_dir, bat, timeout=120):
         return f.read().decode("utf-8", "replace")
 
 
-@WIN_ONLY
-def test_update_bat_rolls_back_when_new_version_dies(tmp_path):
-    """★ F2 的核心实证: 新版本**起不来**时, 必须把旧版本换回去。
-
-    老写法是"start 之后固定 3 秒无条件删 .bak" —— 新版本起不来时用户手里就只剩一个
-    坏程序, 没有任何退路。这条测试真跑一遍 cmd: 用一个会立刻退出的程序当新版本,
-    跑完必须看到"旧版本的文件内容原样回来"。
-    """
-    import shutil
-    cands = _instant_exit_exes()
-    if len(cands) < 2:
-        pytest.skip("找不到两个无参数即退出的系统程序做替身")
-    app = tmp_path / "app"
-    app.mkdir()
-    exe = app / "AutoTest.exe"
-    shutil.copy2(cands[0], exe)                    # 更新前的程序
-    before = exe.read_bytes()
-    shutil.copy2(cands[1], app / "_update_download.exe")   # 新版本(一起来就退出)
-    new_bytes = (app / "_update_download.exe").read_bytes()
-    assert new_bytes != before, "两个替身内容相同, 这条测试证明不了回滚"
-
-    bat = updater.generate_update_bat(str(app), pid=DEAD_PID,
-                                      exe_name="AutoTest.exe", probe_seconds=2)
-    out = _run_bat(app, bat)
-    assert "[ERROR]" in out, f"没有走到失败分支, 输出: {out[-400:]}"
-    assert exe.read_bytes() == before, \
-        "没有回滚! 手里剩下的是起不来的新版本 —— 用户只能手工重装"
-    assert not (app / "AutoTest.exe.bak").exists(), "回滚后备份没有归位"
-    # 残渣一律清干净(含 200MB 包与标记文件)
-    assert not (app / "_update_download.exe").exists()
-    assert not (app / "_update_target.txt").exists()
-    assert not bat or not os.path.exists(bat), "替换脚本没有自删"
-
 
 @WIN_ONLY
 def test_update_bat_refuses_ambiguous_target(tmp_path):
@@ -653,129 +492,211 @@ def test_update_bat_refuses_ambiguous_target(tmp_path):
     assert not (app / "AutoTest_old.exe.bak").exists()
 
 
-@WIN_ONLY
-def test_update_bat_keeps_backup_on_success(tmp_path):
-    """★ 成功路径的实证(F2 的另一半): 确认新进程活着之后, .bak **仍然保留**。
 
-    老写法是"start 之后固定 3 秒无条件删 .bak"; 新写法把删它交给新版本自己跑稳之后
-    (core.bootstrap.cleanup_old_backup) —— 因为新版本可能几十秒后才崩, 那时 .bak 是
-    用户唯一的退路。
-    ★ "新版本活着"这个信号是**测试自己造**的: 用一个不在 PATH 里的唯一名字, 提前把
-      同名进程拉起来(拿 cmd.exe 的副本, 无参数 + 管道 stdin -> 它会一直等着), 由测试
-      握着句柄、结束时收掉。放在**另一个目录**, 免得它就是被替换的那个文件。
-    ★★ 绝对不能用 python.exe / cmd.exe 这类**PATH 里有的名字**: bat 里的
-      `start "" "<名字>"` 会真的把它拉起来 —— 交互式 python 会挂在桌面上不走, 还
-      继承父进程的管道句柄, 于是测试永远等不到子进程结束(2026-10-09 实测: 桌面上
-      不断冒 python 窗口, pytest 整个卡死)。
+# ── 一次性解压目录(_MEI*)的清理: 不修就每更新一次漏 400MB ──
+
+
+# ── 更新包(zip)的校验与解压(目录模式) ──
+
+def _make_pkg(tmp_path, version="1.6", exe_body=b"MZ" + b"x" * 2048,
+              with_resources=True, name="pkg.zip"):
+    """造一个像样的分发包: AutoTest.exe + _internal/VERSION + 抽查资源"""
+    import zipfile
+    p = tmp_path / name
+    with zipfile.ZipFile(p, "w", zipfile.ZIP_DEFLATED) as z:
+        z.writestr("AutoTest.exe", exe_body)
+        z.writestr("_internal/_pad.bin", os.urandom(1 << 20))   # 过 1MB 下限(防半截包)
+        z.writestr("_internal/VERSION", version + "\n")
+        z.writestr("_internal/config/locators.yaml", "a: 1\n")
+        if with_resources:
+            for r in updater._SPOT_RESOURCES:
+                if r.endswith("locators.yaml"):
+                    continue
+                z.writestr(r, b"x" * 1024)
+    return p
+
+
+def test_validate_update_zip_ok(tmp_path):
+    p = _make_pkg(tmp_path, "1.6")
+    assert updater.validate_update_zip(str(p), "1.6") == str(p)
+    assert updater.read_zip_version(str(p)) == "1.6"
+
+
+@pytest.mark.parametrize("name,version,why", [
+    ("notzip.zip", None, "不是 zip(错误页/截断)"),
+    ("empty.zip", None, "太小"),
+])
+def test_validate_update_zip_rejects_junk(tmp_path, name, version, why):
+    p = tmp_path / name
+    p.write_bytes(b"<html>502 Bad Gateway</html>" + b"x" * (2 << 20))
+    with pytest.raises(ValueError):
+        updater.validate_update_zip(str(p), version)
+    with pytest.raises(ValueError, match="不存在"):
+        updater.validate_update_zip(str(tmp_path / "没有这个.zip"), "1.6")
+
+
+def test_validate_update_zip_rejects_incomplete_and_mismatched(tmp_path):
+    """★ 缺件、版本对不上都必须**在替换之前**拦下 —— 否则 bat 把 _internal 换掉之后
+    才发现装的是坏的, 用户就没程序用了。"""
+    import zipfile
+    # 缺 _internal
+    p = tmp_path / "no_internal.zip"
+    with zipfile.ZipFile(p, "w") as z:
+        z.writestr("AutoTest.exe", b"MZ" + b"x" * 2048)
+        z.writestr("_pad.bin", os.urandom(1 << 20))
+    with pytest.raises(ValueError, match="_internal"):
+        updater.validate_update_zip(str(p), "1.6")
+    # 版本与清单不符
+    p2 = _make_pkg(tmp_path, "1.5", name="wrong_ver.zip")
+    with pytest.raises(ValueError, match="不符"):
+        updater.validate_update_zip(str(p2), "1.6")
+    # 抽查资源缺失(打包漏文件那类)
+    p3 = _make_pkg(tmp_path, "1.6", with_resources=False, name="no_res.zip")
+    with pytest.raises(ValueError, match="运行期资源"):
+        updater.validate_update_zip(str(p3), "1.6")
+
+
+def test_extract_update_writes_files(tmp_path):
+    p = _make_pkg(tmp_path, "1.6")
+    dest = tmp_path / "extracted"
+    exe = updater.extract_update(str(p), str(dest))
+    assert os.path.isfile(exe)
+    assert (dest / "_internal" / "VERSION").read_text().strip() == "1.6"
+
+
+def test_extract_update_blocks_zip_slip(tmp_path):
+    """★ 压缩包里的路径能带 `..\\` —— 不校验就能写到程序目录之外(经典 zip slip)"""
+    import zipfile
+    p = tmp_path / "evil.zip"
+    with zipfile.ZipFile(p, "w") as z:
+        z.writestr("AutoTest.exe", b"MZ" + b"x" * 2048)
+        z.writestr("_internal/VERSION", "1.6\n")
+        z.writestr("../../evil.txt", b"pwned")
+    with pytest.raises(ValueError, match="路径"):
+        updater.extract_update(str(p), str(tmp_path / "out"))
+    assert not (tmp_path.parent / "evil.txt").exists()
+
+
+# ── 替换脚本(目录替换版) ──
+
+def test_update_bat_structure(tmp_path):
+    r"""★ bat 必须是"目录替换"流程, 且不含已知的 cmd 陷阱。"""
+    app = tmp_path / "app"
+    app.mkdir()
+    (app / "AutoTest.exe").write_bytes(b"MZ")
+    bat = updater.generate_update_bat(str(app), pid=12345, exe_name="AutoTest.exe")
+    text = open(bat, encoding="utf-8").read()
+    lines = text.splitlines()
+    for must in (r'"%SYS%\tasklist.exe" /FI "PID eq 12345"',   # 等 PID 退出
+                 r'ren "_internal" "_internal_old"',           # 旧载荷改名(不是复制!)
+                 r'move "_update_extracted\_internal" "_internal"',  # 新载荷瞬时到位
+                 r'ren "%EXE_NAME%" "%EXE_NAME%.bak"',         # 旧 exe 备份
+                 'copy /y "_update_extracted\\%EXE_NAME%"',    # 新 exe 就位
+                 "正在回滚",                                    # 失败回滚
+                 'start ""', "del /f /q \"%~f0\""):             # 启动新版本 / 自删
+        assert must in text, f"bat 缺少关键步骤: {must}"
+    # 用 move 而不是 robocopy 拷 400MB —— 这是相对参考项目的关键改进
+    assert "robocopy" not in text.lower(), "又在搬整个 _internal 了(应该是瞬时改名)"
+    # 外部命令走绝对路径 / 等待用 ping
+    for name in ("tasklist", "find", "ping"):
+        assert f"%SYS%\\{name}.exe" in text, f"{name} 没有走绝对路径"
+    assert "timeout.exe" not in text, "等待退回 timeout 了(重定向下等待为 0 秒)"
+    assert "\t" not in text and "\f" not in text
+    assert lines[0] == "@echo off" and lines[1].startswith("chcp 65001")
+    # echo 文本不许出现会被 cmd 当成命令结构的字符(半角括号是 v1.3 的死因)
+    bad = [ln.strip() for ln in lines
+           if ln.strip().lower().startswith("echo") and set(ln) & set("()&|<>^")]
+    assert not bad, f"这些 echo 会让 cmd 中止批处理: {bad}"
+    # 变量展开后紧跟 \" 的陷阱
+    assert not [ln for ln in lines if '%\\"' in ln], "有 %VAR%\\\" 陷阱"
+    # 用户数据绝不出现在替换范围里
+    for guarded in ("config.yaml", "Test_cases", "Test_preconditions", "Test_img"):
+        assert guarded not in text, f"bat 里出现了用户数据路径: {guarded}"
+    raw = open(bat, "rb").read()
+    assert b"\r\n" in raw and b"\n" not in raw.replace(b"\r\n", b"")
+
+
+def test_target_marker_still_written(tmp_path):
+    updater.write_target_marker(str(tmp_path), "AutoTest.exe")
+    assert (tmp_path / updater.TARGET_MARKER).read_text(encoding="utf-8") == "AutoTest.exe"
+
+
+# ── 真跑一遍 cmd: 目录替换的成败两条路 ──
+
+def _make_app_dir(tmp_path, old_src, new_src, old_ver="1.0", new_ver="2.0"):
+    """造出"更新前"的目录 + 已由程序解压好的新版本"""
+    import shutil
+    app = tmp_path / "app"
+    (app / "_internal").mkdir(parents=True)
+    (app / "AutoTest.exe").write_bytes(open(old_src, "rb").read())
+    (app / "_internal" / "VERSION").write_text(old_ver, encoding="utf-8")
+    (app / "_internal" / "old_only.dll").write_bytes(b"OLD")
+    ex = app / "_update_extracted"
+    (ex / "_internal").mkdir(parents=True)
+    (ex / "AutoTest.exe").write_bytes(open(new_src, "rb").read())
+    (ex / "_internal" / "VERSION").write_text(new_ver, encoding="utf-8")
+    (ex / "_internal" / "new_only.dll").write_bytes(b"NEW")
+    return app
+
+
+@WIN_ONLY
+def test_update_bat_rolls_back_when_new_version_dies(tmp_path):
+    """★ 新版本起不来时, `_internal\\` 与 exe 都必须换回更新前的样子(目录级回滚)。"""
+    cands = _instant_exit_exes()
+    if len(cands) < 2:
+        pytest.skip("找不到两个无参即退的替身程序")
+    app = _make_app_dir(tmp_path, cands[0], cands[1])
+    old_exe = (app / "AutoTest.exe").read_bytes()
+    bat = updater.generate_update_bat(str(app), pid=DEAD_PID,
+                                      exe_name="AutoTest.exe", probe_seconds=2)
+    out = _run_bat(app, bat)
+    assert "[ERROR]" in out, out[-300:]
+    assert (app / "_internal" / "VERSION").read_text(encoding="utf-8") == "1.0", \
+        "回滚后 _internal 不是更新前那一份"
+    assert (app / "_internal" / "old_only.dll").exists(), "旧载荷内容没回来"
+    assert not (app / "_internal" / "new_only.dll").exists(), "新载荷没被换走"
+    assert (app / "AutoTest.exe").read_bytes() == old_exe, "exe 没换回旧的"
+    assert not (app / "_internal_old").exists(), "回滚后不应残留 _internal_old"
+    assert not (app / "_update_extracted").exists(), "解压目录没清掉"
+    assert not os.path.exists(bat), "替换脚本没有自删"
+
+
+@WIN_ONLY
+def test_update_bat_swaps_and_keeps_rollback_copy_on_success(tmp_path):
+    """★ 成功路径: 载荷与 exe 都换成新的, 且**保留** `_internal_old` 与 `.bak` 作退路。
+
+    "新版本活着"这个信号是借来的: 把目标 exe 命名成唯一名字, 测试自己先拉起一个同名
+    进程当信号(结束就收掉)。★ 绝不能用 PATH 里有的名字(python.exe/cmd.exe) ——
+    bat 里的 start 会真把交互式解释器拉起来, 挂着不退还攥着管道。
     """
     import shutil
     import subprocess
     cands = _instant_exit_exes()
     if not cands:
-        pytest.skip("找不到可用的替身程序")
-    name = "zz_update_probe.exe"          # 唯一名字: 不在 PATH, start 只会命中本目录的副本
-    app = tmp_path / "app"
-    app.mkdir()
-    exe = app / name
-    shutil.copy2(cands[0], exe)                       # 旧版本(会立刻退出, 无所谓内容)
-    shutil.copy2(cands[1] if len(cands) > 1 else cands[0],
-                 app / "_update_download.exe")
-    new_bytes = (app / "_update_download.exe").read_bytes()
-
+        pytest.skip("找不到替身程序")
+    name = "zz_update_probe.exe"
+    app = _make_app_dir(tmp_path, cands[0], cands[0])
+    (app / "AutoTest.exe").rename(app / name)
+    (app / "_update_extracted" / "AutoTest.exe").rename(app / "_update_extracted" / name)
     sig_dir = tmp_path / "sig"
     sig_dir.mkdir()
     sig_exe = sig_dir / name
     shutil.copy2(os.path.join(os.environ.get("SystemRoot", r"C:\Windows"),
                               "System32", "cmd.exe"), str(sig_exe))
-    alive = subprocess.Popen([str(sig_exe)], cwd=str(sig_dir),
-                             stdin=subprocess.PIPE,
+    alive = subprocess.Popen([str(sig_exe)], cwd=str(sig_dir), stdin=subprocess.PIPE,
                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     try:
-        bat = updater.generate_update_bat(str(app), pid=DEAD_PID,
-                                          exe_name=name, probe_seconds=2)
+        bat = updater.generate_update_bat(str(app), pid=DEAD_PID, exe_name=name,
+                                          probe_seconds=2)
         out = _run_bat(app, bat)
     finally:
         alive.kill()
         alive.wait(timeout=10)
-    assert "新版本已启动" in out, f"没走到成功分支, 输出: {out[-400:]}"
-    assert exe.read_bytes() == new_bytes, "新版本没有被复制到位"
-    assert (app / f"{name}.bak").exists(), \
-        ".bak 被删了 —— 新版本若在后面几十秒里崩了, 用户就没有退路了"
-    assert not (app / "_update_download.exe").exists(), "残渣没清掉"
-    assert not (app / "_update_target.txt").exists()
-    assert not os.path.exists(bat), "替换脚本没有自删"
-
-
-# ── 一次性解压目录(_MEI*)的清理: 不修就每更新一次漏 400MB ──
-
-def test_tempdir_marker_only_for_mei_dirs(tmp_path):
-    """只给"名字确实像 _MEI*"的目录写标记 —— 这个内容会被脚本拿去 rd /s /q"""
-    mei = tmp_path / "_MEI123456"
-    mei.mkdir()
-    p = updater.write_tempdir_marker(str(tmp_path), str(mei))
-    assert p and open(p, encoding="utf-8").read() == str(mei)
-    # 不是 _MEI* / 不存在 / 空 —— 一律不写(宁可留下临时目录, 也不给脚本一个可删的真实路径)
-    for bad in (str(tmp_path), str(tmp_path / "不存在"), "", None):
-        os.path.exists(os.path.join(str(tmp_path), updater.TEMPDIR_MARKER)) and \
-            os.remove(os.path.join(str(tmp_path), updater.TEMPDIR_MARKER))
-        assert updater.write_tempdir_marker(str(tmp_path), bad) == "", bad
-
-
-def test_update_bat_cleans_old_extraction_dir_safely(tmp_path):
-    """bat 必须收掉旧进程的一次性解压目录, 但**必须带 _MEI 校验** —— 标记文件的内容
-    会直接进 rd /s /q, 没有校验就等于"文件写什么就删什么"。"""
-    app = tmp_path / "app"
-    app.mkdir()
-    (app / "AutoTest.exe").write_bytes(b"MZ")
-    mei = tmp_path / "_MEI999"
-    mei.mkdir()
-    bat = updater.generate_update_bat(str(app), pid=1, exe_name="AutoTest.exe",
-                                      temp_dir=str(mei))
-    text = open(bat, encoding="utf-8").read()
-    assert 'set /p OLDTMP=<"_update_tempdir.txt"' in text, "没有读解压目录标记"
-    assert '%OLDTMP:_MEI=%' in text, "缺少 _MEI 校验 —— 标记内容会被无脑删除"
-    assert 'rd /s /q "%OLDTMP%"' in text
-    # 清理阶段要连标记文件一起删
-    assert 'del /f /q "_update_tempdir.txt"' in text
-    # 目标名标记的写法不能被顶掉
-    assert 'set /p EXE_NAME=<"_update_target.txt"' in text
-
-
-@WIN_ONLY
-def test_update_bat_deletes_old_extraction_dir_but_nothing_else(tmp_path):
-    """真跑一遍: 标记指向 _MEI* 目录 -> 删掉; 指向**普通目录** -> 一个字节都不动。
-
-    标记文件的内容会被脚本拿去 rd /s /q —— 这是整个更新流程里唯一"按文件内容删目录"
-    的地方, 所以必须有名字校验兜底(F2 同源的谨慎)。
-    """
-    cands = _instant_exit_exes()
-    if not cands:
-        pytest.skip("找不到替身程序")
-    app = tmp_path / "app"
-    app.mkdir()
-    (app / "AutoTest.exe").write_bytes(b"MZ-marker")
-
-    # (1) 指向 _MEI* 目录 -> 应被删除
-    mei = tmp_path / "_MEIfake"
-    (mei / "sub").mkdir(parents=True)
-    (mei / "sub" / "x.dll").write_bytes(b"x" * 1024)
-    bat = updater.generate_update_bat(str(app), pid=DEAD_PID,
-                                      exe_name="AutoTest.exe", probe_seconds=1,
-                                      temp_dir=str(mei))
-    assert (app / updater.TEMPDIR_MARKER).exists()
-    _run_bat(app, bat)
-    assert not mei.exists(), "旧进程的一次性解压目录没被清掉(每次更新漏 400MB)"
-
-    # (2) 指向普通目录 -> 必须原封不动(名字里没有 _MEI)
-    keep = tmp_path / "我的资料"
-    keep.mkdir()
-    (keep / "别删我.txt").write_text("重要", encoding="utf-8")
-    bat2 = updater.generate_update_bat(str(app), pid=DEAD_PID,
-                                       exe_name="AutoTest.exe", probe_seconds=1,
-                                       temp_dir=str(keep))
-    # write_tempdir_marker 本身就会拒写 —— 手动放一个假的标记文件模拟"被人塞了路径"
-    open(app / updater.TEMPDIR_MARKER, "w", encoding="utf-8",
-         newline="\r\n").write(str(keep))
-    _run_bat(app, bat2)
-    assert keep.exists() and (keep / "别删我.txt").exists(), \
-        "标记文件里的普通目录被删了 —— 名字校验形同虚设"
+    assert "新版本已启动" in out, out[-400:]
+    assert (app / "_internal" / "VERSION").read_text(encoding="utf-8") == "2.0"
+    assert (app / "_internal" / "new_only.dll").exists()
+    assert (app / "_internal_old" / "VERSION").read_text(encoding="utf-8") == "1.0", \
+        "_internal_old 被删了 —— 新版本若几十秒后崩了就没有退路"
+    assert (app / f"{name}.bak").exists(), "exe 备份被删了"
+    assert not (app / "_update_extracted").exists()
+    assert not os.path.exists(bat)
