@@ -74,7 +74,9 @@ def test_grab_coexists_with_action(runner, monkeypatch):
     def _c(r, s): hit.append(1)
 
     import core.actions.data_ops as data_ops
-    monkeypatch.setattr(data_ops, "do_grab", lambda r, kw: grabbed.append(kw))
+    # 新签名: do_grab(runner, 面积关键字, 时间关键字)(时间关键字可为 None=老写法)
+    monkeypatch.setattr(data_ops, "do_grab",
+                        lambda r, kw, tk=None: grabbed.append(kw))
 
     runner._execute({"fake_click": "x", "grab": "面积"})
     assert hit == [1] and grabbed == ["面积"]

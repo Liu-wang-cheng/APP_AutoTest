@@ -28,8 +28,14 @@ def test_只导入runner就要注册全部动作():
     out = subprocess.run([sys.executable, "-c", code], cwd=str(ROOT),
                          capture_output=True, text=True, timeout=120)
     assert out.returncode == 0, f"子进程失败: {out.stderr}"
-    assert out.stdout.strip() == "25", (
-        f"只导入 runner 时动作表有 {out.stdout.strip()} 个动作(应为 25) —— "
+    # ★ 期望值从 schema 派生: 动作表 = schema 的动作 - 两个共存键(grab/match 由
+    #   _execute 单独处理, 不注册进分发表)。写死数字的话, 每加一个动作都要来改这里。
+    import sys as _sys
+    _sys.path.insert(0, str(ROOT))
+    from gui import schema as _schema
+    expected = len(_schema.ACTIONS) - 2
+    assert out.stdout.strip() == str(expected), (
+        f"只导入 runner 时动作表有 {out.stdout.strip()} 个动作(应为 {expected}) —— "
         f"core/runner.py 是不是漏了 `import core.actions`?")
 
 

@@ -70,14 +70,22 @@ ACTIONS = [
     ]},
 
     # ── 数据 ──
-    {"key": "grab", "label": "抓取页面数据", "category": "数据", "fields": [
-        {"key": "grab", "label": "关键字", "type": "text", "required": True,
-         "hint": "多个用逗号/顿号/分号分隔(中英文逗号均可),如 面积,时间"},
-    ]},
-    {"key": "match", "label": "比对抓取数据", "category": "数据", "fields": [
-        {"key": "match", "label": "关键字", "type": "text", "required": True,
-         "hint": "与 grab 相同关键字;数值允许 ±1 浮动"},
-    ]},
+    # ★ 面积与时间分开两个输入框(用户要求 2026-10-10): 两者单位/标签族完全不同,
+    #   写在一个框里(面积,时间)没法分别指定; 留空 = 自动识别, 自动排除"总面积/总时间"
+    {"key": "grab", "label": "抓取清扫数据", "category": "数据", "fixed_bool": True,
+     "fields": [
+         {"key": "grab_area", "label": "面积", "type": "text",
+          "hint": "面积的关键字(如 真空吸尘器);留空=自动按 m²/㎡ 识别, 自动排除总面积/累计"},
+         {"key": "grab_time", "label": "时间", "type": "text",
+          "hint": "时间的关键字(如 时间);留空=自动按 分/分钟 识别, 自动排除总时间/累计"},
+     ], "tip": "两个框可只填一个; 页面上有多个候选时会报错, 填关键字指明要哪一个"},
+    {"key": "match", "label": "比对抓取数据", "category": "数据", "fixed_bool": True,
+     "fields": [
+         {"key": "match_area", "label": "面积", "type": "text",
+          "hint": "与「抓取清扫数据」的面积框保持一致(可留空)"},
+         {"key": "match_time", "label": "时间", "type": "text",
+          "hint": "与「抓取清扫数据」的时间框保持一致(可留空)"},
+     ], "tip": "数值允许 ±1 浮动"},
     {"key": "latest_record", "label": "点击最新记录", "category": "数据", "fields": [], "fixed_bool": True},
 
     # ── 开关 ──
@@ -100,6 +108,13 @@ ACTIONS = [
          "hint": "文本(多个用逗号/顿号分隔, 中英文逗号均可) / 图片名(.png)"},
     ]},
     {"key": "wait_loading", "label": "等待加载消失", "category": "时间", "fields": [], "fixed_bool": True},
+    # ★ 单纯的"等 N 秒"以前不是动作 —— 快捷按钮造出的是 {"desc":"延时等待","wait":10},
+    #   而 wait 是"本步后等待"的元键(META), 卡片找不到动作 → chip 显示「未知」、
+    #   字段/校验也认不出来(2026-10-10 用户实测)。做成真动作后 chip/摘要/校验都正常。
+    {"key": "sleep", "label": "延时等待", "category": "时间", "fields": [
+        {"key": "sleep", "label": "秒数", "type": "float", "required": True, "default": 10,
+         "hint": "等待指定秒数;执行中按停止可立即打断"},
+    ], "tip": "只等待, 不做别的动作; 若想在某个动作之后补一段等待, 用该动作的「延时」参数"},
 
     # ── 地图编辑 ──
     {"key": "room_zones", "label": "识别房间分区", "category": "地图编辑", "fields": [

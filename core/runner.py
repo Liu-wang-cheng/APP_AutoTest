@@ -580,12 +580,16 @@ class ActionRunner:
                 executed_key = act.key
                 break
         # 2. 数据抓取/对比(与主动作共存于一步)
-        if "grab" in step:
+        # grab/match 现在有"面积/时间"两个独立输入框(grab_area/grab_time),
+        # 老写法 grab: 面积,时间 仍然兼容 —— 两种都由 do_grab 内部按字段摊开
+        if "grab" in step or "grab_area" in step:
             from core.actions.data_ops import do_grab
-            do_grab(self, step["grab"])
-        elif "match" in step:
+            do_grab(self, step.get("grab_area", step.get("grab", "")),
+                    step.get("grab_time"))
+        elif "match" in step or "match_area" in step:
             from core.actions.data_ops import do_match
-            do_match(self, step["match"])
+            do_match(self, step.get("match_area", step.get("match", "")),
+                     step.get("match_time"))
         # 3. 等待条件(与主动作共存)。
         # "点一下,再等某元素出现" 是很自然的写法(如 click: 安静 + wait_for: 安静,标准,强力),
         # 但主分发只执行优先级最高的一个动作,wait_for 会被静默丢掉 —— 所以这里单独补执行。

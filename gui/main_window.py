@@ -96,7 +96,7 @@ CATEGORY_COLORS = {
     "时间": "#0891b2", "地图编辑": "#16a34a", "定时": "#b45309", "流程控制": "#64748b",
 }
 # 快捷组件条(最常用的排前面)
-QUICK_ACTIONS = ["click", "assert", "switch_to", "set_time", "wait_for", "__wait"]
+QUICK_ACTIONS = ["click", "assert", "switch_to", "set_time", "wait_for", "sleep"]
 
 STYLESHEET = """
 * { font-family: "Microsoft YaHei UI"; font-size: 12px; }
@@ -490,7 +490,7 @@ def make_action_menu(parent, on_pick):
         menu.addMenu(sub)
     sub = QMenu("其他", menu)
     wait_act = QAction("延时等待", sub)
-    wait_act.triggered.connect(lambda: on_pick("__wait"))
+    wait_act.triggered.connect(lambda: on_pick("sleep"))
     sub.addAction(wait_act)
     menu.addMenu(sub)
     return menu
@@ -511,6 +511,28 @@ def _make_field_widget(field, value, steps=None, exclude_index=None):
             combo.setCurrentText(str(value))
         combo.lineEdit().setPlaceholderText(hint or "选择模板")
         combo.currentTextChanged.connect(lambda _t, c=combo: c.fit_width_to_items())
+
+        def _reload_templates():
+            """每次打开下拉重扫模板目录 —— 新截的模板立刻可选, 不用重加步骤
+
+            ★ 弹层**已经开着**时绝不重建: QComboBox.clear() 会把已展开的弹层关掉,
+              表现就是"点一下立马收起"(概率复现, 取决于点击是否触发了二次 showPopup)。
+            """
+            if combo.view().isVisible():
+                return
+            cur = combo.currentText()
+            names = list(vision.list_templates())
+            if names == [combo.itemText(i) for i in range(combo.count())]:
+                return                      # 没变化就别动(免得打断用户正在选的项)
+            combo.blockSignals(True)         # 重建期间别触发 currentTextChanged/自动保存
+            combo.clear()
+            combo.addItems(names)
+            if cur:
+                combo.setCurrentText(cur)
+            combo.blockSignals(False)
+            combo.fit_width_to_items()       # 名单变了宽度也要跟着变
+
+        combo.set_refresh(_reload_templates)
         combo.fit_width_to_items()
         return combo, combo.currentText
     if t == "stepshot":
@@ -1060,10 +1082,7 @@ class _StepsHost(QObject):
     def add_sub(self, parent_index, action_key):
         if not (0 <= parent_index < len(self.steps)):
             return
-        if action_key == "__wait":
-            sub = {"desc": "延时等待", "wait": 10}
-        else:
-            sub = schema.new_step(action_key)
+        sub = schema.new_step(action_key)
         subs = self.steps[parent_index].setdefault("else", [])
         subs.append(sub)
         self.expanded_key = (parent_index, len(subs) - 1)
@@ -1171,10 +1190,7 @@ class _StepsEditor(QWidget):
         self.render_cards()
 
     def add_step(self, key):
-        if key == "__wait":
-            self.host.steps.append({"desc": "延时等待", "wait": 10})
-        else:
-            self.host.steps.append(schema.new_step(key))
+        self.host.steps.append(schema.new_step(key))
         self.host.expanded_key = (len(self.host.steps) - 1,)
         self.render_cards()
 
@@ -1640,7 +1656,33 @@ class _FitCombo(QComboBox):
                  f"滚动条={self.view().verticalScrollBar().maximum()} "
                  f"可见={popup.isVisible()}")
 
+    def set_refresh(self, cb):
+        """登记一个"下拉每次打开前"的回调(内容会变的下拉用, 如模板目录)"""
+        self._refresh_cb = cb
+
+    def hidePopup(self):
+        import time as _t
+        dt = (_t.monotonic() - getattr(self, "_shown_at", 0)) * 1000
+        if dt < 400:
+            from core.logger import get_logger
+            get_logger().info(f"[下拉] 展开后 {dt:.0f}ms 就被关闭了(疑似被抢焦点/重建)")
+        super().hidePopup()
+
     def showPopup(self):
+        # ★ 打开/关闭都记一笔(带毫秒): 用户反馈过"概率性点一下就收起", 而 offscreen
+        #   复现不出来 —— 有这行日志就能看出是 show 之后极短时间内被 hide(自己关的),
+        #   还是压根没 show 成功(被别处抢了焦点/重建了控件)。
+        import time as _t
+        self._shown_at = _t.monotonic()
+        from core.logger import get_logger
+        get_logger().debug(f"[下拉] showPopup (可见={self.view().isVisible()})")
+        cb = getattr(self, "_refresh_cb", None)
+        if cb:
+            try:
+                cb()
+            except Exception as e:      # 刷新失败不能挡住下拉
+                from core.logger import get_logger
+                get_logger().debug(f"[ui] 下拉刷新失败(忽略): {e}")
         super().showPopup()
         self.fit_popup_now()
 
@@ -3297,8 +3339,8 @@ class MainWindow(QMainWindow):
 
         self._quick_btns = []
         for key in QUICK_ACTIONS:
-            if key == "__wait":
-                label, cat = "延时", "流程控制"
+            if key == "sleep":
+                label, cat = "延时", "时间"     # 快捷条上用短名
             else:
                 a = schema.ACTION_BY_KEY[key]
                 label, cat = a["label"], a["category"]
@@ -3413,10 +3455,7 @@ class MainWindow(QMainWindow):
     def add_step(self, key):
         if self.worker:
             return
-        if key == "__wait":
-            step = {"desc": "延时等待", "wait": 10}
-        else:
-            step = schema.new_step(key)
+        step = schema.new_step(key)
         self.steps.append(step)
         self.expanded_key = (len(self.steps) - 1,)
         self.render_cards()
@@ -3463,10 +3502,7 @@ class MainWindow(QMainWindow):
     def add_sub(self, parent_index, action_key):
         if self.worker:
             return
-        if action_key == "__wait":
-            step = {"desc": "延时等待", "wait": 10}
-        else:
-            step = schema.new_step(action_key)
+        step = schema.new_step(action_key)
         else_list = self._else_list(parent_index)
         else_list.append(step)
         self.expanded_key = (parent_index, len(else_list) - 1)

@@ -393,7 +393,7 @@ def test_steps_editor_is_card_based(qapp):
         assert len(ed.steps()) == 1, "已有步骤应回填"
         # 添加步骤(与用例编辑相同的入口)
         ed.add_step("back")
-        ed.add_step("__wait")
+        ed.add_step("sleep")          # 延时等待(真动作, 见 gui/schema.py)
         assert len(ed.steps()) == 3
         # 卡片已渲染(StepCard), 且末步自动展开
         cards = [ed.cards_lay.itemAt(i).widget() for i in range(ed.cards_lay.count())]

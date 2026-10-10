@@ -414,8 +414,11 @@ def test_grab_raises_after_timeout_when_data_absent(make_runner, monkeypatch):
     monkeypatch.setattr(ActionRunner, "_sleep", lambda self, s: None)
 
     r = make_runner(SeqDevice([XML_EMPTY]))
-    with pytest.raises(RuntimeError, match="未找到.*面积"):
+    # ★ 措辞随实现变了(现在还会带上原因: 页面上没找到「本次面积」…), 但"必须报错 +
+    #   必须点名是哪个指标"这个契约不变
+    with pytest.raises(RuntimeError) as ei:
         data_ops.do_grab(r, "面积")
+    assert "面积" in str(ei.value), ei.value
 
 
 # ── 记录页取值:时间/百分比过滤 + 多标签遍历 + match 轮询 ──

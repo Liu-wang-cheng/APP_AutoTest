@@ -349,3 +349,21 @@ def do_latest_record(runner, step):
             runner._last_compare_msg = f"最新记录: {s}"
             return
     raise RuntimeError("未找到清扫记录条目")
+
+@reg.action("sleep", priority=120)
+def do_sleep(runner, step):
+    """延时等待: 单纯等 N 秒。
+
+    ★ 复用 runner._sleep(按 0.2 秒切片轮询停止标志) —— 收到停止请求能立刻退出,
+      而不是 sleep 完再响应; 所以"等 600 秒"也不会让停止按钮看起来没反应。
+    ★ 优先级 120(排在所有动作之后): 它只该在"这一步就是等待"时生效; 想在某个动作
+      之后补等待, 用该动作的「延时」参数(wait 元键)才对。
+    """
+    seconds = step.get("sleep", 0)
+    try:
+        seconds = float(seconds)
+    except (TypeError, ValueError):
+        raise ValueError(f"延时等待的秒数不是数字: {seconds!r}")
+    if seconds > 0:
+        log.info(f"[sleep] 等待 {seconds:g} 秒")
+        runner._sleep(seconds)

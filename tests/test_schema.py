@@ -11,14 +11,15 @@ MUST = {"click", "click_template", "assert", "input", "latest_record", "find_cli
         "back", "long_click", "switch_to", "assert_switch", "add_timer", "swipe",
         "room_zones", "room_click", "merge_zones", "split_zone", "if_click",
         "compare", "set_time", "wait_loading", "wait_for", "diff",
-        "grab", "match", "spot_clean"}
+        "grab", "match", "spot_clean", "sleep"}
 GENERIC = {"desc", "screenshot", "wait", "timeout", "retry"}
 
 
 def test_actions_complete():
     keys = {a["key"] for a in schema.ACTIONS}
     assert keys == MUST, f"缺失 {MUST - keys}, 多余 {keys - MUST}"
-    assert len(schema.ACTIONS) == 27
+    # 计数从集合派生(以前写死 27 —— 每加一个动作都要记得改这里, 是同一类遗留)
+    assert len(schema.ACTIONS) == len(MUST)
 
 
 def test_screenshot_is_generic_field():

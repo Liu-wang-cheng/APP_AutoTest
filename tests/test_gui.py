@@ -186,12 +186,16 @@ def test_add_sub_appends_and_expands(win):
 
 
 def test_add_sub_wait_shortcut(win):
-    """__wait 是「延时等待」的快捷写法(纯 wait 步骤)"""
+    """「延时等待」现在是**真动作 sleep**(以前是伪键 __wait, 卡片显示「未知」)"""
     win.create_case("测试组", group="测试组")
     win.add_step("if")
-    win.add_sub(0, "__wait")
+    win.add_sub(0, "sleep")
     sub = win.steps[0]["else"][0]
-    assert sub.get("wait") and "wait_for" not in sub and "click" not in sub
+    assert sub.get("sleep"), sub
+    assert "wait_for" not in sub and "click" not in sub
+    # 卡片能认出这是「延时等待」(而不是「未知」)
+    from gui import schema
+    assert next((k for k in sub if k in schema.ACTION_BY_KEY), None) == "sleep"
 
 
 def test_move_sub(win):
@@ -3273,3 +3277,48 @@ def test_update_prompt_appears_when_new_version_found(win, qapp, monkeypatch):
     assert head.startswith("发现新版本") and "9.9" in head, dialogs
     assert "当前版本：v" in body and "更新内容若干" in body, body
     assert buttons == ["立即更新", "稍后再说"], buttons
+
+
+def test_template_dropdown_rescans_when_opened(win, monkeypatch, tmp_path):
+    """★ 新建模板后**不用重新添加步骤**就能在下拉里选到(用户实测反馈 2026-10-10)。
+
+    原来名单只在下拉框创建时取一次 → 新截的模板要"重加一次步骤"才认得到。
+    现在每次打开下拉前重扫模板目录。
+    """
+    import core.vision as vision
+    tpl = tmp_path / "tpls"
+    tpl.mkdir()
+    monkeypatch.setattr(vision, "TEMPLATE_DIR", str(tpl), raising=False)
+    monkeypatch.setattr(vision, "_template_app_group", "", raising=False)
+    (tpl / "旧模板.png").write_bytes(b"\x89PNG\r\n\x1a\n")
+
+    combo, _getter = mw._make_field_widget(
+        {"key": "click_template", "label": "模板", "type": "template", "required": True}, "")
+    assert [combo.itemText(i) for i in range(combo.count())] == ["旧模板.png"]
+
+    # 界面上"新建"了一个模板文件(截图存模板 / 手工丢进去)
+    (tpl / "刚截的按钮.png").write_bytes(b"\x89PNG\r\n\x1a\n")
+    combo.showPopup()                     # 打开下拉 = 重扫
+    names = [combo.itemText(i) for i in range(combo.count())]
+    assert "刚截的按钮.png" in names, f"新模板没被识别到(要重加步骤才行?): {names}"
+    combo.hidePopup()
+
+
+def test_template_dropdown_does_not_rebuild_while_open(win, monkeypatch, tmp_path):
+    """★ 弹层开着时**不许重建名单**: QComboBox.clear() 会把已展开的弹层关掉,
+    表现就是"点一下立马收起"(概率复现)。"""
+    import core.vision as vision
+    tpl = tmp_path / "tpls"
+    tpl.mkdir()
+    monkeypatch.setattr(vision, "TEMPLATE_DIR", str(tpl), raising=False)
+    monkeypatch.setattr(vision, "_template_app_group", "", raising=False)
+    (tpl / "a.png").write_bytes(b"\x89PNG\r\n\x1a\n")
+    combo, _ = mw._make_field_widget(
+        {"key": "click_template", "label": "模板", "type": "template", "required": True}, "")
+    combo.showPopup()
+    before = [combo.itemText(i) for i in range(combo.count())]
+    (tpl / "b.png").write_bytes(b"\x89PNG\r\n\x1a\n")     # 弹层开着时目录变了
+    combo.showPopup()                                     # 二次触发(点击/样式都可能)
+    after = [combo.itemText(i) for i in range(combo.count())]
+    assert after == before, f"弹层开着时重建了名单(会被关掉): {before} -> {after}"
+    combo.hidePopup()
