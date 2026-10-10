@@ -1,4 +1,4 @@
-# APP 自动化测试平台 (v1.0)
+# APP 自动化测试平台
 
 [![测试](https://github.com/Liu-wang-cheng/APP_AutoTest/actions/workflows/tests.yml/badge.svg)](https://github.com/Liu-wang-cheng/APP_AutoTest/actions/workflows/tests.yml)
 
