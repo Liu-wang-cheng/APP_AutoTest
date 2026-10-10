@@ -53,6 +53,47 @@ def _static_checks(exe):
     return bad
 
 
+#: 运行期会被程序**读取**的资源(相对包内根)。缺了不会启动失败, 而是**跑到那一步才炸**:
+#: 真机一开始执行就报 "Resource assets/u2.jar not found in uiautomator2 package"(u2.jar),
+#: 或 OCR 静默识别不到文字(模型)。所以这里逐个点名, 构建时就拦下。
+#: ★ 教训(2026-10-10): v1.3~v1.5 三个版本都漏了 u2.jar 就发布出去了 —— 开发环境里
+#:   site-packages 目录存在, 本地怎么跑都正常, 只有"打包后 + 真机执行"才暴露。
+_REQUIRED_RESOURCES = (
+    ("uiautomator2/assets/u2.jar", "真机执行时推给手机的驱动"),
+    ("uiautomator2/assets/app-uiautomator.apk", "真机执行时的 u2 APK"),
+    ("adbutils/binaries/adb.exe", "设备通信自带的 adb"),
+    ("ddddocr/common.onnx", "文字识别模型"),
+    ("rapidocr_onnxruntime/config.yaml", "OCR 配置"),
+    ("rapidocr_onnxruntime/models/ch_PP-OCRv3_rec_infer.onnx", "OCR 识别模型"),
+    ("pypinyin/pinyin_dict.json", "拼音词典"),
+    ("config/locators.yaml", "定位器配置"),
+    ("config/config.example.yaml", "配置模板"),
+    ("gui/assets/app_icon.ico", "程序图标"),
+    ("VERSION", "版本号(更新脚本读它取证)"),
+    ("PySide6/plugins/platforms/qwindows.dll", "真实 Windows 窗口平台"),
+    ("PySide6/plugins/platforms/qoffscreen.dll", "离屏平台(本验证也用它)"),
+)
+
+
+def _resource_checks(exe):
+    """清点运行期资源是否都在包里(PyInstaller 只做静态分析, 数据文件得靠收集规则)。"""
+    try:
+        from PyInstaller.archive.readers import CArchiveReader
+    except Exception as e:                       # 没装 PyInstaller 时别把验证搞崩
+        print(f"② 资源完整性: 跳过(读不了归档: {e})")
+        return []
+    names = [str(n).replace("\\", "/") for n in CArchiveReader(exe).toc]
+    bad = []
+    for rel, why in _REQUIRED_RESOURCES:
+        if not any(n == rel or n.startswith(rel + "/") for n in names):
+            bad.append(f"缺资源 {rel}({why}) —— 打包收集规则漏了它")
+    print(f"② 资源完整性: {len(_REQUIRED_RESOURCES) - len(bad)}/"
+          f"{len(_REQUIRED_RESOURCES)} 项在包里" + ("" if not bad else " ← 有问题"))
+    for b in bad:
+        print(f"   [FAIL] {b}")
+    return bad
+
+
 def _mei_dirs():
     """%TEMP% 下 PyInstaller 一次性解压目录(_MEI*)的名字集合"""
     import tempfile
@@ -175,6 +216,10 @@ def main(argv=None):
         #   而且"启动验证"那几行输出会让人以为问题在后面(实测: 传个不存在的路径,
         #   它照样去打启动验证, 报的却是"产物不存在")
         print("\n存在问题, 见上面 [FAIL](静态检查没过, 不再启动)")
+        return 1
+    res_bad = _resource_checks(exe)
+    if res_bad:
+        print("\n存在问题, 见上面 [FAIL](资源不全, 不再启动验证)")
         return 1
     launch_bad, _seeded = _launch_check(exe, app_dir)
     ok = not launch_bad

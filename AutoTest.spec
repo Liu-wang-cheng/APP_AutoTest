@@ -61,9 +61,14 @@ datas = [
     ("CHANGELOG.md", "."),
     ("README.md", "."),
 ]
-# 模型文件: PyInstaller 没有这两个包的现成 hook, 不显式收集的话
-# **打包后 OCR 会静默失效**(能启动、能跑, 只是识别不到文字) —— 是最容易漏的一处
-for pkg in ("rapidocr_onnxruntime", "ddddocr"):
+# 运行期要读的数据文件: PyInstaller 没有这几个包的现成 hook, 不显式收集就会
+# **打包后到某一步才炸**(能启动、能跑用例列表, 只是那个功能用不了) —— 最容易漏的一处。
+#   rapidocr_onnxruntime / ddddocr: 模型文件, 不收则 OCR 静默失效
+#   uiautomator2: assets/u2.jar 与 app-uiautomator.apk 是**真机执行时推给手机的**,
+#     不收则真机一跑就报 "Resource assets/u2.jar not found in uiautomator2 package"
+#     (实测 2026-10-10: v1.3~v1.5 都带着这个缺陷发布 —— 开发环境里包目录存在,
+#      所以本地怎么测都正常, 只有打包后才暴露)
+for pkg in ("rapidocr_onnxruntime", "ddddocr", "uiautomator2"):
     try:
         datas += collect_data_files(pkg, include_py_files=False)
     except Exception as e:
