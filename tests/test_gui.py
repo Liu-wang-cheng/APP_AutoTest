@@ -3244,3 +3244,32 @@ def test_backup_cleanup_skips_pending_update(win, tmp_path, monkeypatch):
     bat.unlink()
     win._cleanup_update_backups()
     assert calls, "没有待执行更新时应该正常清理"
+
+
+def test_update_prompt_appears_when_new_version_found(win, qapp, monkeypatch):
+    """★ 发现新版本时必须弹提示(带版本号与「立即更新」按钮)。
+
+    与 test_check_update_button_really_reaches_updater 互补: 那条查的是"已是最新"分支,
+    这条查的是**用户真正会看到的那个弹窗**(有新版本)。
+    """
+    from core import updater
+    monkeypatch.setattr(updater, "check_for_update",
+                        lambda cfg, current=None: updater.CheckResult(
+                            "has_update", "发现新版本 9.9(当前 1.7)",
+                            updater.VersionInfo(version="9.9", release_date="2026-10-11",
+                                                release_notes="更新内容若干")))
+    dialogs = []
+
+    def fake_msg(self, h, b="", kind="info", buttons=None, default=0):
+        dialogs.append((h, b, kind, list(buttons or [])))
+        return list(buttons or ["知道了"])[-1]      # 选「稍后再说」, 别真去下载
+
+    monkeypatch.setattr(mw.MainWindow, "_update_message", fake_msg)
+    win._allow_real_check = True
+    win.on_check_update()
+    assert win._update_thread.wait(15000)
+    assert _pump(qapp, lambda: bool(dialogs)), "没有弹窗"
+    head, body, _kind, buttons = dialogs[0]
+    assert head.startswith("发现新版本") and "9.9" in head, dialogs
+    assert "当前版本：v" in body and "更新内容若干" in body, body
+    assert buttons == ["立即更新", "稍后再说"], buttons

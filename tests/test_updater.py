@@ -623,17 +623,17 @@ def test_target_marker_still_written(tmp_path):
 
 # ── 真跑一遍 cmd: 目录替换的成败两条路 ──
 
-def _make_app_dir(tmp_path, old_src, new_src, old_ver="1.0", new_ver="2.0"):
+def _make_app_dir(tmp_path, old_src, new_src, old_ver="1.0", new_ver="2.0",
+                 exe_name="zz_swap_probe.exe"):
     """造出"更新前"的目录 + 已由程序解压好的新版本"""
-    import shutil
     app = tmp_path / "app"
     (app / "_internal").mkdir(parents=True)
-    (app / "AutoTest.exe").write_bytes(open(old_src, "rb").read())
+    (app / exe_name).write_bytes(open(old_src, "rb").read())
     (app / "_internal" / "VERSION").write_text(old_ver, encoding="utf-8")
     (app / "_internal" / "old_only.dll").write_bytes(b"OLD")
     ex = app / "_update_extracted"
     (ex / "_internal").mkdir(parents=True)
-    (ex / "AutoTest.exe").write_bytes(open(new_src, "rb").read())
+    (ex / exe_name).write_bytes(open(new_src, "rb").read())
     (ex / "_internal" / "VERSION").write_text(new_ver, encoding="utf-8")
     (ex / "_internal" / "new_only.dll").write_bytes(b"NEW")
     return app
@@ -645,17 +645,21 @@ def test_update_bat_rolls_back_when_new_version_dies(tmp_path):
     cands = _instant_exit_exes()
     if len(cands) < 2:
         pytest.skip("找不到两个无参即退的替身程序")
-    app = _make_app_dir(tmp_path, cands[0], cands[1])
-    old_exe = (app / "AutoTest.exe").read_bytes()
+    # ★ exe 名必须**独一无二**: 存活判定是 tasklist 按镜像名查, 用 "AutoTest.exe"
+    #   这种名字会被机器上任何一个同名进程(比如我们自己的测试残留)骗过去, 于是本该
+    #   回滚的场景走成成功路径(实测踩过 —— 与当年用 python.exe 当替身是同一类坑)。
+    name = "zz_rollback_probe.exe"
+    app = _make_app_dir(tmp_path, cands[0], cands[1], exe_name=name)
+    old_exe = (app / name).read_bytes()
     bat = updater.generate_update_bat(str(app), pid=DEAD_PID,
-                                      exe_name="AutoTest.exe", probe_seconds=2)
+                                      exe_name=name, probe_seconds=2)
     out = _run_bat(app, bat)
     assert "[ERROR]" in out, out[-300:]
     assert (app / "_internal" / "VERSION").read_text(encoding="utf-8") == "1.0", \
         "回滚后 _internal 不是更新前那一份"
     assert (app / "_internal" / "old_only.dll").exists(), "旧载荷内容没回来"
     assert not (app / "_internal" / "new_only.dll").exists(), "新载荷没被换走"
-    assert (app / "AutoTest.exe").read_bytes() == old_exe, "exe 没换回旧的"
+    assert (app / name).read_bytes() == old_exe, "exe 没换回旧的"
     assert not (app / "_internal_old").exists(), "回滚后不应残留 _internal_old"
     assert not (app / "_update_extracted").exists(), "解压目录没清掉"
     assert not os.path.exists(bat), "替换脚本没有自删"
@@ -675,9 +679,7 @@ def test_update_bat_swaps_and_keeps_rollback_copy_on_success(tmp_path):
     if not cands:
         pytest.skip("找不到替身程序")
     name = "zz_update_probe.exe"
-    app = _make_app_dir(tmp_path, cands[0], cands[0])
-    (app / "AutoTest.exe").rename(app / name)
-    (app / "_update_extracted" / "AutoTest.exe").rename(app / "_update_extracted" / name)
+    app = _make_app_dir(tmp_path, cands[0], cands[0], exe_name=name)
     sig_dir = tmp_path / "sig"
     sig_dir.mkdir()
     sig_exe = sig_dir / name
@@ -700,3 +702,80 @@ def test_update_bat_swaps_and_keeps_rollback_copy_on_success(tmp_path):
     assert (app / f"{name}.bak").exists(), "exe 备份被删了"
     assert not (app / "_update_extracted").exists()
     assert not os.path.exists(bat)
+
+
+# ── 「能不能收到更新提示」: 起真的本地 HTTP 服务跑一遍(不 mock 网络) ──
+
+def _serve_manifest(payload: bytes, record=None):
+    """起一个只服务 version.json 的本地 HTTP 服务; 返回 (port, shutdown)。
+
+    ★ 为什么不用 mock: 我们被"mock 太狠、真实路径从没跑过"坑过 —— v1.1 的检查更新
+      连着 15 天全废, 就因为测试把 _test_one_mirror 整个换掉了, AttributeError 被
+      except 吞掉、每个镜像都判成不可用。所以这里走真 socket。
+    """
+    import http.server
+    import socketserver
+    import threading
+
+    class _H(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            if record is not None:
+                record.append(self.path)
+            if self.path.rstrip("/").endswith("version.json"):
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(payload)))
+                self.end_headers()
+                self.wfile.write(payload)
+            else:
+                self.send_response(404)
+                self.end_headers()
+
+        do_HEAD = do_GET
+
+        def log_message(self, *a):
+            pass
+
+    srv = socketserver.TCPServer(("127.0.0.1", 0), _H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    return srv.server_address[1], srv.shutdown
+
+
+def _local_cfg(port):
+    return {"update": {"enabled": True, "repository": "o/r", "branch": "master",
+                       "version_file": "version.json",
+                       "mirrors": [{"name": "local",
+                                    "base_url": f"http://127.0.0.1:{port}/{{repo}}/{{branch}}",
+                                    "download_prefix": ""}]}}
+
+
+def test_check_for_update_sees_newer_version_over_real_http():
+    """★ 本地起真 HTTP 服务冒充更新源: 能真的"收到新版本"(status=has_update)。
+
+    这条覆盖的是打包后的程序实际会走的那条路: 测速 -> 取清单 -> 比对本地版本。
+    """
+    import json
+    payload = json.dumps({"version": "9.9", "sha256": "0" * 64,
+                          "download_url": "http://127.0.0.1/x.zip",
+                          "release_date": "2026-10-11",
+                          "release_notes": "假清单", "min_version": "1.0"},
+                         ensure_ascii=False).encode("utf-8")
+    seen = []
+    port, shutdown = _serve_manifest(payload, seen)
+    try:
+        res = updater.check_for_update(_local_cfg(port), current="1.7")
+        assert res.status == "has_update", res.message
+        assert res.info.version == "9.9"
+        assert "9.9" in res.message
+        assert seen and any("version.json" in p for p in seen), seen
+        # 同一份清单, 本地版本更高时必须是"已是最新"(不能瞎提示)
+        res2 = updater.check_for_update(_local_cfg(port), current="9.9")
+        assert res2.status == "up_to_date", res2.message
+    finally:
+        shutdown()
+
+
+def test_check_for_update_reports_error_when_source_is_down():
+    """更新源连不上 -> error(界面不打扰用户, 但要记日志), 绝不能抛异常崩掉检查"""
+    res = updater.check_for_update(_local_cfg(1), current="1.7")   # 1 端口没人听
+    assert res.status == "error", res.message
