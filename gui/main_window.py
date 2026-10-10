@@ -994,8 +994,11 @@ class UpdateDownloadThread(QThread):
             updater.validate_new_exe(new_exe)
             # ★ 把**正在运行的 exe 名**交给替换脚本(F3): 不然它只能靠"目录里字母序
             #   第一个 .exe"猜, 目录里多一个 exe 就会换错文件
+            # ★ 顺带把本进程的一次性解压目录交出去(onefile 的 sys._MEIPASS): 我们马上
+            #   要 os._exit(0), 跳过 bootloader 的清理, 不交就每更新一次漏 400MB
             bat = updater.generate_update_bat(
-                DATA_DIR, os.getpid(), os.path.basename(sys.executable))
+                DATA_DIR, os.getpid(), os.path.basename(sys.executable),
+                temp_dir=getattr(sys, "_MEIPASS", ""))
             self.done.emit(bat, "")
         except Exception as e:
             self.done.emit("", f"下载/准备更新失败: {e}")

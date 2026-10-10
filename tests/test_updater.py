@@ -446,6 +446,10 @@ def test_generate_update_bat_structure(tmp_path):
     #   测试在这种环境下恰好捕捉不到它(退回去照样全绿), 所以在这里显式钉住。
     assert "timeout.exe" not in text, "等待退回 timeout 了 —— 重定向下等待为 0 秒"
     assert r'"%SYS%\ping.exe"' in text, "没有走 ping 计时"
+    # ★ 变量展开后紧跟 \" 的写法: 变量为空时展开成 "\" 会被 cmd 当成转义引号,
+    #   整行判定 "The syntax of the command is incorrect." → 整个更新中止(实测 rc=255)
+    trap = [ln.strip() for ln in text.splitlines() if '%\\"' in ln]
+    assert not trap, f'这些行有 "%VAR%\\" 陷阱(空变量时 bat 会中止): {trap}'
     # ★ chcp 必须紧跟 @echo off: 切换代码页之前出现中文会被按旧代码页读乱码
     assert lines[0] == "@echo off" and lines[1].startswith("chcp 65001"), \
         f"chcp 位置不对: {lines[:2]}"
@@ -700,3 +704,78 @@ def test_update_bat_keeps_backup_on_success(tmp_path):
     assert not (app / "_update_download.exe").exists(), "残渣没清掉"
     assert not (app / "_update_target.txt").exists()
     assert not os.path.exists(bat), "替换脚本没有自删"
+
+
+# ── 一次性解压目录(_MEI*)的清理: 不修就每更新一次漏 400MB ──
+
+def test_tempdir_marker_only_for_mei_dirs(tmp_path):
+    """只给"名字确实像 _MEI*"的目录写标记 —— 这个内容会被脚本拿去 rd /s /q"""
+    mei = tmp_path / "_MEI123456"
+    mei.mkdir()
+    p = updater.write_tempdir_marker(str(tmp_path), str(mei))
+    assert p and open(p, encoding="utf-8").read() == str(mei)
+    # 不是 _MEI* / 不存在 / 空 —— 一律不写(宁可留下临时目录, 也不给脚本一个可删的真实路径)
+    for bad in (str(tmp_path), str(tmp_path / "不存在"), "", None):
+        os.path.exists(os.path.join(str(tmp_path), updater.TEMPDIR_MARKER)) and \
+            os.remove(os.path.join(str(tmp_path), updater.TEMPDIR_MARKER))
+        assert updater.write_tempdir_marker(str(tmp_path), bad) == "", bad
+
+
+def test_update_bat_cleans_old_extraction_dir_safely(tmp_path):
+    """bat 必须收掉旧进程的一次性解压目录, 但**必须带 _MEI 校验** —— 标记文件的内容
+    会直接进 rd /s /q, 没有校验就等于"文件写什么就删什么"。"""
+    app = tmp_path / "app"
+    app.mkdir()
+    (app / "AutoTest.exe").write_bytes(b"MZ")
+    mei = tmp_path / "_MEI999"
+    mei.mkdir()
+    bat = updater.generate_update_bat(str(app), pid=1, exe_name="AutoTest.exe",
+                                      temp_dir=str(mei))
+    text = open(bat, encoding="utf-8").read()
+    assert 'set /p OLDTMP=<"_update_tempdir.txt"' in text, "没有读解压目录标记"
+    assert '%OLDTMP:_MEI=%' in text, "缺少 _MEI 校验 —— 标记内容会被无脑删除"
+    assert 'rd /s /q "%OLDTMP%"' in text
+    # 清理阶段要连标记文件一起删
+    assert 'del /f /q "_update_tempdir.txt"' in text
+    # 目标名标记的写法不能被顶掉
+    assert 'set /p EXE_NAME=<"_update_target.txt"' in text
+
+
+@WIN_ONLY
+def test_update_bat_deletes_old_extraction_dir_but_nothing_else(tmp_path):
+    """真跑一遍: 标记指向 _MEI* 目录 -> 删掉; 指向**普通目录** -> 一个字节都不动。
+
+    标记文件的内容会被脚本拿去 rd /s /q —— 这是整个更新流程里唯一"按文件内容删目录"
+    的地方, 所以必须有名字校验兜底(F2 同源的谨慎)。
+    """
+    cands = _instant_exit_exes()
+    if not cands:
+        pytest.skip("找不到替身程序")
+    app = tmp_path / "app"
+    app.mkdir()
+    (app / "AutoTest.exe").write_bytes(b"MZ-marker")
+
+    # (1) 指向 _MEI* 目录 -> 应被删除
+    mei = tmp_path / "_MEIfake"
+    (mei / "sub").mkdir(parents=True)
+    (mei / "sub" / "x.dll").write_bytes(b"x" * 1024)
+    bat = updater.generate_update_bat(str(app), pid=DEAD_PID,
+                                      exe_name="AutoTest.exe", probe_seconds=1,
+                                      temp_dir=str(mei))
+    assert (app / updater.TEMPDIR_MARKER).exists()
+    _run_bat(app, bat)
+    assert not mei.exists(), "旧进程的一次性解压目录没被清掉(每次更新漏 400MB)"
+
+    # (2) 指向普通目录 -> 必须原封不动(名字里没有 _MEI)
+    keep = tmp_path / "我的资料"
+    keep.mkdir()
+    (keep / "别删我.txt").write_text("重要", encoding="utf-8")
+    bat2 = updater.generate_update_bat(str(app), pid=DEAD_PID,
+                                       exe_name="AutoTest.exe", probe_seconds=1,
+                                       temp_dir=str(keep))
+    # write_tempdir_marker 本身就会拒写 —— 手动放一个假的标记文件模拟"被人塞了路径"
+    open(app / updater.TEMPDIR_MARKER, "w", encoding="utf-8",
+         newline="\r\n").write(str(keep))
+    _run_bat(app, bat2)
+    assert keep.exists() and (keep / "别删我.txt").exists(), \
+        "标记文件里的普通目录被删了 —— 名字校验形同虚设"

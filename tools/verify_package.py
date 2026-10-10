@@ -46,6 +46,48 @@ def _static_checks(exe):
     return bad
 
 
+def _mei_dirs():
+    """%TEMP% 下 PyInstaller 一次性解压目录(_MEI*)的名字集合"""
+    import tempfile
+    try:
+        return {n for n in os.listdir(tempfile.gettempdir())
+                if n.startswith("_MEI")}
+    except OSError:
+        return set()
+
+
+def _clean_mei_leftovers(before):
+    """删掉**本次启动新产生**的 _MEI* 解压目录; 返回 (释放字节, 残留名字)。
+
+    ★ 为什么必须自己收: onefile 每次启动都把约 400MB 载荷解压到 %TEMP%\\_MEIxxxx,
+      正常退出时 bootloader 会清掉 —— 但**硬杀**(taskkill /F, 本脚本就是这么收尾的)
+      跳过清理。实测: 两天里攒了 6 个 403MB 的目录, 合计 2.36GB。
+    ★ 只删"启动前不存在 + 里面有本程序打进包的 VERSION"的: 别的 PyInstaller 程序
+      也叫 _MEI*, 一律不碰。杀完句柄释放有延迟, 所以重试几次。
+    """
+    import shutil
+    import tempfile
+    import time
+    root = tempfile.gettempdir()
+    freed, left = 0, []
+    for name in sorted(_mei_dirs() - before):
+        p = os.path.join(root, name)
+        if not os.path.isfile(os.path.join(p, "VERSION")):
+            left.append(f"{name}(不是本程序, 未删)")
+            continue
+        size = sum(os.path.getsize(os.path.join(b, f))
+                   for b, _d, fs in os.walk(p) for f in fs)
+        for _ in range(5):
+            shutil.rmtree(p, ignore_errors=True)
+            if not os.path.exists(p):
+                freed += size
+                break
+            time.sleep(0.5)
+        else:
+            left.append(f"{name}(删不掉, 句柄未释放)")
+    return freed, left
+
+
 def _launch_check(exe, app_dir, wait=_LAUNCH_WAIT):
     """offscreen 真启动一次: 活过 wait 秒 = 初始化没问题(缺 DLL 会当场崩)。
 
@@ -54,6 +96,7 @@ def _launch_check(exe, app_dir, wait=_LAUNCH_WAIT):
     print(f"② 启动验证(offscreen, 最多等 {wait}s, onefile 首次解压会慢)...")
     env = dict(os.environ)
     env["QT_QPA_PLATFORM"] = "offscreen"
+    mei_before = _mei_dirs()          # 收尾时要认准"本次新增"的解压目录
     try:
         proc = subprocess.Popen([exe], cwd=app_dir, env=env,
                                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
@@ -85,6 +128,12 @@ def _launch_check(exe, app_dir, wait=_LAUNCH_WAIT):
         print("   OK 进程稳定运行, 已结束(含子进程)")
         print(f"   {'OK' if seeded else '[WARN]'} 首次铺资源(config/config.yaml): "
               + ("已生成" if seeded else "未见生成(可能本就存在)"))
+        freed, left = _clean_mei_leftovers(mei_before)
+        if freed:
+            print(f"   OK 已清理本次启动的一次性解压目录(释放 "
+                  f"{freed / 1048576:.0f}MB)")
+        for x in left:
+            print(f"   [WARN] %TEMP% 残留: {x}")
         return [], seeded
 
     out = b""

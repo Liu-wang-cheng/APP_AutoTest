@@ -460,6 +460,8 @@ def validate_new_exe(path):
 
 #: 传给替换脚本的「目标程序名」标记文件(见 write_target_marker / generate_update_bat)
 TARGET_MARKER = "_update_target.txt"
+#: 传给替换脚本的「本进程一次性解压目录」标记(见 write_tempdir_marker)
+TEMPDIR_MARKER = "_update_tempdir.txt"
 #: 目标名里**绝不能有**的字符: 这个名字会被 cmd 再解析一次(% 会二次展开, 引号/
 #: 重定向/管道符能改变命令结构) —— 遇到这类名字就不写标记文件, 让 bat 走"唯一候选"
 #: 兜底(并因此拒绝在有多候选时动手), 绝不冒险把名字拼进命令行。
@@ -490,7 +492,34 @@ def write_target_marker(app_dir, exe_name):
     return path
 
 
-def generate_update_bat(app_dir, pid, exe_name=None, probe_seconds=8):
+def write_tempdir_marker(app_dir, temp_dir):
+    """把**本进程的一次性解压目录**(onefile 的 sys._MEIPASS)写给替换脚本; 写不了返回 ""。
+
+    ★ 为什么需要它: onefile 每次启动都把约 400MB 载荷解压到 `%TEMP%\\_MEIxxxx`, 正常
+      退出时 bootloader 会清掉 —— 而**自动更新走的正是 `os._exit(0)`**, 跳过清理,
+      于是每更新一次就漏 400MB(实测: 两天攒到 2.36GB)。
+    ★ 只写"名字确实像 _MEI* 的目录": 脚本那边还会再校验一次, 双保险 —— 这个文件的内容
+      会被脚本拿去 `rd /s /q`, 绝不允许多删别的东西。
+    """
+    d = str(temp_dir or "").strip()
+    if not d or not os.path.isdir(d):
+        return ""
+    if not os.path.basename(os.path.normpath(d)).startswith("_MEI"):
+        return ""
+    if set(d) & _MARKER_BAD_CHARS:
+        return ""
+    path = os.path.join(os.path.abspath(app_dir), TEMPDIR_MARKER)
+    try:
+        with open(path, "w", encoding="utf-8", newline="\r\n") as f:
+            f.write(d)
+    except OSError as e:
+        log.warning(f"[更新] 写解压目录标记失败(将留下临时目录): {e}")
+        return ""
+    return path
+
+
+def generate_update_bat(app_dir, pid, exe_name=None, probe_seconds=8,
+                        temp_dir=None):
     """生成单文件版自替换 bat, 返回 bat 路径(写在 app_dir 下)。
 
     流程: 等 PID 退出 -> 旧 exe 改名 .bak(原子, 被锁也能成功) -> 复制新 exe ->
@@ -531,6 +560,9 @@ def generate_update_bat(app_dir, pid, exe_name=None, probe_seconds=8):
     marker = write_target_marker(app_dir, exe_name) if exe_name else ""
     if not marker:
         log.warning("[更新] 未能写下目标程序名, 替换脚本将按「目录里唯一的 .exe」匹配")
+    if temp_dir is None:
+        temp_dir = getattr(sys, "_MEIPASS", "")     # onefile 的一次性解压目录
+    write_tempdir_marker(app_dir, temp_dir)
     # ping -n N 用时约 N-1 秒(第一次立刻发包), 所以想等 N 秒要给 N+1
     probe_pings = max(2, int(probe_seconds) + 1)
     bat = f"""@echo off
@@ -570,6 +602,22 @@ if %errorlevel% equ 0 (
 )
 echo [OK] 原进程已退出
 "%SYS%\\ping.exe" -n 3 127.0.0.1 >nul 2>&1
+
+REM ★ 原进程已退出 -> 它的一次性解压目录(onefile 约 400MB)随之作废, 顺手收掉。
+REM   旧版本走的是 os._exit(0)(为了立刻释放 DLL 句柄), 这会跳过 bootloader 自己的
+REM   清理, 不收就每更新一次漏 400MB(实测两天攒到 2.36GB)。
+REM   两道保险: 标记文件只由本程序写, 且这里再验一次"名字里必须带 _MEI"。
+REM ★ 逐行 goto 而不是把三个条件串成一行: 条件链会**整行解析**, 而空变量展开出的
+REM   "%OLDTMP%\" 会被 cmd 当成被转义的引号 -> "The syntax of the command is
+REM   incorrect."(实测 rc=255, 整个更新中止)。逐行时每行只在执行到才展开, 安全的
+REM   前提是前面已经确认它非空。if exist 对目录同样成立, 不需要尾随反斜杠。
+set "OLDTMP="
+if exist "_update_tempdir.txt" set /p OLDTMP=<"_update_tempdir.txt"
+if not defined OLDTMP goto :skip_tmpclean
+if "%OLDTMP%"=="%OLDTMP:_MEI=%" goto :skip_tmpclean
+if not exist "%OLDTMP%" goto :skip_tmpclean
+rd /s /q "%OLDTMP%"
+:skip_tmpclean
 echo.
 
 if not exist "_update_download.exe" (
@@ -671,6 +719,7 @@ REM 删它由新版本自己跑稳之后做(core.bootstrap.cleanup_old_backup)
 :cleanup
 if exist "_update_download.exe" del /f /q "_update_download.exe"
 if exist "{TARGET_MARKER}" del /f /q "{TARGET_MARKER}"
+if exist "{TEMPDIR_MARKER}" del /f /q "{TEMPDIR_MARKER}"
 (goto) 2>nul & del /f /q "%~f0"
 """
     bat_path = os.path.join(os.path.abspath(app_dir), "_update.bat")

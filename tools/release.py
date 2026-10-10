@@ -25,6 +25,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import urllib.error
 import urllib.request
 from urllib.parse import quote
@@ -144,6 +145,31 @@ def upload_via_gh(repo, version, asset, exe_path, notes):
     return release_download_url(repo, version, asset)
 
 
+def run_post_release_verify(version, deep=False):
+    """发版最后一步: 跑"用户那条链路"的校验; 返回 (是否全过, 输出文本)。
+
+    ★ 为什么接进发版流程: 发布脚本只保证"东西传上去了", 而用户能不能按 version.json
+      拿到**内容正确**的包是另一回事(资产名对不上、CDN 还没生效、sha 写错……)。
+      2026-10-09 就出现过"Release 建好了、资产还没传完 68 分钟"的状态 —— 那期间
+      version.json 若已生效, 用户点更新就是 404。
+    """
+    cmds = [[sys.executable, os.path.join(ROOT, "tools", "verify_release.py"),
+             "--version", version]]
+    if deep:
+        cmds.append([sys.executable,
+                     os.path.join(ROOT, "tools", "verify_update_download.py")])
+    outs, ok = [], True
+    for cmd in cmds:
+        r = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True,
+                           timeout=3600)
+        outs.append(f"$ {' '.join(os.path.basename(c) for c in cmd)}\n"
+                    f"{r.stdout.strip()}")
+        if r.returncode != 0:
+            ok = False
+            outs[-1] += f"\n{(r.stderr or '').strip()}"
+    return ok, "\n".join(outs)
+
+
 def compute_sha256(path):
     h = hashlib.sha256()
     with open(path, "rb") as f:
@@ -208,8 +234,28 @@ def create_release(repo, token, version, notes, branch):
         return json.load(r)["id"]
 
 
-def upload_asset(repo, token, release_id, path, name):
-    """上传 asset(先删同名旧文件, 便于重发); 返回下载 URL。"""
+def _upload_stream(url, token, path, timeout=600):
+    """流式上传: 把**打开的文件对象**交给 urllib, 由它按块发送。
+
+    ★ 不能 `open(path,'rb').read()` 一次性读进内存再 POST: 包有 208MB, 发版进程 RSS
+      实测 233MB, 而且断在 90% 就得从头再来。传文件对象时 http.client 会用
+      os.fstat 算 Content-Length 并分块写 socket, 内存里只有几 KB。
+    """
+    with open(path, "rb") as f:
+        req = urllib.request.Request(
+            url, data=f, method="POST",
+            headers={"Authorization": f"token {token}", "User-Agent": UA,
+                     "Content-Type": "application/octet-stream",
+                     "Accept": "application/vnd.github+json"})
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return json.load(r)["browser_download_url"]
+
+
+def upload_asset(repo, token, release_id, path, name, attempts=3):
+    """上传 asset(先删同名旧文件, 便于重发); 返回下载 URL。
+
+    ★ 带重试: 208MB 传几分钟, 网络抖一下就白传 —— 失败重来比让人手工重发便宜。
+    """
     with _request_json(f"{API}/repos/{repo}/releases/{release_id}/assets",
                        token) as r:
         assets = json.load(r)
@@ -220,11 +266,19 @@ def upload_asset(repo, token, release_id, path, name):
                 headers={"Authorization": f"token {token}", "User-Agent": UA})
             urllib.request.urlopen(req, timeout=(10, 60))
             print(f"  [DEL] 旧 asset {name} 已删除")
-    data = open(path, "rb").read()
-    with _request_json(
-            f"{UPLOAD}/repos/{repo}/releases/{release_id}/assets?name={quote(name)}",
-            token, "POST", data, ctype="application/octet-stream") as r:
-        return json.load(r)["browser_download_url"]
+    url = (f"{UPLOAD}/repos/{repo}/releases/{release_id}/assets"
+           f"?name={quote(name)}")
+    last = None
+    for i in range(1, max(1, attempts) + 1):
+        try:
+            return _upload_stream(url, token, path)
+        except Exception as e:
+            last = e
+            print(f"  [RETRY {i}/{attempts}] 上传失败: "
+                  f"{type(e).__name__}: {e}")
+            if i < attempts:
+                time.sleep(2 * i)
+    raise RuntimeError(f"上传 {name} 连续 {attempts} 次失败: {last}")
 
 
 def update_version_json_and_tag(repo, version, sha256, download_url, notes):
@@ -279,13 +333,24 @@ def ensure_clean_tree():
 # ── 主流程 ──
 
 def main(argv=None):
+    # ★ 输出重定向到文件时 stdout 是**块缓冲**: 208MB 要传几分钟, 日志一直空白, 看着
+    #   像卡死(实测被骗过)。改行缓冲, 进度实时可见。
+    try:
+        sys.stdout.reconfigure(line_buffering=True)
+    except Exception:
+        pass
     ap = argparse.ArgumentParser(description="打包并发布一个版本")
     ap.add_argument("--version", required=True, help="要发布的版本号, 如 1.1")
     ap.add_argument("--dist", default=os.path.join(ROOT, "dist"),
                     help="产物目录(内含 AutoTest.exe, 默认 dist/)")
-    ap.add_argument("--asset", default="", help="asset 文件名(默认 AutoTest_v{ver}.zip)")
+    ap.add_argument("--asset", default="",
+                    help="asset 文件名(默认 AutoTest_v{ver}.exe —— onefile 发布物就是 exe)")
     ap.add_argument("--notes", default="", help="更新说明(默认取 CHANGELOG 该节)")
     ap.add_argument("--min-version", default="1.0", help="低于此版本强制更新")
+    ap.add_argument("--verify", action=argparse.BooleanOptionalAction, default=True,
+                    help="发布后校验用户那条链路(默认开; --no-verify 关掉)")
+    ap.add_argument("--deep", action="store_true",
+                    help="连「整包真下一遍」也校验(几分钟, 需网络)")
     ap.add_argument("--repo", default="", help="owner/repo(默认从 git remote 解析)")
     ap.add_argument("--dry-run", action="store_true", help="只打印将做什么")
     args = ap.parse_args(argv)
@@ -344,6 +409,15 @@ def main(argv=None):
         print("[4/4] 更新 version.json + tag")
         update_version_json_and_tag(repo, args.version, compute_sha256(exe_path),
                                     download_url, notes)
+        if args.verify:
+            print("[5/5] 校验用户那条链路(取清单 -> sha256 -> 资产 -> MZ 头)...")
+            ok, out = run_post_release_verify(args.version, deep=args.deep)
+            print(out)
+            if not ok:
+                print("\n[ERROR] 发布后校验未通过! version.json 可能已生效而资产不可用"
+                      "(用户点更新就是 404)。\n        请立刻检查 Release 资产; 必要时"
+                      "先回退 version.json 再重新发布。")
+                return 1
         print("\n完成。已装旧版的用户会在下次检查更新时收到这个版本。")
     else:
         print("[4/4] [dry-run] 将写 version.json 并 push master + tag")

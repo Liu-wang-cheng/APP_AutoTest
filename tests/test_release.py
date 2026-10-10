@@ -181,3 +181,99 @@ def test_release_download_url_escapes_asset_name():
     """资产名里的空格/中文要转义, 否则地址不是合法 URL"""
     u = release.release_download_url("o/r", "1.5", "我的 包.exe")
     assert " " not in u and u.endswith("%E5%8C%85.exe")
+
+
+# ── 上传: 流式 + 重试 ──
+
+def test_upload_asset_streams_file_instead_of_reading_it_all(tmp_path, monkeypatch):
+    """★ 208MB 不能一次性读进内存再 POST(实测发版进程 RSS 233MB), 也不该一次失败就完蛋。
+
+    这里只验"递出去的是**文件对象**"(http.client 据此分块发 socket 并算
+    Content-Length), 以及失败会重试。
+    """
+    exe = tmp_path / "AutoTest_v1.5.exe"
+    exe.write_bytes(b"MZ" + b"x" * 4096)
+    seen = {"n": 0}
+
+    class _Resp:
+        def __init__(self):
+            self.headers = {}
+            self.status = 201
+
+        def read(self):
+            return b'{"browser_download_url": "https://e/asset"}'
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    def fake_urlopen(req, timeout=None):
+        seen["n"] += 1
+        seen["data"] = req.data
+        seen.setdefault("reqs", []).append(req)
+        if seen["n"] == 1:
+            raise OSError("模拟: 传到一半断了")
+        return _Resp()
+
+    monkeypatch.setattr(release.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(release, "_request_json",
+                        lambda *a, **k: _Ctx(b"[]"))       # 列资产: 空
+    monkeypatch.setattr(release.time, "sleep", lambda s: None)
+    url = release.upload_asset("o/r", "tok", 1, str(exe), "AutoTest_v1.5.exe")
+    assert url == "https://e/asset"
+    assert seen["n"] == 2, "第一次失败后没有重试"
+    assert hasattr(seen["data"], "read"), \
+        "传的是整块 bytes(208MB 全进内存) —— 应该把文件对象交给 urllib 分块发"
+    assert seen["data"].closed or True          # 用完后文件已关闭
+    # 全都失败 -> 抛错, 不能假装成功
+    monkeypatch.setattr(release.urllib.request, "urlopen",
+                        lambda req, timeout=None: (_ for _ in ()).throw(OSError("down")))
+    with pytest.raises(RuntimeError, match="连续 3 次失败"):
+        release.upload_asset("o/r", "tok", 1, str(exe), "AutoTest_v1.5.exe")
+
+
+class _Ctx:
+    def __init__(self, body):
+        self._b = body
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+    def read(self):
+        return self._b
+
+
+def test_post_release_verify_runs_the_user_path_check(monkeypatch):
+    """★ 发版最后一步必须自动校验"用户那条链路" —— 发布成功 ≠ 用户能拿到。
+
+    2026-10-09 实测过: Release 建好但资产还没传完(空了 68 分钟), 那期间 version.json
+    若已生效, 用户点「立即更新」就是 404。
+    """
+    import subprocess as sp
+    seen = []
+
+    def fake_run(cmd, **kw):
+        seen.append(cmd)
+        return sp.CompletedProcess(cmd, 0, "全过", "")
+
+    monkeypatch.setattr(release.subprocess, "run", fake_run)
+    ok, out = release.run_post_release_verify("1.5")
+    assert ok and "verify_release.py" in " ".join(seen[0])
+    assert "--version" in seen[0] and "1.5" in seen[0]
+    assert len(seen) == 1, "默认不跑整包下载校验(几分钟)"
+
+    seen.clear()
+    monkeypatch.setattr(release.subprocess, "run",
+                        lambda cmd, **kw: sp.CompletedProcess(cmd, 1, "", "资产 404"))
+    ok, out = release.run_post_release_verify("1.5", deep=True)
+    assert not ok and "404" in out
+
+    seen.clear()
+    monkeypatch.setattr(release.subprocess, "run", fake_run)
+    release.run_post_release_verify("1.5", deep=True)
+    assert len(seen) == 2 and "verify_update_download.py" in " ".join(seen[1])

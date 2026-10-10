@@ -27,7 +27,10 @@ echo [2/4] 跑测试(打包前先确认代码是好的)...
 
 echo [3/4] 清理旧产物...
 if exist build rmdir /s /q build
-if exist dist rmdir /s /q dist
+REM ★ 只删**程序文件**, 绝不把整个 dist\ 目录删掉: 在 dist\ 里跑一次打包版就会生成
+REM   config\ Test_cases\ Test_img\ backups\ reports\ —— 那是使用者的数据(可能填过
+REM   设备/APP 配置), 整目录删除会连带毁掉(实测踩过: 构建前得先把它们挪走)。
+if exist "dist\AutoTest.exe" del /f /q "dist\AutoTest.exe"
 
 echo [4/4] PyInstaller 打包(onefile, 首次约需几分钟)...
 "%PY%" -m PyInstaller AutoTest.spec --noconfirm --distpath dist --workpath build\pyi || exit /b 1

@@ -597,11 +597,12 @@ def test_cleanup_update_leftovers_at_startup_is_conservative(tmp_path):
     (tmp_path / "_update_download.exe").write_bytes(b"partial")
     (tmp_path / "_update_download.exe.part").write_bytes(b"half")
     (tmp_path / "_update_target.txt").write_text("AutoTest.exe", encoding="utf-8")
+    (tmp_path / "_update_tempdir.txt").write_text("C:/Temp/_MEI1", encoding="utf-8")
     (tmp_path / "AutoTest.exe.bak").write_bytes(b"old")
     (tmp_path / "_update.bat").write_bytes(b"@echo off")
     cleaned = bootstrap.cleanup_update_leftovers(app_dir=str(tmp_path))
     for gone in ("_update_download.exe", "_update_download.exe.part",
-                 "_update_target.txt"):
+                 "_update_target.txt", "_update_tempdir.txt"):
         assert gone in cleaned and not (tmp_path / gone).exists(), gone
     assert (tmp_path / "AutoTest.exe.bak").exists(), "启动就删了唯一的退路"
     assert (tmp_path / "_update.bat").exists(), "删了正在运行的替换脚本"
@@ -758,10 +759,13 @@ def test_download_worker_emits_bat(monkeypatch, tmp_path):
     monkeypatch.setattr(updater, "validate_new_exe", lambda p: p)
     seen_exe = {}
 
-    def fake_bat(app, pid, exe_name=None):
+    def fake_bat(app, pid, exe_name=None, temp_dir=None):
         # ★ F3 的接线: 必须把"正在运行的那个 exe 名"交给替换脚本, 否则它只能靠
         #   字母序猜目标, 目录里多一个 exe 就换错文件
         seen_exe["name"] = exe_name
+        # ★ 也要把一次性解压目录交出去(onefile 的 _MEIPASS): 我们随后 os._exit(0),
+        #   跳过 bootloader 的清理, 不交就每更新一次漏 400MB
+        seen_exe["temp_dir"] = temp_dir
         return str(tmp_path / "_update.bat")
 
     monkeypatch.setattr(updater, "generate_update_bat", fake_bat)
@@ -778,6 +782,8 @@ def test_download_worker_emits_bat(monkeypatch, tmp_path):
     th.run()      # 直接调 run(QThread.start 会真开线程, 时序不好控制)
     assert results == [(str(tmp_path / "_update.bat"), "")], results
     assert seen_exe.get("name") == os.path.basename(sys.executable), seen_exe
+    # temp_dir 要传(getattr 取的 sys._MEIPASS, 开发环境没有就是 ""), 不传就漏 400MB
+    assert seen_exe.get("temp_dir") == getattr(sys, "_MEIPASS", ""), seen_exe
 
 
 def test_download_worker_reports_sha_mismatch(monkeypatch, tmp_path):
@@ -836,3 +842,20 @@ def test_all_bat_files_use_crlf():
         if data.count(b"\n") != data.count(b"\r\n"):
             bad.append(os.path.basename(p))
     assert not bad, f"这些 .bat 不是 CRLF 换行(cmd 会把命令切碎): {bad}"
+
+
+def test_build_bat_only_removes_the_exe_not_the_whole_dist():
+    r"""★ build.bat 只许删程序文件, 不许删整个 dist\。
+
+    在 dist\ 里跑一次打包版就会生成 config\ Test_cases\ Test_img\ backups\ reports\
+    —— 那是使用者的数据(可能填过设备/APP 配置)。原来那句 `rmdir /s /q dist` 会连带
+    删掉(实测: 2026-10-09 构建前得先手动把这些挪走才敢跑)。build\ 是 PyInstaller
+    中间产物, 删它没问题。
+    """
+    text = open(os.path.join(ROOT, "build.bat"), encoding="utf-8",
+                errors="replace").read().lower()
+    for bad in ("rmdir /s /q dist", "rd /s /q dist", 'rmdir /s /q "dist"'):
+        assert bad not in text, f"build.bat 又在整目录删 dist 了: {bad}"
+    # ★ 反斜杠要用 raw 字符串: "dist\autotest.exe" 里的 \a 会被当成响铃字符(踩过)
+    assert r"dist\autotest.exe" in text, r"没有删旧的 dist\AutoTest.exe"
+    assert r"rmdir /s /q build" in text, r"build\ 中间产物该删(可再生产)"
