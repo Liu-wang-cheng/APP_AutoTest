@@ -314,14 +314,20 @@ def _upload_stream(url, token, path, timeout=600):
     """流式上传: 把**打开的文件对象**交给 urllib, 由它按块发送。
 
     ★ 不能 `open(path,'rb').read()` 一次性读进内存再 POST: 包有 208MB, 发版进程 RSS
-      实测 233MB, 而且断在 90% 就得从头再来。传文件对象时 http.client 会用
-      os.fstat 算 Content-Length 并分块写 socket, 内存里只有几 KB。
+      实测 233MB, 而且断在 90% 就得从头再来。传文件对象时 http.client 会分块写 socket,
+      内存里只有几 KB。
+    ★ **必须显式带 Content-Length**: 少了它 GitHub 直接回
+      `400 {"message":"Bad Content-Length"}`(实测 2026-10-10, 发 v1.5 时被拒了三次)。
+      urllib 对文件对象不一定替你算(算不出就改用 chunked, 而上传接口不接受 chunked),
+      所以这里自己按文件大小写上 —— 试出来的, 不是推出来的。
     """
+    size = os.path.getsize(path)
     with open(path, "rb") as f:
         req = urllib.request.Request(
             url, data=f, method="POST",
             headers={"Authorization": f"token {token}", "User-Agent": UA,
                      "Content-Type": "application/octet-stream",
+                     "Content-Length": str(size),
                      "Accept": "application/vnd.github+json"})
         with urllib.request.urlopen(req, timeout=timeout) as r:
             return json.load(r)["browser_download_url"]

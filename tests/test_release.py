@@ -245,7 +245,12 @@ def test_upload_asset_streams_file_instead_of_reading_it_all(tmp_path, monkeypat
     assert seen["n"] == 2, "第一次失败后没有重试"
     assert hasattr(seen["data"], "read"), \
         "传的是整块 bytes(208MB 全进内存) —— 应该把文件对象交给 urllib 分块发"
-    assert seen["data"].closed or True          # 用完后文件已关闭
+    # ★ 必须**显式**带 Content-Length: 少了它 GitHub 直接回 400 Bad Content-Length
+    #   (实测 2026-10-10: 发 v1.5 时被拒了三次才发现)。当时没有这条断言, 所以没抓住 ——
+    #   单元测试 mock 掉了 urlopen, 只有真接口才知道它要这个头。
+    req = seen["reqs"][0]
+    assert req.get_header("Content-length") == str(os.path.getsize(exe)), \
+        f"上传没带 Content-Length(GitHub 会 400): {req.headers}"
     # 全都失败 -> 抛错, 不能假装成功
     monkeypatch.setattr(release.urllib.request, "urlopen",
                         lambda req, timeout=None: (_ for _ in ()).throw(OSError("down")))
