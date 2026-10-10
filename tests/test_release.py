@@ -277,3 +277,118 @@ def test_post_release_verify_runs_the_user_path_check(monkeypatch):
     monkeypatch.setattr(release.subprocess, "run", fake_run)
     release.run_post_release_verify("1.5", deep=True)
     assert len(seen) == 2 and "verify_update_download.py" in " ".join(seen[1])
+
+
+def test_upload_via_gh_reuses_existing_release(tmp_path, monkeypatch):
+    """★ gh 分支遇到"Release 已存在"必须**复用**(upload --clobber), 不能像原来那样
+    直接 `gh release create` 撞死 —— API 分支对 422 是复用的, 两条路行为要一致。
+
+    (v1.4 发布前就出现过"Release 已存在、但一个资产都没有"的状态。)
+    """
+    import subprocess as sp
+    exe = tmp_path / "AutoTest.exe"
+    exe.write_bytes(b"MZ" + b"x" * 64)
+    calls, state = [], {"exists": False}
+
+    def fake_run(args, **kw):
+        calls.append(list(args))
+        rc = 0
+        if list(args[:3]) == ["gh", "release", "view"] and not state["exists"]:
+            rc = 1                      # view 找不到 -> Release 不存在
+        return sp.CompletedProcess(args, rc, "", "")
+
+    monkeypatch.setattr(release.subprocess, "run", fake_run)
+
+    release.upload_via_gh("o/r", "1.5", "AutoTest_v1.5.exe", str(exe), "说明")
+    verbs = [c[2] for c in calls if c[:2] == ["gh", "release"]]
+    assert verbs == ["view", "create"], verbs
+
+    calls.clear()
+    state["exists"] = True              # 第二次: Release 已经在了
+    release.upload_via_gh("o/r", "1.5", "AutoTest_v1.5.exe", str(exe), "说明")
+    verbs = [c[2] for c in calls if c[:2] == ["gh", "release"]]
+    assert verbs == ["view", "upload"], f"已存在的 Release 被 create 撞死了: {verbs}"
+    upload = [c for c in calls if c[:3] == ["gh", "release", "upload"]][0]
+    assert "--clobber" in upload, upload
+    # 上传的文件名必须是资产名(gh 拿文件名当资产名), 且与下载地址里的一致
+    files = [a for a in upload if str(a).lower().endswith(".exe")]
+    assert files and os.path.basename(files[0]) == "AutoTest_v1.5.exe", upload
+
+
+# ── 编排层: main() 的顺序与参数(纯函数测试覆盖不到的地方) ──
+
+def test_main_orchestration_order_and_wiring(tmp_path, monkeypatch, capsys):
+    """★ 把网络与 git 全替掉, 跑一遍 main() 的**编排**。
+
+    为什么单独测这个: 历史 bug 全落在这一层 —— `--dist` 默认值停在 onedir 时代拼出
+    不存在的路径(dry-run 发现不了, 真发一次才炸)、tag 与 Release 的先后顺序、
+    `create_release` 会自动建 tag 导致必须强推。纯函数测试一条都盖不到。
+    """
+    import subprocess as sp
+    exe = tmp_path / "AutoTest.exe"
+    exe.write_bytes(b"MZ" + b"x" * 2048)      # 小文件即可(真产物由 find_dist_exe 校验)
+    calls = []
+
+    monkeypatch.setattr(release, "check_version_consistency", lambda root, v: [])
+    dist_args = []
+    def fake_find_dist(d):
+        # ★ 盯住默认产物目录: 历史上 `--dist` 默认值停在 onedir 时代, 拼出
+        #   一个不存在的路径 —— dry-run 不报错, 真发一次才炸
+        dist_args.append(d)
+        return str(exe)
+    monkeypatch.setattr(release, "find_dist_exe", fake_find_dist)
+    monkeypatch.setattr(release, "load_changelog_section",
+                        lambda p, v: ("2026-10-10", "本次更新说明"))
+    monkeypatch.setattr(release, "ensure_clean_tree", lambda: None)
+    monkeypatch.setattr(release, "gh_available", lambda: False)      # 走 API 分支
+    monkeypatch.setattr(release, "get_token", lambda: "tok")
+    monkeypatch.setattr(release.subprocess, "run",
+                        lambda *a, **k: sp.CompletedProcess(a[0] if a else [], 0,
+                                                            "", ""))
+
+    def fake_create(repo, token, version, notes, branch):
+        calls.append(("create_release", repo, version, notes, branch))
+        return 7
+
+    def fake_upload(repo, token, rid, path, name):
+        calls.append(("upload_asset", repo, rid, os.path.basename(path), name))
+        return release.release_download_url(repo, version_, name)
+
+    def fake_version_json(repo, version, sha, url, notes):
+        calls.append(("version_json", repo, version, sha[:6], url))
+
+    def fake_verify(version, deep=False):
+        calls.append(("verify", version, deep))
+        return True, "全过"
+
+    version_ = "1.5"
+    monkeypatch.setattr(release, "create_release", fake_create)
+    monkeypatch.setattr(release, "upload_asset", fake_upload)
+    monkeypatch.setattr(release, "update_version_json_and_tag", fake_version_json)
+    monkeypatch.setattr(release, "run_post_release_verify", fake_verify)
+
+    rc = release.main(["--version", version_, "--repo", "o/r"])
+    assert rc == 0, capsys.readouterr().out
+    order = [c[0] for c in calls]
+    assert order == ["create_release", "upload_asset", "version_json", "verify"], order
+    assert calls[0][3] == "本次更新说明", calls[0]     # 说明取 CHANGELOG 该节
+    assert calls[1][3] == "AutoTest.exe", calls[1]     # 上传的就是产物
+    assert calls[1][4] == f"AutoTest_v{version_}.exe", calls[1]   # 资产名
+    assert calls[2][4].endswith(f"/v{version_}/AutoTest_v{version_}.exe"), calls[2]
+    assert calls[3][1] == version_ and calls[3][2] is False, calls[3]
+    assert dist_args == [os.path.join(release.ROOT, "dist")], dist_args
+    assert os.path.isdir(dist_args[0]), "默认产物目录不是个真实目录"
+
+    # --no-verify: 不发版后校验(dry-run 之外的逃生口)
+    calls.clear()
+    rc = release.main(["--version", version_, "--repo", "o/r", "--no-verify"])
+    assert rc == 0 and [c[0] for c in calls] == ["create_release", "upload_asset",
+                                                "version_json"], calls
+
+    # 校验不通过 -> 必须返回非 0(不能"报完成"却让用户拿到 404)
+    calls.clear()
+    monkeypatch.setattr(release, "run_post_release_verify",
+                        lambda v, deep=False: (False, "资产 404"))
+    rc = release.main(["--version", version_, "--repo", "o/r"])
+    out = capsys.readouterr().out
+    assert rc == 1 and "未通过" in out, out

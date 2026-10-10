@@ -132,13 +132,33 @@ def stage_asset_for_gh(exe_path, asset_name):
     return dst
 
 
+def _gh_release_exists(tag):
+    """该 tag 是否已有 Release(gh release view 的退出码即答案)"""
+    try:
+        r = subprocess.run(["gh", "release", "view", tag], cwd=ROOT,
+                           capture_output=True, text=True, timeout=60)
+        return r.returncode == 0
+    except Exception:
+        return False
+
+
 def upload_via_gh(repo, version, asset, exe_path, notes):
-    """用 gh CLI 建 Release 并上传资产; 返回下载地址(与 version.json 里写的一致)。"""
+    """用 gh CLI 建 Release 并上传资产; 返回下载地址(与 version.json 里写的一致)。
+
+    ★ 已存在的 Release 要**复用**而不是撞死: `gh release create` 遇到同名 tag 直接
+      报错退出, 而 API 分支对 422 是复用 —— 两条路行为必须一致(v1.4 发布时就遇到过
+      "Release 已存在、只是没资产"的情形)。
+    """
+    tag = f"v{version}"
     staged = stage_asset_for_gh(exe_path, asset)
     try:
-        subprocess.run(["gh", "release", "create", f"v{version}",
-                        "--target", "master", "--title", f"v{version}",
-                        "--notes", notes, staged], cwd=ROOT, check=True)
+        if _gh_release_exists(tag):
+            subprocess.run(["gh", "release", "upload", tag, staged, "--clobber"],
+                           cwd=ROOT, check=True)
+        else:
+            subprocess.run(["gh", "release", "create", tag, "--target", "master",
+                            "--title", tag, "--notes", notes, staged],
+                           cwd=ROOT, check=True)
     finally:
         if staged != exe_path:                 # 临时副本用完即删(208MB 别留着)
             shutil.rmtree(os.path.dirname(staged), ignore_errors=True)
