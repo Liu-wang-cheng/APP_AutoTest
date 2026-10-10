@@ -141,7 +141,7 @@ def _launch_check(exe, app_dir, wait=_LAUNCH_WAIT):
 
     同时确认"首次铺资源"生效: 启动后 exe 旁应有 config/(缺才补的默认文件)。
     """
-    print(f"② 启动验证(offscreen, 最多等 {wait}s, onefile 首次解压会慢)...")
+    print(f"③ 启动验证(offscreen, 最多等 {wait}s, onefile 首次解压会慢)...")
     env = dict(os.environ)
     env["QT_QPA_PLATFORM"] = "offscreen"
     mei_before = _mei_dirs()          # 收尾时要认准"本次新增"的解压目录
