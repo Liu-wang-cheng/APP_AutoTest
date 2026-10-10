@@ -13,12 +13,12 @@
 只读, 不改任何东西。返回码非 0 = 有项不通过。
 """
 import argparse
+import base64
 import hashlib
 import json
 import os
 import subprocess
 import sys
-import time
 import urllib.error
 import urllib.request
 
@@ -81,14 +81,27 @@ def main(argv=None):
     print(f"本地产物: {want_size} 字节, sha256 {want_sha[:16]}…")
     ok = True
 
-    # ① 清单(直连 + 破缓存)
-    url = (f"https://raw.githubusercontent.com/{repo}/{args.branch}/version.json"
-           f"?t={int(time.time())}")
+    # ① 清单: **走 GitHub API**(权威、无 CDN 缓存)。
+    #   ★ 教训(2026-10-10): 原来读 raw.githubusercontent + `?t=` 破缓存 —— 发布 v1.6 后
+    #     它仍返回上一版(v1.5), 差点把一次成功的发布判成失败。raw 是 CDN, 破缓存参数
+    #     对它的缓存键不一定起作用; API 带 token 读的是仓库真身。
+    url = f"https://api.github.com/repos/{repo}/contents/version.json?ref={args.branch}"
     try:
-        _r, body = _get(url, timeout=20)
-        data = json.loads(body.decode("utf-8"))
+        token = ""
+        try:
+            sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+            import release as _rel
+            token = _rel.get_token()
+        except Exception:
+            pass
+        hdr = dict(UA)
+        if token:
+            hdr["Authorization"] = f"token {token}"
+        _r, body = _get(url, extra=hdr, timeout=25)
+        data = json.loads(base64.b64decode(json.loads(body.decode("utf-8"))["content"]
+                                           ).decode("utf-8"))
     except Exception as e:
-        print(f"[FAIL] 取不到 version.json: {type(e).__name__}: {e}")
+        print(f"[FAIL] 取不到 version.json(API): {type(e).__name__}: {e}")
         return 1
     print(f"① 清单: version={data.get('version')} date={data.get('release_date')}")
     if data.get("version") != args.version:
