@@ -585,8 +585,21 @@ def test_update_bat_structure(tmp_path):
     app.mkdir()
     (app / "AutoTest.exe").write_bytes(b"MZ")
     bat = updater.generate_update_bat(str(app), pid=12345, exe_name="AutoTest.exe")
-    text = open(bat, encoding="utf-8").read()
+    raw = open(bat, "rb").read()
+    enc = f"cp{updater.oem_code_page()}"
+    # ★ 落盘编码: 按本机 OEM 代码页 + 无 BOM —— cmd 读它时用的就是同一套编码, 全程无需切换
+    assert b"\xef\xbb\xbf" not in raw[:3], "bat 不该带 UTF-8 BOM"
+    text = raw.decode(enc)                      # 解不出来 = cmd 那边也会读到非法字节
+    assert text.encode(enc) == raw, "bat 不是按本机 OEM 代码页落盘的(往返不一致)"
     lines = text.splitlines()
+    # ★ 不许再依赖 chcp 切代码页: 2026-10-11 实测, 中途切页会让 cmd 对后续行的解析错位,
+    #   偶发把中文注释行的 "REM " 吃掉当命令执行(用户弹窗里的 'not recognized' 报错),
+    #   而且是竞态 —— 同一份文件连跑 5 次出 0/0/1/0/0 条。
+    #   注意只查**命令行**(注释里正解释着为什么不能用它), 别把注释也误伤。
+    cmds = [ln.strip() for ln in lines
+            if not ln.strip().lower().startswith(("rem", "::"))]
+    assert not [c for c in cmds if c.lower().lstrip("@").startswith("chcp")], \
+        "bat 里有 chcp 命令: 中途切代码页会偶发吃掉后续行(见 write_bat_file 注释)"
     for must in (r'"%SYS%\tasklist.exe" /FI "PID eq 12345"',   # 等 PID 退出
                  r'ren "_internal" "_internal_old"',           # 旧载荷改名(不是复制!)
                  r'move "_update_extracted\_internal" "_internal"',  # 新载荷瞬时到位
@@ -602,7 +615,7 @@ def test_update_bat_structure(tmp_path):
         assert f"%SYS%\\{name}.exe" in text, f"{name} 没有走绝对路径"
     assert "timeout.exe" not in text, "等待退回 timeout 了(重定向下等待为 0 秒)"
     assert "\t" not in text and "\f" not in text
-    assert lines[0] == "@echo off" and lines[1].startswith("chcp 65001")
+    assert lines[0] == "@echo off"
     # echo 文本不许出现会被 cmd 当成命令结构的字符(半角括号是 v1.3 的死因)
     bad = [ln.strip() for ln in lines
            if ln.strip().lower().startswith("echo") and set(ln) & set("()&|<>^")]
@@ -612,7 +625,6 @@ def test_update_bat_structure(tmp_path):
     # 用户数据绝不出现在替换范围里
     for guarded in ("config.yaml", "Test_cases", "Test_preconditions", "Test_img"):
         assert guarded not in text, f"bat 里出现了用户数据路径: {guarded}"
-    raw = open(bat, "rb").read()
     assert b"\r\n" in raw and b"\n" not in raw.replace(b"\r\n", b"")
 
 

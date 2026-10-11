@@ -610,13 +610,14 @@ def generate_update_bat(app_dir, pid, exe_name=None, probe_seconds=8):
         log.warning("[更新] 未能写下目标程序名, 替换脚本将按 AutoTest.exe 兜底")
     probe_pings = max(2, int(probe_seconds) + 1)
     bat = f"""@echo off
-chcp 65001 >nul 2>&1
 title 正在更新 APP 自动化测试平台
 cd /d "%~dp0"
 
-REM ★ chcp 必须紧跟 @echo off: 本文件是 UTF-8, 而 cmd 是按**当前代码页**边读边解析的 ——
-REM   切换代码页之前出现中文, 就会被按旧代码页读成乱码。切换之后 %~dp0 的展开也才与
-REM   文件的 UTF-8 一致(中文安装路径靠这一点)。
+REM ★ 本文件按**本机 OEM 代码页**落盘(中文 Windows=GBK), 与 cmd 读它时用的代码页天生一致,
+REM   所以**不需要 chcp 切代码页**。★ 千万别在脚本里加 chcp: 2026-10-11 实测, 中途切页会让
+REM   cmd 对后续行的解析错位 —— 偶发把中文注释行的 "REM " 前缀吃掉、当成命令去执行, 弹窗里
+REM   冒出 "'xxx' is not recognized as an internal or external command", 而且**是竞态、时有时无**
+REM   (同一份文件连跑 5 次: 0/0/1/0/0 条), 理论上还可能吃掉真正的命令行。
 REM ★ 外部命令一律走系统绝对路径: 开发机若把 Git/MSYS 放在 PATH 前面, 裸写 find/ping
 REM   会命中 coreutils, "等待"变成立即返回、判断全部失真。
 REM ★ 等待用 ping 不用 timeout: timeout 在 stdin 被重定向时会立刻报错退出。
@@ -749,7 +750,36 @@ if exist "_update_target.txt" del /f /q "_update_target.txt"
 (goto) 2>nul & del /f /q "%~f0"
 """
     bat_path = os.path.join(os.path.abspath(app_dir), "_update.bat")
-    # newline="\r\n": cmd 对裸 LF 的 bat 兼容性差(块语句可能被吞), 统一 CRLF
-    with open(bat_path, "w", encoding="utf-8", newline="\r\n") as f:
-        f.write(bat)
+    write_bat_file(bat_path, bat)
     return bat_path
+
+
+def oem_code_page():
+    """本机 OEM 代码页(中文 Windows = 936)。bat 按它落盘, cmd 读的时候才不用切换。"""
+    try:
+        import ctypes
+        return int(ctypes.windll.kernel32.GetOEMCP())
+    except Exception:
+        return 936
+
+
+def write_bat_file(path, text):
+    """写 bat: **OEM 代码页** + CRLF + 无 BOM。
+
+    ★ 为什么不用 UTF-8 + 文件头 chcp(2026-10-11 实测推翻了这个老写法): cmd 是"边读边按
+      当前代码页解析", 中途切代码页会让它对后续行的解析错位 —— 偶发把中文注释行的
+      "REM " 吃掉当命令执行(用户弹窗里看到的
+      `'xxx' is not recognized as an internal or external command` 就是它), 而且是竞态,
+      同一份文件连跑 5 次能出 0/0/1/0/0 条。按本机 OEM 代码页落盘 = cmd 读它时用的就是
+      同一套编码, 全程无需切换, 也就没有错位的可能。
+    ★ 该代码页表示不了的字符(英文 Windows 上放中文)退化成 '?' —— 仍是纯 ASCII 字节, 解析
+      安全; 窗口里会看到问号, 但更新流程照常走完。
+    ★ CRLF: cmd 对裸 LF 的 bat 兼容性差(块语句可能被吞)。
+    """
+    try:
+        data = text.encode(f"cp{oem_code_page()}")
+    except (UnicodeEncodeError, LookupError):
+        data = text.encode("ascii", "replace")
+    data = data.replace(b"\r\n", b"\n").replace(b"\n", b"\r\n")
+    with open(path, "wb") as f:
+        f.write(data)
