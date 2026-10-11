@@ -28,6 +28,7 @@ from PySide6.QtWidgets import (
 )
 
 from core import app_detect
+from core import registry as reg
 from core.driver import BASE_DIR, load_config, update_config, is_case_file
 from core.logger import get_logger
 from core.version import __version__ as APP_VERSION   # 版本号单一真源: core/version.py
@@ -540,7 +541,12 @@ def _make_field_widget(field, value, steps=None, exclude_index=None):
         combo = _FitCombo()                 # 宽度自适应: "步骤N: 描述" 可能较长
         options = []
         for i, st in enumerate(steps or []):
-            if i == exclude_index or not st.get("screenshot"):
+            if i == exclude_index:
+                continue
+            # ★ "这一步会有截图" = 勾了自动截图 **或**它是点击类动作(点击强制截图, 见
+            #   core.registry.is_click_action) —— 判据要与执行端一致, 否则点击步骤明明
+            #   会产出截图, 却在下拉里挑不到(用户要求 2026-10-11)。
+            if not (st.get("screenshot") or reg.is_click_action(reg.primary_action_key(st))):
                 continue
             desc = st.get("desc") or "(无描述)"
             options.append((f"step:{i + 1}", f"步骤{i + 1}: {desc}"))
@@ -549,7 +555,7 @@ def _make_field_widget(field, value, steps=None, exclude_index=None):
         if value and value not in [v for v, _ in options]:
             combo.addItem(f"(手动路径) {value}", value)   # 旧路径/自定义值保留显示
         if combo.count() == 0:
-            combo.addItem("(前面没有开启截图的步骤)", "")
+            combo.addItem("(前面没有会截图的步骤)", "")
             combo.setEnabled(False)
         if value:
             k = combo.findData(value)
@@ -819,8 +825,23 @@ class StepCard(QFrame):
         adv_grid.setHorizontalSpacing(10)
         adv_grid.setVerticalSpacing(5)
         adv_fields = [f for f in schema.GENERIC_FIELDS if f["key"] != "desc"]
+        # ★ 点击类动作: "自动截图"**强制开启且不可关闭**(用户要求 2026-10-11:
+        #   "点击操作默认要截图, 不可以关闭") —— 报告里必须能看到"当时点在哪"。
+        force_shot = bool(action) and reg.is_click_action(action["key"])
         for r, f in enumerate(adv_fields):
             self._add_field(adv_grid, r, f)
+            if force_shot and f["key"] == "screenshot":
+                w = self.widgets.get("screenshot")
+                if isinstance(w, QCheckBox):
+                    # ★ blockSignals: 只改界面表现, **不要**触发写回 —— 否则一打开卡片就把
+                    #   `screenshot: true` 写进数据, 用例被标成"有修改"、YAML 也跟着变。
+                    #   真正的强制截图在执行端(见 runner._execute 的 click_step)。
+                    w.blockSignals(True)
+                    w.setChecked(True)
+                    w.blockSignals(False)
+                    w.setEnabled(False)
+                    w.setToolTip("点击操作**默认截图**(会把点击位置标在图上并写进报告), "
+                                 "不可关闭 —— 点错地方是最难查的一类问题")
         self.adv_grid_host.setVisible(False)
         fv.addWidget(self.adv_grid_host)
 
@@ -933,6 +954,13 @@ class StepCard(QFrame):
                 v = getter()
                 if v is not None:
                     step[key] = v
+                else:
+                    w = self.widgets.get(key)
+                    # ★ 输入框被**清空** = 清掉这个参数(用默认值), 而不是保留旧值 ——
+                    #   用户 2026-10-11 反馈"超时和延时改不到空白": 整型/浮点框清空时
+                    #   取值是 None, 而这里原来直接跳过 None → 旧值一直留着。
+                    if isinstance(w, QLineEdit) and not w.text().strip():
+                        step.pop(key, None)
         self._refresh_summary()
         self.main.on_card_edited()
 

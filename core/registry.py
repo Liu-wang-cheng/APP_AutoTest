@@ -68,3 +68,15 @@ def primary_action_key(step):
     """会被执行的那个主动作键; 没有主动作(如只有 grab)则返回 None"""
     keys = main_action_keys(step)
     return keys[0] if keys else None
+
+
+#: 「点击类」动作: 它们**默认并强制**留下带点击标记的截图(用户要求 2026-10-11:
+#: "所有的点击操作都要在测试图片上标注出点击的位置并自动放报告中, 点击操作默认要截图,
+#:  不可以关闭")。点错地方是最难查的一类问题 —— 报告里能看到"当时点在哪"。
+CLICK_ACTIONS = frozenset({"click", "click_template", "long_click",
+                           "if_click", "find_click"})
+
+
+def is_click_action(key):
+    """这个动作是不是"点击类"(→ 强制截图并把点击位置标在图上)"""
+    return key in CLICK_ACTIONS

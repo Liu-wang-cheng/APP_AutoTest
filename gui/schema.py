@@ -17,11 +17,13 @@ GENERIC_FIELDS = [
 
 ACTIONS = [
     # ── 操作 ──
-    {"key": "click", "label": "点击", "category": "操作", "fields": [
+    {"key": "click", "label": "点击", "category": "操作",
+     "tip": "点击后**自动截图并把点击位置标在图上**(写进报告的截图列), 不可关闭", "fields": [
         {"key": "click", "label": "目标", "type": "text", "required": True,
          "hint": "按钮名 / 图片名(.png) / x,y 坐标"},
     ]},
-    {"key": "click_template", "label": "点击模板", "category": "操作", "fields": [
+    {"key": "click_template", "label": "点击模板", "category": "操作",
+     "tip": "点击后**自动截图并把点击位置标在图上**(写进报告的截图列), 不可关闭", "fields": [
         {"key": "click_template", "label": "模板", "type": "template", "required": True,
          "hint": "从当前 APP 组的模板中选择"},
     ]},

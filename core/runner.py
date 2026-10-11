@@ -86,10 +86,14 @@ class ActionRunner:
     _NUM_OPS = _NUM_OPS
 
     def __init__(self, device, config: dict, case_wait=None, case_name="",
-                 device_name="", cancel_check=None):
+                 device_name="", cancel_check=None, click_shots=True):
         self.d = device
         self._device_id = getattr(device, "serial", None)
         self.case_name = case_name
+        #: 点击类动作是否**强制截图**(把点击位置标在图上、写进报告)。
+        #  ★ 只对**用例步骤**开(用户要求 2026-10-11: "测试步骤的点击操作才需要截图");
+        #    前置条件里的自定义步骤属于准备动作, 不在这里留证据。
+        self.click_shots = click_shots
         # 设备页名称(配置里的 target_device): 插件页整页文本读不出来时, 用它重进设备页
         self.device_name = device_name
         # 用例级 wait 优先,否则用全局 step_interval
@@ -347,6 +351,7 @@ class ActionRunner:
                 except Exception as e:
                     log.debug(f"[click] 行点击回退异常: {e}")
                 el.click()
+                self.last_click = self._center_xy(el, value)   # ★ 供截图标注"点在哪"
                 # ★ 点击必须留痕(写清点了谁、落在哪): 真机排查"点不动/点错地方"时,
                 #   这是唯一能拿到的第一手信息(模板点击一直有, 文本/坐标以前是空白)
                 log.info(f"[点击] 文本「{value}」 @ {self._center_of(el)}")
@@ -369,6 +374,15 @@ class ActionRunner:
                         and int(b.get("top", 0)) == 0 and int(b.get("bottom", 0)) == 0)
         except Exception:
             return True
+
+    @staticmethod
+    def _center_xy(el, label):
+        """(x, y, label) —— 元素中心坐标; 取不到就返回 None(不写标注)"""
+        try:
+            b = el.info["bounds"]
+            return ((b["left"] + b["right"]) // 2, (b["top"] + b["bottom"]) // 2, label)
+        except Exception:
+            return None
 
     @staticmethod
     def _center_of(el):
@@ -416,6 +430,8 @@ class ActionRunner:
                 else:
                     self.d.click((int(rm.group(2)) + int(rm.group(4))) // 2,
                                  (int(rm.group(3)) + int(rm.group(5))) // 2)
+                self.last_click = ((int(rm.group(2)) + int(rm.group(4))) // 2,
+                                   (int(rm.group(3)) + int(rm.group(5))) // 2, value)
                 log.info(f"[点击] 文本「{value}」点不动 → 点它所在的整行({rm.group(1)})")
                 return True
         return False
@@ -711,8 +727,13 @@ class ActionRunner:
             do_wait_for(self, step)
         # 4. 截图(点击导航后页面有过场动画,先等页面落定再截 —— 否则会截到
         #    转场中的旧页面:地图编辑用例的对比基线因此截成了设置页,77.9% 假失败)
-        if "screenshot" in step:
-            sv = step["screenshot"]
+        # ★ 点击类动作**强制截图**(用户要求 2026-10-11: "点击操作默认要截图, 不可以关闭"):
+        #   点错地方是最难查的一类问题 —— 报告里必须能看到"当时点在哪"。
+        #   步骤里写 screenshot: false 也照样截; 写了路径就用那个路径。
+        click_step = (self.click_shots
+                      and reg.is_click_action(reg.primary_action_key(step)))
+        if "screenshot" in step or click_step:
+            sv = step.get("screenshot")
             if isinstance(sv, str) and sv.strip():
                 path = sv                       # 旧用例的手动路径, 兼容保留
             else:
@@ -729,11 +750,19 @@ class ActionRunner:
                 path = os.path.join(BASE_DIR, "Test_img", path)
             elif not os.path.isabs(path):
                 path = os.path.join(BASE_DIR, path)
-            os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-            self._sleep(1.5)
-            self.d.screenshot(path)
-            screenshot = path
-            self._mark_last_click_on(path)
+            try:
+                os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+                self._sleep(1.5)
+                self.d.screenshot(path)
+                screenshot = path
+                self._mark_last_click_on(path)
+            except Exception as e:
+                # ★ 只有"点击强制截图"这一路是尽力而为的(证据是附加物, 不该让步骤失败);
+                #   步骤里**显式**写了 screenshot 的仍然是老行为(截不到就报错)。
+                if "screenshot" in step:
+                    raise
+                log.warning(f"[截图] 点击后自动截图失败(不影响本步结果): "
+                            f"{type(e).__name__}: {e}")
         # room_zones 的标注图优先
         if getattr(self, "_debug_map_path", None):
             screenshot = self._debug_map_path

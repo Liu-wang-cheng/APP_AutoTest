@@ -107,6 +107,7 @@ def do_long_click(runner, step):
         if not el.exists(timeout=runner.click_timeout):
             raise AssertionError(f"未找到长按目标: {value}")
         if hasattr(el, "long_click"):     # XPathElement 原生支持长按
+            runner.last_click = runner._center_xy(el, f"长按 {value}")
             log.info(f"[长按] 文本「{value}」 {float(duration):g}s")
             el.long_click(float(duration))
             runner._sleep(1)
@@ -116,6 +117,7 @@ def do_long_click(runner, step):
         what = f"文本「{value}」 @ ({x},{y})"
     # 原地滑动=长按。★ duration 单位是秒(uiautomator2 语义)——曾经 ×1000
     # 当毫秒用,4 秒长按变成 4000 秒(66 分钟),机器人被持续按住前进键不放
+    runner.last_click = (x, y, f"长按 {value}")
     log.info(f"[长按] {what} {float(duration):g}s")
     runner.d.swipe(x, y, x, y, duration=float(duration))
     runner._sleep(1)
@@ -178,6 +180,7 @@ def do_if_click(runner, step):
         el = runner._find_element(v)
         if el.exists(timeout=1):
             el.click()
+            runner.last_click = runner._center_xy(el, v)
             log.info(f"[if_click] 命中并点击: {v}")
             return
     log.info(f"[if_click] 均未出现,跳过: {values}")
@@ -193,6 +196,7 @@ def do_find_click(runner, step):
         el = runner._find_element(v)
         if el.exists(timeout=1):
             el.click()
+            runner.last_click = runner._center_xy(el, v)
             log.info(f"[find_click] 命中并点击: {v}")
             return
     raise AssertionError(f"find_click 全部候选未找到: {values}")

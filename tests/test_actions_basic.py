@@ -277,3 +277,82 @@ def test_if_then_branch_failure_propagates(runner):
         runner._execute({"if": "确认",
                          "then": [{"desc": "会失败", "click": "不存在的按钮"}]})
     assert runner._pending_sub_results and runner._pending_sub_results[0]["passed"] is False
+
+
+# ── 点击必须留落点 + 点击类动作强制截图(用户要求 2026-10-11) ──
+
+@pytest.mark.parametrize("step,label", [
+    ({"click": "100,200"}, "坐标"),
+    ({"click": "确认"}, "文本"),
+    ({"long_click": "100,200"}, "长按"),
+    ({"if_click": "确认"}, "if_click"),
+    ({"find_click": "确认"}, "find_click"),
+])
+def test_every_click_records_where_it_clicked(runner, step, label):
+    """★ 每种点击都要记下落点(供截图标注"点在哪") —— 坐标/模板原来有, 文本/if_click/
+    find_click/长按是空白, 报告里就看不出点在哪"""
+    runner._execute(dict(step))
+    lc = runner.last_click
+    assert lc, f"{label} 点击没有记落点: {lc}"
+    assert lc[0] > 0 and lc[1] > 0, f"{label} 落点坐标不对: {lc}"
+
+
+def test_click_step_always_screenshots_even_if_disabled(runner, tmp_path):
+    """★ 点击类动作**强制截图**(不可关闭): 写 screenshot: False 也照样截, 且带点击标注"""
+    shots = []
+    runner.d.screenshot = lambda path=None, format=None: shots.append(path)
+    out = runner._execute({"click": "100,200", "screenshot": False})
+    assert shots, "点击步骤必须截图(哪怕步骤里写了 screenshot: False)"
+    assert out and "screenshots" in out.replace("\\", "/"), out
+    assert runner.last_click is None, "落点应已被截图消费(标记画在图上)"
+
+
+def test_non_click_step_still_respects_screenshot_flag(runner):
+    """非点击动作不受影响: 没勾自动截图就不截"""
+    shots = []
+    runner.d.screenshot = lambda path=None, format=None: shots.append(path)
+    # ★ 注意: 引擎是看"screenshot 键在不在"(GUI 保存 False 时会把键整个省掉),
+    #   所以这里用"根本没有这个键"的步骤
+    out = runner._execute({"assert": "确认"})
+    assert shots == [] and out == "", (shots, out)
+
+
+def test_click_template_step_also_forced_screenshots(runner, monkeypatch, tmp_path):
+    """点击模板(下拉)同样强制截图 —— 它也是「点击操作」"""
+    from core import vision
+    monkeypatch.setattr(vision, "find_in_gray", lambda s, t, **kw: (300, 400))
+    monkeypatch.setattr(vision, "resolve_template", lambda n: n)
+    import numpy as np
+    shots = []
+
+    def _shot(path=None, format=None):
+        shots.append(path)
+        return np.zeros((1920, 1080, 3), dtype=np.uint8)   # 模板匹配要真图
+
+    runner.d.screenshot = _shot
+    out = runner._execute({"click_template": "开始清扫.png", "screenshot": False})
+    assert shots and out, (shots, out)
+
+
+def test_precondition_click_steps_do_not_force_screenshots(runner):
+    """★ 只有**用例步骤**里的点击强制截图; 前置条件里的自定义步骤不截。
+
+    用户要求(2026-10-11): "测试步骤的点击操作才需要截图" —— 前置是准备动作, 不留证据。
+    """
+    from core.runner import ActionRunner
+    r = ActionRunner(runner.d, {"step_interval": 0, "default_timeout": 1, "click_timeout": 1},
+                     case_name="前置步骤", click_shots=False)
+    r._sleep = lambda s: None
+    shots = []
+    r.d.screenshot = lambda path=None, format=None: shots.append(path)
+    out = r._execute({"click": "100,200"})
+    assert shots == [] and out == "", (shots, out)
+    assert r.last_click, "前置里的点击仍然要记落点(日志/排查用), 只是不截图"
+
+
+def test_preconditions_steps_use_click_shots_false():
+    """结构性守护: 前置跑自定义步骤时必须显式关掉点击截图, 别哪天被删掉"""
+    import os as _os
+    src = open(_os.path.join(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))),
+                             "core", "session.py"), encoding="utf-8").read()
+    assert "click_shots=False" in src, "前置的 ActionRunner 没有关掉点击强制截图"

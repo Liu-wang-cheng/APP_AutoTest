@@ -1727,7 +1727,7 @@ def test_compare_baseline_step_dropdown(qapp, monkeypatch, tmp_path):
         # 步骤: 1 开截图, 2 不开, 3 开截图, 4 compare
         w.add_step("click")
         w.steps[0]["screenshot"] = True     # 步骤1 开截图
-        w.add_step("click")                  # 步骤2 不开
+        w.add_step("sleep")                  # 步骤2: 非点击动作且没勾截图 → 不该列出
         w.add_step("click")                  # 步骤3 开截图
         w.steps[2]["screenshot"] = True
         w.add_step("compare")                # 步骤4 对比
@@ -1859,6 +1859,41 @@ def test_delete_current_case_unloads_editor(qapp, monkeypatch, tmp_path):
 
 
 # ── 点击 / 点击模板 拆分动作(2026-09-23) ──
+
+def test_click_step_is_offered_as_baseline_without_checking_screenshot(qapp, monkeypatch, tmp_path):
+    """★ 点击类动作**强制截图**, 所以即使没勾「自动截图」也要能当基准图 ——
+    下拉判据必须与执行端一致(用户要求 2026-10-11: 点击默认截图且不可关闭)"""
+    from PySide6.QtWidgets import QCheckBox, QComboBox
+    from gui import main_window as mw
+    root = tmp_path / "Test_cases" / "涂鸦智能T4"
+    root.mkdir(parents=True)
+    (root / "a.yaml").write_text("module: a\ncases: [{name: x, steps: []}]\n",
+                                 encoding="utf-8")
+    monkeypatch.setattr(mw, "CASES_DIR", str(root), raising=False)
+    w = mw.MainWindow()
+    try:
+        w.add_step("click")                 # 点击: 没勾截图
+        w.add_step("sleep")                 # 非点击: 没勾截图
+        w.add_step("compare")               # 这一步的基准图下拉
+        combo, _getter = mw._make_field_widget(
+            {"key": "compare", "label": "基准图", "type": "stepshot"},
+            "", steps=w.steps, exclude_index=2)
+        assert isinstance(combo, QComboBox)
+        data = [combo.itemData(i) for i in range(combo.count())]
+        assert data == ["step:1"], f"点击步骤应可选作基准图, sleep 不该: {data}"
+        # 卡片上那个"自动截图"勾选框: 点击步骤必须勾上且不可改
+        w.expanded_key = (0,)                     # 展开步骤1, 让它的参数表单建出来
+        w.render_cards()
+        for wd in _card_widgets(w):
+            if wd.step is w.steps[0]:
+                box = wd.widgets.get("screenshot")
+                assert isinstance(box, QCheckBox) and box.isChecked()
+                assert not box.isEnabled(), "点击操作的自动截图必须不可关闭"
+                break
+    finally:
+        w.worker = None
+        w.close()
+
 
 def test_click_and_click_template_split(qapp, monkeypatch, tmp_path):
     """click(手填目标)与 click_template(下拉选模板)为两个独立动作:
@@ -3493,3 +3528,31 @@ def test_report_uses_one_sheet_per_case_execution(qapp, monkeypatch, tmp_path):
     summary = [c.value for row in wb["汇总"].iter_rows() for c in row if c.value]
     for n in names:
         assert n in summary, f"汇总表里没有 {n}: {summary}"
+
+
+def test_clearing_int_field_removes_the_parameter(win):
+    """★ 清空「超时/本步后等待」这类整型框 = **删掉该参数**(回落到默认值)。
+
+    用户 2026-10-11 反馈"超时和延时的参数为何改不到空白": 整型框清空时取值是 None,
+    而写回逻辑原来是 `if v is not None: step[key] = v` —— **直接跳过 None**,
+    于是旧值一直留在数据里, 界面上清空了、保存后又是原来的数。
+    """
+    win.create_case("测试组", group="测试组")
+    win.add_step("click")
+    win.steps[0]["timeout"] = 30
+    win.steps[0]["wait"] = 5
+    win.expanded_key = (0,)
+    win.render_cards()
+
+    card = next(wd for wd in _card_widgets(win) if wd.step is win.steps[0])
+    for key in ("timeout", "wait"):
+        box = card.widgets[key]
+        assert box.text() == str(win.steps[0][key])
+        box.setText("")                 # 用户把框清空
+        box.editingFinished.emit()      # 触发写回
+    assert "timeout" not in win.steps[0], f"清空后 timeout 应被删掉: {win.steps[0]}"
+    assert "wait" not in win.steps[0], f"清空后 wait 应被删掉: {win.steps[0]}"
+    # 填回去要能重新写进数据
+    card.widgets["timeout"].setText("12")
+    card.widgets["timeout"].editingFinished.emit()
+    assert win.steps[0]["timeout"] == 12, win.steps[0]

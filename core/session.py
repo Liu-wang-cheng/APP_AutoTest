@@ -737,7 +737,10 @@ def _run_one(d, cfg, item, on_progress, should_cancel):
                               device_name=cfg.get("target_device", ""),
                               # ★ 让"停止"能穿透到这串前置步骤(见 ActionRunner.stopped):
                               #   否则用户点停止后它会一路跑完
-                              cancel_check=should_cancel)
+                              cancel_check=should_cancel,
+                              # ★ 前置是**准备动作**, 不给点击步骤留截图(用户要求:
+                              #   "测试步骤的点击操作才需要截图")
+                              click_shots=False)
         ok = runner.run_steps(steps)
         log.info(f"[前置] {item.get('name') or '自定义步骤'}: "
                  f"{'通过' if ok else '有步骤失败'}")

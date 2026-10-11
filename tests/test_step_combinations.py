@@ -60,6 +60,7 @@ class ClickDevice:
         self.clicked_at = None          # 坐标/模板点击落点
         self.last_kw = {}               # 按文本查元素时的参数
         self.element = _El()
+        self.shots = []
         self.frame = np.zeros((1920, 1080, 3), dtype=np.uint8)
 
     def __call__(self, **kw):
@@ -67,6 +68,7 @@ class ClickDevice:
         return self.element
 
     def screenshot(self, path=None, format=None):
+        self.shots.append(path)          # 记录"被要求截图到哪"(点击强制截图靠它验证)
         return self.frame
 
     def click(self, x, y):
@@ -269,7 +271,9 @@ def test_template_click_clicks_the_matched_point(monkeypatch, step):
     r = _runner(d)
     r._execute(dict(step))
     assert d.clicked_at == (300, 400), f"没点在匹配位置: {d.clicked_at}"
-    assert r.last_click and r.last_click[2] == "开始清扫.png"
+    # ★ 点击类动作现在**强制截图**并把落点标在图上(见 runner._execute) ——
+    #   标记会被截图消费掉(last_click → None), 所以这里断言"截图确实发生了"
+    assert d.shots, "点击模板后应强制截图(带点击标记)"
 
 
 def test_template_click_reports_when_nothing_matched(monkeypatch):
