@@ -277,3 +277,23 @@ def test_visible_nodes_skips_zero_bounds_only():
            '<node text="乙" bounds="[1,1][2,2]"/><node text="丙"/></hierarchy>')
     texts = [t for t, _d, _p in session.visible_nodes(xml)]
     assert texts == ["乙", "丙"], texts
+
+
+def test_exact_prefix_is_strict_and_blocks_desc_hits():
+    """★ 提示里承诺的写法要真管用: `=` 前缀 = 整段文本相等, 且**不看图标描述、不走 OCR**。
+
+    B 方案(2026-10-11 用户定)下, 这就是"我要严格"的正规用法 —— 没有开关, 靠它在用例里表达。
+    """
+    xml = ('<hierarchy>'
+           '<node text="正在清洁" bounds="[400,300][680,370]"/>'
+           '<node text="填充0" bounds="[10,10][20,20]"/>'
+           '<node text="填充1" bounds="[10,30][20,40]"/>'
+           '<node text="填充2" bounds="[10,50][20,60]"/>'
+           '<node text="填充3" bounds="[10,70][20,80]"/>'
+           '<node content-desc="暂停清扫" bounds="[900,300][1020,420]"/>'
+           '</hierarchy>')
+    # 不带 = : 会被"暂停清扫"这个**描述**顶通过(现状语义)
+    _bounds_runner(xml)._execute({"assert": "暂停", "timeout": 1})
+    # 带 = : 严格 → 描述不算, 页面文本里也没有整段等于"暂停"的 → 必须失败
+    with pytest.raises(AssertionError):
+        _bounds_runner(xml)._execute({"assert": "=暂停", "timeout": 1})

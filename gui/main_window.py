@@ -566,6 +566,7 @@ def _make_field_widget(field, value, steps=None, exclude_index=None):
         w = QLineEdit("" if value is None else str(value))
         w.setValidator(QIntValidator(-100000, 100000))
         w.setPlaceholderText(hint)
+        w.setToolTip(hint)                 # 多行提示在单行 placeholder 里显示不全
         return w, _int_of(w)
     if t == "float":
         w = QLineEdit("" if value is None else str(value))
@@ -579,6 +580,7 @@ def _make_field_widget(field, value, steps=None, exclude_index=None):
     # text: 未编辑时保留原值(列表/数字等非字符串类型不被表单转成字符串)
     w = QLineEdit("" if value is None else str(value))
     w.setPlaceholderText(hint)
+    w.setToolTip(hint)                     # 多行提示在单行 placeholder 里显示不全
     original_value = value
     original_display = "" if value is None else str(value)
 
