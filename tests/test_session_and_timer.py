@@ -283,6 +283,62 @@ def test_restart_app_normal_start_no_extra_restart(monkeypatch):
     assert calls["start"] == 1 and calls["stop"] == 1
 
 
+def test_restart_app_enters_device_page_by_default(monkeypatch):
+    """★ 重启 APP **默认会再进设备页**(用户 2026-10-11 问: "同一用例多次执行, 重启 APP 会
+    再进设备页吗" —— 会)。
+
+    两件事一起钉住:
+      · 前置项 `restart` 调的是 `restart_app(d, cfg, should_cancel=...)`, **不传 enter_page**
+        → 走默认 True → 每次重启都会重新点进 target_device 设备页(没配 target_device 就只重启);
+      · `enter_page=False` 则只重启、停在首页(旧版"同组之间只重启 APP"走的就是这条)。
+    """
+    from core import session
+    clicked = []
+
+    class El:
+        def exists(self, timeout=10):
+            return True
+
+        def click(self):
+            clicked.append("device")
+
+    class D:
+        def app_stop(self, p):
+            pass
+
+        def app_start(self, p, act=None):
+            pass
+
+        def __call__(self, **kw):
+            return El()
+
+    monkeypatch.setattr(session, "_wait_foreground",
+                        lambda d, p, timeout=20, should_cancel=None: True)
+    monkeypatch.setattr(session.time, "sleep", lambda s: None)
+    monkeypatch.setattr(session, "_heal_if_dead",
+                        lambda d, p, should_cancel=None: None)
+    cfg = {"app": {"package": "pkg", "main_activity": "act"}, "target_device": "扫地机器人0087"}
+
+    session.restart_app(D(), cfg)                      # 不传 enter_page = 默认进页
+    assert clicked == ["device"], "默认重启后应点进设备页"
+    clicked.clear()
+    session.restart_app(D(), cfg, enter_page=False)    # 显式不进页
+    assert clicked == [], "enter_page=False 时不该进设备页"
+
+
+def test_prepare_items_restart_item_enters_device_page(monkeypatch):
+    """`restart` 前置项走的是默认(进设备页) —— 它在 prepare_items 里的调用方式很容易被改坏"""
+    from core import session
+    seen = []
+    monkeypatch.setattr(session, "restart_app",
+                        lambda d, cfg, **kw: seen.append(kw))
+    monkeypatch.setattr(session, "get_battery_level", lambda d: 80)
+    session.prepare_items(object(), {"app": {"package": "p"}, "target_device": "SE3L"},
+                          [{"type": "restart", "enabled": True}], on_progress=None)
+    assert seen and "enter_page" not in seen[0], \
+        f"restart 前置项不该显式关掉进设备页: {seen}"
+
+
 def test_restart_app_raises_when_never_starts(monkeypatch):
     """连续 3 次都闪退:明确报错,不让用例在坏状态里继续跑"""
     from core import session
