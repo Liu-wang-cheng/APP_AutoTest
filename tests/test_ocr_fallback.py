@@ -95,7 +95,8 @@ def test_any_present_prefers_native_and_skips_ocr(monkeypatch):
     from core import session
     called = []
     monkeypatch.setattr(session.ocr, "available", lambda: True)
-    monkeypatch.setattr(session.ocr, "find", lambda d, t: called.append(1) or "x")
+    monkeypatch.setattr(session.ocr, "find_detail",
+                        lambda d, t: called.append(1) or ("x", "x 已完成", (1, 2)))
     monkeypatch.setattr(session, "warm_webview",
                         lambda d: '<node text="正在吸尘 5分钟"/><node text="电池 93%%"/>')
 
@@ -114,7 +115,8 @@ def test_any_present_falls_back_to_ocr_when_tree_sparse(monkeypatch):
     """★ 原生读不到 + 页面主体没暴露 → OCR 兜底命中"""
     from core import session
     monkeypatch.setattr(session.ocr, "available", lambda: True)
-    monkeypatch.setattr(session.ocr, "find", lambda d, texts: texts[0])
+    monkeypatch.setattr(session.ocr, "find_detail",
+                        lambda d, texts: (texts[0], texts[0] + " 已完成", (10, 20)))
     assert session._any_present(_EmptyDev(), ["正在吸尘", "回充中"]) is True
 
 
@@ -122,7 +124,7 @@ def test_any_present_no_ocr_when_not_installed(monkeypatch):
     """没装 RapidOCR → 行为与从前完全一致(不崩、不误判)"""
     from core import session
     monkeypatch.setattr(session.ocr, "available", lambda: False)
-    monkeypatch.setattr(session.ocr, "find",
+    monkeypatch.setattr(session.ocr, "find_detail",
                         lambda d, t: pytest.fail("不该调用 OCR"))
     assert session._any_present(_EmptyDev(), ["正在吸尘"]) is False
 
@@ -165,7 +167,7 @@ def test_text_present_native_hit(monkeypatch):
     d = _Runner(xml='<node text="正在吸尘 5分钟"/><node text="房间 7"/><node text="电池 93%%"/>')
     r = _make_runner(d)
     monkeypatch.setattr(ocr, "available", lambda: True)
-    monkeypatch.setattr(ocr, "find", lambda dev, t: pytest.fail("原生命中不该调 OCR"))
+    monkeypatch.setattr(ocr, "find_detail", lambda dev, t: pytest.fail("原生命中不该调 OCR"))
     assert r._text_present("正在吸尘") is True
 
 
@@ -175,7 +177,9 @@ def test_text_present_falls_back_to_ocr(monkeypatch):
     d = _Runner(xml='<node text="扫地机器人0087"/>')
     r = _make_runner(d)
     monkeypatch.setattr(ocr, "available", lambda: True)
-    monkeypatch.setattr(ocr, "find", lambda dev, texts: texts[0] if "吸尘" in texts[0] else None)
+    monkeypatch.setattr(ocr, "find_detail",
+                        lambda dev, texts: (texts[0], "屏幕上读到 " + texts[0], (1, 2))
+                        if "吸尘" in texts[0] else (None, "", None))
     assert r._text_present("正在吸尘") is True
     assert r._text_present("回充中") is False
 
@@ -186,7 +190,7 @@ def test_text_present_empty_and_no_ocr(monkeypatch):
     r = _make_runner(d)
     assert r._text_present() is False
     monkeypatch.setattr(ocr, "available", lambda: False)
-    monkeypatch.setattr(ocr, "find", lambda dev, t: pytest.fail("没装 OCR 不该调用"))
+    monkeypatch.setattr(ocr, "find_detail", lambda dev, t: pytest.fail("没装 OCR 不该调用"))
     assert r._text_present("正在吸尘") is False
 
 
@@ -200,7 +204,8 @@ def test_wait_loading_uses_ocr_fallback(monkeypatch):
     d = _Runner(xml='<node text="扫地机器人0087"/>')      # 稀疏, 树里没有加载提示
     r = _make_runner(d)
     monkeypatch.setattr(ocr, "available", lambda: True)
-    monkeypatch.setattr(ocr, "find", lambda dev, texts: "正在加载")
+    monkeypatch.setattr(ocr, "find_detail",
+                        lambda dev, texts: ("正在加载", "正在加载中…", (1, 2)))
     monkeypatch.setattr(r, "_sleep", lambda s: None)
     do_wait_loading(r, {"timeout": 0})                     # 超时窗口内一直"在加载"
     # 命中加载提示 → 不应提前 return(走到超时分支打 warning); 用日志不好断言,
@@ -215,7 +220,8 @@ def test_if_condition_uses_ocr_fallback(monkeypatch):
     d = _Runner(xml='<node text="扫地机器人0087"/>')
     r = _make_runner(d)
     monkeypatch.setattr(ocr, "available", lambda: True)
-    monkeypatch.setattr(ocr, "find", lambda dev, texts: texts[0])
+    monkeypatch.setattr(ocr, "find_detail",
+                        lambda dev, texts: (texts[0], texts[0], (1, 2)))
     ran_else = []
     do_if_impl(r, {"if": "正在吸尘", "else": []}, negate=False)
     assert ran_else == []          # 条件成立(OCR 命中) → 跳过, 不执行 else
@@ -235,6 +241,53 @@ def test_wait_texts_uses_any_present_with_ocr(monkeypatch):
     from core import ocr, session
     monkeypatch.setattr(session.time, "sleep", lambda s: None)
     monkeypatch.setattr(ocr, "available", lambda: True)
-    monkeypatch.setattr(ocr, "find", lambda dev, texts: texts[0])
+    monkeypatch.setattr(ocr, "find_detail",
+                        lambda dev, texts: (texts[0], texts[0], (1, 2)))
     d = _Runner(xml='<node text="扫地机器人0087"/>')
     assert session._wait_texts(d, ["设备控制"], timeout=1) == "设备控制"
+
+
+def test_ocr_fallback_logs_the_line_it_actually_read(monkeypatch, caplog):
+    """★ OCR 命中必须记下**它读到的那一行**(2026-10-11 用户报"页面根本没这些文本却通过")。
+
+    没有这一行, 人只能看到"命中「已完成」", 无法判断是页面真有这个词、还是 OCR 读错 ——
+    正是"清洗拖布 已完成"这类**进度文案**顶掉通用候选词的现场。
+    """
+    import logging
+    from core import session
+
+    recs = []
+
+    class _H(logging.Handler):
+        def emit(self, record):
+            recs.append(record.getMessage())
+
+    lg = session.log
+    lg.addHandler(_H(level=logging.INFO))
+    old = lg.level
+    lg.setLevel(logging.INFO)
+    try:
+        monkeypatch.setattr(session.ocr, "available", lambda: True)
+        monkeypatch.setattr(session.ocr, "find_detail",
+                            lambda d, texts: ("已完成", "清洗拖布 已完成", (120, 456)))
+        assert session.text_present(_EmptyDev(), ["干燥拖布", "已完成"]) is True
+    finally:
+        lg.removeHandler(lg.handlers[-1])
+        lg.setLevel(old)
+
+    line = [m for m in recs if "OCR兜底" in m]
+    assert line, recs
+    assert "清洗拖布 已完成" in line[0], f"没记下 OCR 读到的原始行: {line[0]}"
+    assert "已完成" in line[0] and "120" in line[0], line[0]
+
+
+def test_ocr_find_detail_returns_the_matching_line(monkeypatch):
+    """find_detail: 返回 (命中的候选, OCR 行, 坐标); 没命中返回 (None, "", None)"""
+    from core import ocr
+    monkeypatch.setattr(ocr, "screen_texts",
+                        lambda d, use_cache=True: [("清洗拖布 已完成", (10, 20)),
+                                                   ("正在清洁", (30, 40))])
+    assert ocr.find_detail(None, ["干燥拖布", "已完成"]) == ("已完成", "清洗拖布 已完成", (10, 20))
+    assert ocr.find_detail(None, ["干燥拖布", "已取消"]) == (None, "", None)
+    # 旧接口语义不变
+    assert ocr.find(None, ["已完成"]) == "已完成"

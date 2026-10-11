@@ -83,9 +83,27 @@ def contains(d, text):
     return any(text in t for t, _ in screen_texts(d))
 
 
+def find_detail(d, texts):
+    """texts 里第一个在屏幕上出现的(OCR) → (命中的候选, OCR 实际读到的那一行, 坐标)。
+
+    没命中返回 (None, "", None)。
+
+    ★ 为什么要带上"读到的那一行"(2026-10-11 用户报"页面根本没有这些文本却判通过"):
+      OCR 兜底读的是**无障碍树里看不到的那部分界面**(插件页主体), 所以"原生没命中"
+      是常态、不代表页面上真的没有。日志只写"命中「已完成」"时, 人根本无法判断
+      到底是页面真有这个词、还是 OCR 读错了 —— 于是真假通过分不清。
+      带上原始行就能一眼看出: 例如「清洗拖布 已完成」这种进度文案顶掉了候选「已完成」。
+    """
+    for t in texts or []:
+        if not t:
+            continue
+        for line, pos in screen_texts(d):
+            if t in line:
+                return t, line, pos
+    return None, "", None
+
+
 def find(d, texts):
     """texts 里第一个在屏幕上出现的(OCR), 找不到返回 None"""
-    for t in texts or []:
-        if contains(d, t):
-            return t
-    return None
+    hit, _line, _pos = find_detail(d, texts)
+    return hit

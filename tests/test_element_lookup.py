@@ -575,7 +575,8 @@ def test_assert_locator_falls_back_to_ocr(make_runner, monkeypatch):
     monkeypatch.setattr(r, "_poll_sleep", lambda n: None)
     monkeypatch.setattr(ocr, "available", lambda: True)
     monkeypatch.setattr(ocr, "sparse", lambda xml, **kw: True)
-    monkeypatch.setattr(ocr, "find", lambda dev, texts: texts[0])
+    monkeypatch.setattr(ocr, "find_detail",
+                        lambda dev, texts: (texts[0], "屏幕上读到 " + texts[0], (1, 2)))
     r._assert_locator("正在吸尘", timeout=1)      # 不抛异常 = 兜底命中
 
 

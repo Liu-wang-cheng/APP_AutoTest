@@ -157,3 +157,123 @@ def test_multivalue_sites_reference_shared_splitter():
         if "split_texts" not in src:
             missing.append(f"{rel} ({why})")
     assert not missing, "以下位置未使用共用拆分器 split_texts:\n  " + "\n  ".join(missing)
+
+
+# ── 未渲染的隐藏节点不算"看到"/"点到"(2026-10-11 真机假通过的根治) ──
+
+import re as _re
+
+_NODE = _re.compile(r'<node text="([^"]*)" bounds="\[(-?\d+),(-?\d+)\]\[(-?\d+),(-?\d+)\]"')
+
+#: 真机现场(2026-10-11 12:31 的截图 + 层级): 页面只有「正在清洁」等可见文本,
+#: 而收起后的清洗拖布面板在无障碍树里**留了个未渲染的节点**(bounds 全 0)
+_XML_HIDDEN_RESIDUE = (
+    '<hierarchy>'
+    '<node text="正在清洁" bounds="[400,300][680,370]"/>'
+    '<node text="填充0" bounds="[10,10][20,20]"/>'
+    '<node text="填充1" bounds="[10,30][20,40]"/>'
+    '<node text="填充2" bounds="[10,50][20,60]"/>'
+    '<node text="填充3" bounds="[10,70][20,80]"/>'
+    '<node text="清洗拖布 已完成" bounds="[0,0][0,0]"/>'
+    '</hierarchy>')
+
+
+class _R:
+    def __init__(self, present, bounds=None, clickable=True):
+        self._present, self._bounds, self._clickable = present, bounds, clickable
+
+    def exists(self, timeout=1):
+        return self._present
+
+    def click(self):
+        pass
+
+    @property
+    def info(self):
+        return {"clickable": self._clickable, "bounds": self._bounds or {},
+                "text": "", "className": "android.view.View"}
+
+
+class _BoundsDev:
+    """按 xml 回答元素查询(**带 bounds**) —— 模拟真机: 隐藏节点也能被 u2 查到"""
+    serial = "fake"
+
+    def __init__(self, xml):
+        self._xml = xml
+
+    def dump_hierarchy(self):
+        return self._xml
+
+    def screenshot(self, path=None, format=None):
+        return np.zeros((1920, 1080, 3), dtype=np.uint8)
+
+    def window_size(self):
+        return (1080, 1920)
+
+    def __call__(self, **kw):
+        q = kw.get("textContains") or kw.get("text") or ""
+        for text, x1, y1, x2, y2 in _NODE.findall(self._xml):
+            if q and q in text:
+                return _R(True, {"left": int(x1), "top": int(y1),
+                                 "right": int(x2), "bottom": int(y2)})
+        return _R(False, None)
+
+
+def _bounds_runner(xml):
+    r = ActionRunner(_BoundsDev(xml), {"step_interval": 0, "default_timeout": 1,
+                                       "click_timeout": 1}, case_name="t")
+    r._sleep = lambda s: None
+    r._poll_sleep = lambda n: None
+    return r
+
+
+def test_assert_ignores_unrendered_hidden_node():
+    """★ 真机现场: 断言候选「已完成」只出现在**未渲染**的残留节点里 → **不算通过**。
+
+    改前就是这里判通过(截图上页面只有「正在清洁」), 于是"判断是否清扫完成"形同虚设。
+    """
+    with pytest.raises(AssertionError):
+        _bounds_runner(_XML_HIDDEN_RESIDUE)._execute(
+            {"assert": "干燥拖布,已完成,已取消", "timeout": 1})
+
+
+def test_assert_still_matches_when_that_node_is_visible():
+    """对照: 同一个节点只要是**可见**的(bounds 正常), 断言该怎么通过还怎么通过"""
+    visible = _XML_HIDDEN_RESIDUE.replace('bounds="[0,0][0,0]"', 'bounds="[100,900][600,960]"')
+    _bounds_runner(visible)._execute({"assert": "干燥拖布,已完成,已取消", "timeout": 1})
+
+
+def test_click_does_not_click_unrendered_node():
+    """点击同理: 隐藏节点点不动(点了也没效果) → 继续等, 等不到就报超时"""
+    with pytest.raises(AssertionError, match="超时"):
+        _bounds_runner(_XML_HIDDEN_RESIDUE)._execute({"click": "已完成", "timeout": 1})
+
+
+def test_text_present_detail_reports_source_and_position():
+    """判断详情: 来源(节点文本/描述/OCR) + 命中的原文 + 坐标 —— 假通过排查全靠它"""
+    from core import session
+    hit, src, raw, pos = session.text_present_detail(
+        None, ["干燥拖布", "正在清洁"], xml=_XML_HIDDEN_RESIDUE)
+    assert (hit, src, raw) == ("正在清洁", "text", "正在清洁")
+    assert pos == (540, 335), pos
+    # 隐藏节点里的词(已完成)不该被算命中
+    assert session.text_present_detail(None, ["已完成"], xml=_XML_HIDDEN_RESIDUE)[0] is None
+
+
+def test_desc_only_hit_is_reported_as_desc():
+    """只出现在**无障碍描述**里的命中, 来源要写成 desc(真机上出现过图标按钮顶掉断言)"""
+    from core import session
+    xml = ('<hierarchy><node text="填充0"/>'
+           '<node content-desc="暂停清扫" bounds="[900,300][1020,420]"/></hierarchy>')
+    hit, src, raw, pos = session.text_present_detail(None, ["暂停"], xml=xml)
+    assert (hit, src, raw) == ("暂停", "desc", "暂停清扫"), (hit, src, raw)
+    assert pos == (960, 360), pos
+
+
+def test_visible_nodes_skips_zero_bounds_only():
+    """过滤只针对"未渲染"(bounds 全 0); 没有 bounds 属性的节点**保持原样**(宁可不误杀)"""
+    from core import session
+    xml = ('<hierarchy><node text="甲" bounds="[0,0][0,0]"/>'
+           '<node text="乙" bounds="[1,1][2,2]"/><node text="丙"/></hierarchy>')
+    texts = [t for t, _d, _p in session.visible_nodes(xml)]
+    assert texts == ["乙", "丙"], texts

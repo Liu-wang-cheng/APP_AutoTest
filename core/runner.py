@@ -13,7 +13,7 @@ import yaml
 from core import registry as reg
 import core.actions  # noqa: F401  导入即注册全部动作(见 core/actions/__init__.py)
 from core.driver import BASE_DIR, split_texts
-from core.session import text_present, warm_webview   # 判断统一入口 + WebView 预热
+from core.session import text_present, text_present_detail, warm_webview  # noqa: E501  判断统一入口 + WebView 预热
 from core.logger import get_logger
 from core.trace import TraceRecorder
 from vlm.backend import VisionRouter
@@ -319,6 +319,13 @@ class ActionRunner:
             warm_webview(self.d)     # ★ 同上: WebView 文本预热(见 _assert_locator)
             el = self._find_element(value)
             if el.exists(timeout=1):
+                if not self._element_visible(el):
+                    # 隐藏/未渲染的节点点不动(点了也没效果) → 继续轮询等它真的出现
+                    log.info(f"[点击] 「{value}」当前是未渲染的隐藏节点, 继续等待: "
+                             f"{self._element_desc(el)}")
+                    check_count += 1
+                    self._poll_sleep(check_count)
+                    continue
                 try:
                     info = el.info
                     if not info.get("clickable"):
@@ -333,6 +340,22 @@ class ActionRunner:
                 return
             check_count += 1
             self._poll_sleep(check_count)
+
+    @staticmethod
+    def _element_visible(el):
+        """命中的元素是否**真的渲染了**(bounds 非全 0)。
+
+        ★ 与 session.visible_nodes 同一判据: 收起/隐藏的控件仍留在无障碍树里, 拿它当
+          "命中"就是假通过 —— 2026-10-11 真机实测: `断言: 干燥拖布,已完成,已取消` 通过,
+          而截图页面上只有「正在清洁」, 命中的是收起面板留下的隐藏节点。
+        读不到 bounds 时**当可见**(宁可不误杀)。
+        """
+        try:
+            b = (el.info or {}).get("bounds") or {}
+            return not (int(b.get("left", 0)) == 0 and int(b.get("right", 0)) == 0
+                        and int(b.get("top", 0)) == 0 and int(b.get("bottom", 0)) == 0)
+        except Exception:
+            return True
 
     @staticmethod
     def _center_of(el):
@@ -514,6 +537,11 @@ class ActionRunner:
             for v in values:
                 el = self._find_element(v)
                 if el.exists(timeout=1):
+                    if not self._element_visible(el):
+                        # 未渲染的隐藏节点不算"看到了"(见 _element_visible) —— 继续等下一个候选
+                        log.info(f"[断言] 命中的「{v}」是未渲染的隐藏节点, 不计: "
+                                 f"{self._element_desc(el)}")
+                        continue
                     # ★ 必须写清**命中了什么**: 断言是 textContains + content-desc 兜底,
                     #   页面上"按钮的无障碍描述"也算命中 —— 真机上出现过"断言: 暂停"
                     #   立刻通过(其实是匹配到了暂停**图标按钮**的描述, 并不是真的暂停了)。
@@ -521,9 +549,16 @@ class ActionRunner:
                     log.info(f"[断言] 命中「{v}」← {self._element_desc(el)}")
                     return
             # ★ 兜底(用户定的方向: 原生优先, OCR 兜底): 页面主体没暴露时截图识别。
-            #   复用统一入口并带上本次的 xml —— 省一次 dump, 且语义与其它判断一致
-            if text_present(self.d, values, xml=xml):
-                log.info(f"[断言] 原生没命中, OCR 兜底命中(候选: {value})")
+            #   复用统一入口并带上本次的 xml —— 省一次 dump, 且语义与其它判断一致。
+            #   ★ 日志要区分**命中的来源**(节点文本/无障碍描述/OCR): 曾经这里一律写成
+            #     "OCR 兜底命中", 结果真机上一次假通过被指向 OCR, 排查方向整个跑偏
+            #     (实际是某个看不见控件的 content-desc 里含候选词, 2026-10-11)。
+            hit, src, raw, pos = text_present_detail(self.d, values, xml=xml)
+            if hit:
+                where = {"text": "节点文本", "desc": "无障碍描述(看不见的控件)",
+                         "ocr": "截图识别(OCR)"}.get(src, src)
+                log.info(f"[断言] 命中「{hit}」← 来自{where}: {raw!r}"
+                         + (f" @ {pos}" if pos else ""))
                 return
             check_count += 1
             self._poll_sleep(check_count)

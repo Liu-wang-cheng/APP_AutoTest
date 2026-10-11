@@ -403,32 +403,86 @@ def tap_blank(d, point=None):
     return True
 
 
+#: 节点标签 / 属性解析(判断类要用 bounds 判断"是否真的渲染了")
+_NODE_RE = re.compile(r"<node\b[^>]*>")
+_NODE_ATTR_RE = re.compile(r'\b(text|content-desc|bounds)="([^"]*)"')
+_ZERO_BOUNDS = re.compile(r"^\[0,0\]\[0,0\]$")
+
+
+def visible_nodes(xml):
+    """层级里的 (text, desc, 中心坐标|None) —— **只保留屏幕上真实可见的节点**。
+
+    ★ 为什么要过滤(2026-10-11 用户实测的一类假通过): 界面切走/收起之后, 隐藏控件
+      仍留在无障碍树里。真机现场: `断言: 干燥拖布,已完成,已取消` 通过了, 而那一刻的
+      截图页面上只有「正在清洁」—— 命中的是**看不见的残留节点**(清洗拖布面板收起时
+      留下的"…已完成"文案)。看不见的东西不该算"看到了"。
+      判据: `bounds="[0,0][0,0]"`(Android 对未渲染/GONE 的节点就是这么报的) ⇒ 跳过。
+      没有 bounds 属性的节点**保持原样**(宁可不误杀 —— 有些精简层级不带 bounds)。
+    """
+    out = []
+    for tag in _NODE_RE.findall(xml):
+        attrs = dict(_NODE_ATTR_RE.findall(tag))
+        b = attrs.get("bounds")
+        if b and _ZERO_BOUNDS.match(b):
+            continue                         # 未渲染 → 视觉上不存在
+        pos = None
+        if b:
+            m = re.match(r"\[(-?\d+),(-?\d+)\]\[(-?\d+),(-?\d+)\]", b)
+            if m:
+                x1, y1, x2, y2 = (int(g) for g in m.groups())
+                pos = ((x1 + x2) // 2, (y1 + y2) // 2)
+        out.append((attrs.get("text", ""), attrs.get("content-desc", ""), pos))
+    return out
+
+
+def text_present_detail(d, texts, xml=None):
+    """判断类的**详情版**: 返回 (命中的候选, 命中来源, 命中的原文, 坐标|None)。
+
+    来源三种: "text"(节点文本) / "desc"(无障碍描述 content-desc) / "ocr"(截图识别)。
+    没命中返回 (None, "", "", None)。
+
+    ★ 只认**可见**节点(见 visible_nodes) —— 隐藏残留不算命中。
+    ★ 为什么要区分来源(2026-10-11 用户报"页面根本没这些文本却判通过"):
+      本函数同时扫 text 与 content-desc, 而 u2 那边 `textContains` 只看文本、
+      `description` 是**精确**匹配 —— 于是会出现"u2 查不到、这里查得到", 命中的可能是
+      某个控件的**无障碍描述**里的子串。不写清来源, 人只能看到"命中了", 无法判断是谁顶的。
+    """
+    wanted = [t for t in (texts or []) if t]
+    if not wanted:
+        return None, "", "", None
+    if xml is None:
+        xml = warm_webview(d)
+    nodes = visible_nodes(xml)
+    for idx, attr in ((0, "text"), (1, "desc")):        # 文本优先, 描述其次
+        for node in nodes:
+            raw = node[idx]
+            if not raw:
+                continue
+            for t in wanted:
+                if t in raw:
+                    return t, attr, raw, node[2]
+    if ocr.sparse(xml) and ocr.available():
+        hit, line, pos = ocr.find_detail(d, wanted)
+        if hit:
+            log.info(f"[OCR兜底] 无障碍树里没有, 截图识别命中「{hit}」"
+                     f"← OCR 读到的是 {line!r}" + (f" @ {pos}" if pos else ""))
+            return hit, "ocr", line, pos
+    return None, "", "", None
+
+
 def text_present(d, texts, xml=None):
     """页面上有没有这些文本 —— **判断类统一入口**(原生优先, 树稀疏时 OCR 兜底)。
 
-    ① 原生: 一次层级 dump, 在 **text 与 content-desc 两个属性**里做子串匹配。
-       (必须含 content-desc —— `_find_element` 对找不到文本的元素会回退到
-        description; 判断类若不看 description, 就会出现"断言找得到、前置找不到"。)
+    ① 原生: 一次层级 dump, 在 **text 与 content-desc 两个属性**里做子串匹配, 且**只看
+       真实可见的节点**(未渲染的隐藏节点不算 —— 否则收起的面板文案会把断言顶通过)。
     ② OCR: 仅当"原生没命中"且"页面主体没暴露"(可见文本 < 5 条, 插件页切视图后的
        典型症状)时, 截图识别一次(RapidOCR ≈1s/张, 同一帧 1.5s 缓存)。
        正常页面一次 OCR 都不做 —— 不给判断加开销。
 
     xml: 调用方已经 dump 过就传进来, 省一次 dump(如断言轮询里)。
+    ★ 需要知道"命中来自哪儿"的调用方用 text_present_detail(断言就靠它把日志写清楚)。
     """
-    wanted = [t for t in (texts or []) if t]
-    if not wanted:
-        return False
-    if xml is None:
-        xml = warm_webview(d)
-    values = re.findall(r'(?:text|content-desc)="([^"]*)"', xml)
-    if any(t in v for t in wanted for v in values):
-        return True
-    if ocr.sparse(xml) and ocr.available():
-        hit = ocr.find(d, wanted)
-        if hit:
-            log.info(f"[OCR兜底] 无障碍树里没有, 截图识别命中「{hit}」")
-            return True
-    return False
+    return text_present_detail(d, texts, xml=xml)[0] is not None
 
 
 def _any_present(d, texts, xml=None):
