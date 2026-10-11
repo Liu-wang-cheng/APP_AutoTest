@@ -228,3 +228,52 @@ def test_empty_assert_value_fails_loudly_instead_of_passing(runner):
     # 正常的断言/点击不受影响
     runner._execute({"assert": "确认"})
     runner._execute({"click": "确认"})
+
+
+# ── if 的 then 分支(条件成立时执行的子步骤, 2026-10-11 用户要求) ──
+
+def test_if_runs_then_branch_when_condition_holds(runner):
+    """条件成立 → 执行 then 子步骤(以前只有 else 分支有子步骤)"""
+    ran = []
+    runner._execute({"if": "确认",
+                     "then": [{"desc": "成立时做", "click": [10, 20]}],
+                     "else": [{"desc": "不该走", "click": [99, 99]}]})
+    assert runner.d.clicked_at == (10, 20), runner.d.clicked_at
+    assert [r["desc"] for r in runner._pending_sub_results] == ["成立时做"]
+
+
+def test_if_runs_else_branch_when_condition_fails(runner):
+    """条件不成立 → 走 else(原语义不变); then 不执行"""
+    runner._execute({"if": "不存在的文本",
+                     "then": [{"desc": "不该走", "click": [10, 20]}],
+                     "else": [{"desc": "不成立时做", "click": [77, 88]}]})
+    assert runner.d.clicked_at == (77, 88), runner.d.clicked_at
+    assert [r["desc"] for r in runner._pending_sub_results] == ["不成立时做"]
+
+
+@pytest.mark.parametrize("key,cond", [("if", "确认"), ("if not", "不存在的文本")])
+def test_if_without_then_still_skips(runner, key, cond):
+    """★ 向后兼容: 没写 then 时, **取反后**的条件成立仍然是"直接跳过"(if 与 if not 都要)。
+
+    (if not 要挑一个页面上**不存在**的条件, 取反后才成立 —— 这是它本来的语义)
+    """
+    step = {key: cond, "else": [{"desc": "不该走", "click": [99, 99]}]}
+    runner._execute(step)
+    assert runner.d.clicked_at is None
+    assert runner._pending_sub_results is None, "空分支必须清掉子结果(否则重试会留下幽灵行)"
+
+
+def test_if_not_then_branch_uses_negated_condition(runner):
+    """★ if not: 条件**取反后**成立 → 走 then(与 if 同一套实现, 必须同步生效)"""
+    runner._execute({"if not": "不存在的文本",
+                     "then": [{"desc": "取反后成立", "click": [33, 44]}]})
+    assert runner.d.clicked_at == (33, 44), runner.d.clicked_at
+    assert [r["desc"] for r in runner._pending_sub_results] == ["取反后成立"]
+
+
+def test_if_then_branch_failure_propagates(runner):
+    """then 子步骤失败要抛出(由主循环按重试/失败处理), 并留下失败子行"""
+    with pytest.raises(AssertionError):
+        runner._execute({"if": "确认",
+                         "then": [{"desc": "会失败", "click": "不存在的按钮"}]})
+    assert runner._pending_sub_results and runner._pending_sub_results[0]["passed"] is False

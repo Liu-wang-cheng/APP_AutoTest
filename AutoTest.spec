@@ -109,6 +109,10 @@ a = Analysis(
         "core.actions.map_ops", "core.actions.timer_ops",
         "uiautomator2", "adbutils",          # 运行期动态导入
         "rapidocr_onnxruntime", "ddddocr",   # OCR 兜底
+        # ★ rapidocr 的**运行时依赖**: 它是按需 import 的, PyInstaller 静态分析看不到 ——
+        #   实测漏了 pyclipper 的后果是"打包版 OCR 一识别就报 No module named 'pyclipper'",
+        #   而且 import/构造都不报错, 只在识别那一刻才炸(2026-10-11 用户日志实测)。
+        "pyclipper", "six", "shapely",
         "yaml", "openpyxl", "cv2", "PIL",
     ],
     hookspath=[],

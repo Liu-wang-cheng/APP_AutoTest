@@ -44,7 +44,7 @@ ACTION_KEYS = {a["key"] for a in schema.ACTIONS}
 COEXIST_KEYS = {"screenshot", "grab", "match", "wait_for"}
 PRIORITY = {a.key: a.priority for a in reg.dispatch_order()}
 META = {"desc", "wait", "timeout", "retry", "threshold", "duration", "circular",
-        "switch_area", "switch_tpl", "switch_label", "else", "wait_after"}
+        "switch_area", "switch_tpl", "switch_label", "then", "else", "wait_after"}
 
 # 各动作对参数形态的预期
 INT_LIKE = {"room_click", "set_time"}

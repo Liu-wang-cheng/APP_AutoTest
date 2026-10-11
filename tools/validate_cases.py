@@ -25,7 +25,7 @@ KNOWN |= {f["key"] for f in schema.GENERIC_FIELDS}
 # 注意 screenshot **不在**此列 —— 它既是附带截图参数,也能单独作为主动作
 # (独立的截图步骤)。算进 META 会让"只有 screenshot 的步骤"被误报为空步骤。
 META = {"desc", "wait", "timeout", "retry", "threshold", "duration", "circular",
-        "switch_area", "switch_tpl", "switch_label", "else", "wait_after"}
+        "switch_area", "switch_tpl", "switch_label", "then", "else", "wait_after"}
 
 
 def check_case(fn, module, ci, case):

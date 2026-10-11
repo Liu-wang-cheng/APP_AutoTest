@@ -291,3 +291,89 @@ def test_ocr_find_detail_returns_the_matching_line(monkeypatch):
     assert ocr.find_detail(None, ["干燥拖布", "已取消"]) == (None, "", None)
     # 旧接口语义不变
     assert ocr.find(None, ["已完成"]) == "已完成"
+
+
+# ── OCR 自检(2026-10-11: 打包版缺 pyclipper 时"一直报错"的根治) ──
+
+def test_self_check_reports_unavailable_once_and_caches(monkeypatch):
+    """★ 依赖缺失时: 一次说清"不可用", **不再每步刷屏**(以前是每步一条"识别失败")
+
+    打包版缺 pyclipper 时, import/构造都不报错, 只有识别那一刻才炸 —— 所以自检必须**真跑**。
+    """
+    import logging
+    from core import ocr
+
+    recs = []
+
+    class _H(logging.Handler):
+        def emit(self, record):
+            recs.append(record.getMessage())
+
+    h = _H(level=logging.INFO)
+    ocr.log.addHandler(h)
+    monkeypatch.setattr(ocr, "_available", None)          # 清掉缓存
+    calls = []
+
+    def _boom(img):
+        calls.append(1)
+        raise ModuleNotFoundError("No module named 'pyclipper'")
+
+    monkeypatch.setattr(ocr, "_get", lambda: _boom)
+    try:
+        # ★ 直接调 self_check(): conftest 默认把 available() 桩成 False(测试隔离)
+        assert ocr.self_check() is False
+        assert ocr.self_check() is False                  # 第二次走缓存
+    finally:
+        ocr.log.removeHandler(h)
+        monkeypatch.setattr(ocr, "_available", None)
+    assert len(calls) == 1, f"自检不该重复真跑: {len(calls)}"
+    bad = [m for m in recs if "不可用" in m]
+    assert len(bad) == 1 and "pyclipper" in bad[0], recs
+
+
+def test_self_check_passes_when_ocr_really_runs(monkeypatch):
+    """能真跑一次 → 通过(并留下"自检通过"这行, 构建闸门就靠它判打包版 OCR 是否可用)"""
+    import logging
+    from core import ocr
+
+    recs = []
+    h = logging.Handler()
+    h.emit = lambda r: recs.append(r.getMessage())
+    ocr.log.addHandler(h)
+    monkeypatch.setattr(ocr, "_available", None)
+    monkeypatch.setattr(ocr, "_get", lambda: (lambda img: ([], 0.0)))
+    try:
+        assert ocr.self_check() is True
+    finally:
+        ocr.log.removeHandler(h)
+        monkeypatch.setattr(ocr, "_available", None)
+    assert any("自检通过" in m for m in recs), recs
+
+
+def test_verify_package_ocr_gate(tmp_path):
+    """构建闸门: 打包产物必须自己证明 OCR 能用(读程序写的日志)"""
+    import sys as _sys
+    from pathlib import Path as _P
+    _sys.path.insert(0, str(_P(__file__).resolve().parent.parent / "tools"))
+    import verify_package as vp
+
+    app = tmp_path / "dist" / "AutoTest"
+    (app / "reports").mkdir(parents=True)
+    log = app / "reports" / "test.log"
+
+    log.write_text("13:00:00 [INFO] [OCR] RapidOCR 已加载(文本兜底识别)\n"
+                   "13:00:01 [INFO] [OCR] 自检通过(文本兜底可用)\n", encoding="utf-8")
+    assert vp._check_ocr_selfcheck(str(app)) == []
+
+    log.write_text("13:00:01 [WARNING] [OCR] 不可用 —— 判断只走无障碍树: "
+                   "ModuleNotFoundError: No module named 'pyclipper'\n", encoding="utf-8")
+    errs = vp._check_ocr_selfcheck(str(app))
+    assert errs and "pyclipper" in errs[0] and "OCR" in errs[0], errs
+
+    log.write_text("13:00:01 [INFO] 正在检测设备...\n", encoding="utf-8")
+    errs = vp._check_ocr_selfcheck(str(app))
+    assert errs and "自检结论" in errs[0], errs
+
+    (app / "reports" / "test.log").unlink()
+    errs = vp._check_ocr_selfcheck(str(app))
+    assert errs and "读不到程序日志" in errs[0], errs

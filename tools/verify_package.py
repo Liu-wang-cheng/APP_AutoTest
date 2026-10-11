@@ -168,6 +168,32 @@ def _clean_mei_leftovers(before):
     return freed, left
 
 
+def _check_ocr_selfcheck(app_dir):
+    """读打包程序自己写的日志, 确认 OCR 兜底**在冻结环境里真的能跑**。
+
+    判据(程序启动 3 秒后自检, 结论写进 <程序目录>/reports/test.log):
+      · 有 "[OCR] 自检通过"      → 通过
+      · 有 "[OCR] 不可用"        → 失败(附上程序写的原因)
+      · 一行都没有               → 失败(自检没跑起来 / 日志没落盘)
+
+    ★ 这是本项目唯一能证明"打包后 OCR 能用"的手段: 开发环境装了依赖, 怎么测都是好的;
+      之前两次(缺 ch_ppocr_v3_det、缺 pyclipper)都是**只有打包版才暴露**。
+    """
+    log_path = os.path.join(app_dir, "reports", "test.log")
+    try:
+        text = open(log_path, encoding="utf-8", errors="replace").read()
+    except OSError:
+        return [f"读不到程序日志({log_path}) —— 没法确认 OCR 自检结果"]
+    if "[OCR] 自检通过" in text:
+        print("   OK OCR 自检通过(文本兜底在打包版里可用)")
+        return []
+    bad = [ln for ln in text.splitlines() if "[OCR] 不可用" in ln]
+    if bad:
+        return [f"打包版 OCR 不可用 —— {bad[-1].split('[OCR] 不可用')[-1].strip()[:160]}"
+                " (多半是 rapidocr 的运行时依赖没进包: pyclipper / six / shapely)"]
+    return ["日志里没有 OCR 自检结论 —— 程序启动后没跑自检或没写日志(报告链路也要一起查)"]
+
+
 def _launch_check(exe, app_dir, wait=_LAUNCH_WAIT):
     """offscreen 真启动一次: 活过 wait 秒 = 初始化没问题(缺 DLL 会当场崩)。
 
@@ -208,13 +234,17 @@ def _launch_check(exe, app_dir, wait=_LAUNCH_WAIT):
         print("   OK 进程稳定运行, 已结束(含子进程)")
         print(f"   {'OK' if seeded else '[WARN]'} 首次铺资源(config/config.yaml): "
               + ("已生成" if seeded else "未见生成(可能本就存在)"))
+        # ★ OCR 自检闸门(2026-10-11): 程序启动后台会真跑一次 OCR 并把结论写进日志。
+        #   打包版漏收 rapidocr 的运行时依赖(实测漏过 pyclipper)时, import/构造都不报错,
+        #   只有识别那一刻才炸 —— 光看"资源在不在"抓不到, 必须让**冻结后的程序自己**证明。
+        errs = list(_check_ocr_selfcheck(app_dir))
         freed, left = _clean_mei_leftovers(mei_before)
         if freed:
             print(f"   OK 已清理本次启动的一次性解压目录(释放 "
                   f"{freed / 1048576:.0f}MB)")
         for x in left:
             print(f"   [WARN] %TEMP% 残留: {x}")
-        return [], seeded
+        return errs, seeded
 
     out = b""
     try:

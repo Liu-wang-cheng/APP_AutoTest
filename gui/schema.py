@@ -164,12 +164,14 @@ ACTIONS = [
          "hint": "文本(多个用逗号/顿号分隔, 中英文逗号均可) / 电量>50 / 图片名 / resource-id;条件成立跳过本步"},
         {"key": "threshold", "label": "相似度阈值", "type": "float",
          "hint": "条件为图片时,填写则用图像对比判断"},
-    ], "tip": "条件不成立时执行 else 子步骤;展开卡片后可在下方添加/编辑"},
+    ], "tip": "条件**成立**时执行 then 子步骤(没配 then 就跳过本步); **不成立**时执行 else "
+            "子步骤。展开卡片后在下方分别添加/编辑"},
     {"key": "if not", "label": "条件不满足则跳过", "category": "流程控制", "fields": [
         {"key": "if not", "label": "条件", "type": "text", "required": True,
          "hint": "同「条件满足则跳过」,判断结果取反"},
         {"key": "threshold", "label": "相似度阈值", "type": "float"},
-    ], "tip": "条件成立时执行 else 子步骤;展开卡片后可在下方添加/编辑"},
+    ], "tip": "条件**取反后成立**时执行 then 子步骤(没配 then 就跳过本步); 不成立时执行 "
+            "else 子步骤。展开卡片后在下方分别添加/编辑"},
 ]
 
 ACTION_BY_KEY = {a["key"]: a for a in ACTIONS}
@@ -238,7 +240,8 @@ def serialize_step(step):
                 continue
             out[k] = v
             continue
-        if k == "else" and isinstance(v, list):  # else 子步骤递归清理(必须在 int4 分支前)
+        # 子步骤列表(条件成立 then / 不成立 else)递归清理(必须在 int4 分支前)
+        if k in ("then", "else") and isinstance(v, list):
             out[k] = [serialize_step(s) for s in v]
             continue
         if isinstance(v, list):  # int4
@@ -280,10 +283,11 @@ def validate_step(step):
             errors.append(f"「{f['label']}」必填")
     if errors and action.get("tip"):
         errors.append(action["tip"])
-    for i, sub in enumerate(step.get("else") or []):
-        if isinstance(sub, dict):
-            for err in validate_step(sub):
-                errors.append(f"else子步骤{i + 1}: {err}")
+    for branch, label in (("then", "then子步骤"), ("else", "else子步骤")):
+        for i, sub in enumerate(step.get(branch) or []):
+            if isinstance(sub, dict):
+                for err in validate_step(sub):
+                    errors.append(f"{label}{i + 1}: {err}")
     return errors
 
 
@@ -326,9 +330,10 @@ def step_summary(step):
     else:
         main = detail
     badges = []
-    else_items = step.get("else")
-    if isinstance(else_items, list) and else_items:
-        badges.append(f"▸else {len(else_items)}步")
+    for branch in ("then", "else"):
+        items = step.get(branch)
+        if isinstance(items, list) and items:
+            badges.append(f"▸{branch} {len(items)}步")
     if step.get("screenshot"):
         badges.append("📷")
     if step.get("wait"):

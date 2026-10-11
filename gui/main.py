@@ -46,6 +46,31 @@ def _run_backup_async():
     threading.Thread(target=_work, name="auto-backup", daemon=True).start()
 
 
+def _run_ocr_selfcheck_async():
+    """后台确认 OCR 兜底**真的能用**, 并在日志里留下结论 —— 不阻塞启动。
+
+    ★ 为什么(2026-10-11 用户报"OCR 还在报错"): 打包版漏收 rapidocr 的运行时依赖
+      (pyclipper 等)时, 日志照样先打"RapidOCR 已加载", 直到识别那一刻才炸, 每步刷一条
+      "[OCR] 识别失败(忽略)" —— 看上去像偶发, 其实兜底一直死着。真跑一次自检,
+      要么"自检通过", 要么一次说清原因。
+    ★ 异步: 构造 + 识别一次约 1~2 秒, 放主线程会让启动明显变慢。
+    ★ 顺带成为**构建闸门**: tools/verify_package.py 会启动打包产物并检查这行日志,
+      没有"自检通过"就直接判打包失败(防止再发一个 OCR 是死的版本)。
+    """
+    import threading
+
+    def _work():
+        try:
+            import time as _t
+            _t.sleep(3)                     # 让启动先完成(与更新检查错开)
+            from core import ocr
+            ocr.self_check()
+        except Exception:
+            pass
+
+    threading.Thread(target=_work, name="ocr-selfcheck", daemon=True).start()
+
+
 def main():
     _detach_console()
 
@@ -65,6 +90,7 @@ def main():
     cleanup_update_leftovers(os.path.dirname(os.path.abspath(sys.argv[0])))
     setup_logger()
     _run_backup_async()
+    _run_ocr_selfcheck_async()
     app = QApplication(sys.argv)
     # 应用图标(任务栏/窗口):自绘 乐动品牌融合(O传感器+对勾);ico 含 16~256 多尺寸
     # ★ 不要在 main() 里再 `import os` —— 函数内 import 会把 os 变成**整个函数**

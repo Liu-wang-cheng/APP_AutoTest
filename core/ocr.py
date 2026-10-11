@@ -30,13 +30,36 @@ CACHE_SECS = 1.5          # 同一帧不重复识别(一次识别约 1s)
 SPARSE_MIN_TEXTS = 5      # 层级里可见文本少于此数 ⇒ 认为页面主体没暴露
 
 
+_available = None          # 自检结果缓存(None = 还没查过)
+
+
+def self_check():
+    """OCR 到底**能不能用** —— 真的构造一次并识别一张小图, 不是只看包装没装。
+
+    ★ 为什么必须真跑一次(2026-10-11 用户报"OCR 还在报错"查出来的): 打包版缺
+      `pyclipper`(rapidocr 的运行时依赖)时, `import rapidocr_onnxruntime` 照样成功、
+      `RapidOCR()` 构造也照样成功 —— **只有识别的那一刻**才抛
+      `No module named 'pyclipper'`。于是日志先打"RapidOCR 已加载", 然后每次判断都刷一条
+      "[OCR] 识别失败(忽略)", 看上去像"偶发", 其实兜底**一直是死的**。
+      真跑一次之后: 要么一次通过, 要么一次说清"不可用+原因", 不再每步刷屏。
+    """
+    global _available
+    if _available is None:
+        try:
+            import numpy as np
+            _get()(np.full((32, 128, 3), 255, dtype=np.uint8))     # 真的识别一次
+            _available = True
+            log.info("[OCR] 自检通过(文本兜底可用)")
+        except Exception as e:
+            _available = False
+            log.warning(f"[OCR] 不可用 —— 判断只走无障碍树(不影响用例, 但插件页可能读不到): "
+                        f"{type(e).__name__}: {e}")
+    return _available
+
+
 def available():
-    """装了 RapidOCR 才启用兜底"""
-    try:
-        import rapidocr_onnxruntime  # noqa: F401
-        return True
-    except Exception:
-        return False
+    """装了 RapidOCR **并且真的跑得起来** 才启用兜底"""
+    return self_check()
 
 
 def _get():

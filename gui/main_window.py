@@ -661,27 +661,28 @@ class StepCard(QFrame):
     sub_index 为 None 时是顶层步骤卡片;否则是 else 子步骤卡片(缩进显示)。
     """
 
-    def __init__(self, main, index, parent_index=None, sub_index=None):
+    def __init__(self, main, index, parent_index=None, sub_index=None, branch="else"):
         super().__init__()
         self.main = main
         self.index = index
         self.parent_index = parent_index
         self.sub_index = sub_index
+        self.branch = branch        # 子步骤所属分支: "then"(条件成立时) / "else"(不成立时)
         self.is_sub = sub_index is not None
         if self.is_sub:
-            self.step = main.steps[parent_index].setdefault("else", [])[sub_index]
+            self.step = main.steps[parent_index].setdefault(branch, [])[sub_index]
         else:
             self.step = main.steps[index]
         self.getters = {}
         self.widgets = {}  # 表单控件引用(测试/程序化设值用)
-        self.key = (index,) if not self.is_sub else (parent_index, sub_index)
+        self.key = (index,) if not self.is_sub else (parent_index, branch, sub_index)
         if self.is_sub:
             self.expanded = (main.expanded_key == self.key)
         else:
             # 顶层卡片: 本身展开,或其 else 子步骤处于展开态,都视为打开
             ek = main.expanded_key
             self.expanded = (ek == self.key or
-                             (isinstance(ek, tuple) and len(ek) == 2 and ek[0] == index))
+                             (isinstance(ek, tuple) and len(ek) >= 2 and ek[0] == index))
         if self.is_sub:
             self.setObjectName("subStepCardOpen" if self.expanded else "subStepCard")
         else:
@@ -725,9 +726,12 @@ class StepCard(QFrame):
         self._refresh_summary()
 
         if self.is_sub:
-            ops = [("▲", "上移", lambda: self.main.move_sub(self.parent_index, self.sub_index, -1)),
-                   ("▼", "下移", lambda: self.main.move_sub(self.parent_index, self.sub_index, 1)),
-                   ("✕", "删除", lambda: self.main.del_sub(self.parent_index, self.sub_index))]
+            ops = [("▲", "上移", lambda: self.main.move_sub(self.parent_index, self.sub_index, -1,
+                                                          self.branch)),
+                   ("▼", "下移", lambda: self.main.move_sub(self.parent_index, self.sub_index, 1,
+                                                          self.branch)),
+                   ("✕", "删除", lambda: self.main.del_sub(self.parent_index, self.sub_index,
+                                                         self.branch))]
         else:
             ops = [("▲", "上移", lambda: self.main.move_step(self.index, -1)),
                    ("▼", "下移", lambda: self.main.move_step(self.index, 1)),
@@ -820,23 +824,31 @@ class StepCard(QFrame):
         self.adv_grid_host.setVisible(False)
         fv.addWidget(self.adv_grid_host)
 
-        # if / if not: else 子步骤管理区(子卡片在 render_cards 中紧随其后渲染)
+        # if / if not: then / else 两个分支的子步骤管理区(子卡片在 render_cards 里紧随其后渲染)
         if action and action["key"] in ("if", "if not"):
-            self._build_else_section(fv)
+            self._build_branch_sections(fv)
 
         lay.addWidget(form)
 
-    def _build_else_section(self, fv):
-        row = QHBoxLayout()
-        lbl = QLabel("else 分支(条件不满足时执行,子步骤见下方缩进卡片)")
-        lbl.setObjectName("fieldLabel")
-        row.addWidget(lbl)
-        add_btn = QPushButton("＋ 子步骤")
-        add_btn.setObjectName("chipBtn")
-        add_btn.setMenu(make_action_menu(add_btn, lambda k: self.main.add_sub(self.index, k)))
-        row.addWidget(add_btn)
-        row.addStretch()
-        fv.addLayout(row)
+    def _build_branch_sections(self, fv):
+        """条件成立(then) / 不成立(else) 两个分支各一组子步骤(子步骤见下方缩进卡片)。
+
+        ★ 用户要求(2026-10-11): then 分支原来没有子步骤, 只能靠"条件取反 + else"绕。
+        """
+        for branch, text in (("then", "then 分支(条件成立时执行,子步骤见下方缩进卡片)"),
+                             ("else", "else 分支(条件不满足时执行,子步骤见下方缩进卡片)")):
+            row = QHBoxLayout()
+            lbl = QLabel(text)
+            lbl.setObjectName("fieldLabel")
+            row.addWidget(lbl)
+            add_btn = QPushButton("＋ 子步骤")
+            add_btn.setObjectName("chipBtn")
+            add_btn.setToolTip(f"给「{branch}」分支加一条子步骤")
+            add_btn.setMenu(make_action_menu(
+                add_btn, lambda k, b=branch: self.main.add_sub(self.index, k, b)))
+            row.addWidget(add_btn)
+            row.addStretch()
+            fv.addLayout(row)
 
     def _add_field(self, grid, row, field):
         lbl = QLabel(field["label"])
@@ -1082,32 +1094,32 @@ class _StepsHost(QObject):
             self.expanded_key = None
             self.changed.emit()
 
-    def add_sub(self, parent_index, action_key):
+    def add_sub(self, parent_index, action_key, branch="else"):
         if not (0 <= parent_index < len(self.steps)):
             return
         sub = schema.new_step(action_key)
-        subs = self.steps[parent_index].setdefault("else", [])
+        subs = self.steps[parent_index].setdefault(branch, [])
         subs.append(sub)
-        self.expanded_key = (parent_index, len(subs) - 1)
+        self.expanded_key = (parent_index, branch, len(subs) - 1)
         self.changed.emit()
 
-    def move_sub(self, parent_index, sub_index, delta):
-        subs = self.steps[parent_index].get("else") or []
+    def move_sub(self, parent_index, sub_index, delta, branch="else"):
+        subs = self.steps[parent_index].get(branch) or []
         j = sub_index + delta
         if 0 <= sub_index < len(subs) and 0 <= j < len(subs):
             subs[sub_index], subs[j] = subs[j], subs[sub_index]
-            self.expanded_key = (parent_index, j)
+            self.expanded_key = (parent_index, branch, j)
             self.changed.emit()
 
-    def dup_sub(self, parent_index, sub_index):
-        subs = self.steps[parent_index].get("else") or []
+    def dup_sub(self, parent_index, sub_index, branch="else"):
+        subs = self.steps[parent_index].get(branch) or []
         if 0 <= sub_index < len(subs):
             subs.insert(sub_index + 1, copy.deepcopy(subs[sub_index]))
-            self.expanded_key = (parent_index, sub_index + 1)
+            self.expanded_key = (parent_index, branch, sub_index + 1)
             self.changed.emit()
 
-    def del_sub(self, parent_index, sub_index):
-        subs = self.steps[parent_index].get("else") or []
+    def del_sub(self, parent_index, sub_index, branch="else"):
+        subs = self.steps[parent_index].get(branch) or []
         if 0 <= sub_index < len(subs):
             subs.pop(sub_index)
             self.expanded_key = ((parent_index,) if subs else None)
@@ -1212,11 +1224,16 @@ class _StepsEditor(QWidget):
                                         StepCard(self.host, i))
             ek = self.host.expanded_key
             step = self.host.steps[i]
-            if ek and ek[0] == i and isinstance(step.get("else"), list):
-                for j in range(len(step["else"])):
-                    self.cards_lay.insertWidget(
-                        self.cards_lay.count() - 1,
-                        StepCard(self.host, i, parent_index=i, sub_index=j))
+            if ek and ek[0] == i:
+                for branch in ("then", "else"):        # 两个分支的子卡片都要渲染
+                    subs = step.get(branch)
+                    if not isinstance(subs, list):
+                        continue
+                    for j in range(len(subs)):
+                        self.cards_lay.insertWidget(
+                            self.cards_lay.count() - 1,
+                            StepCard(self.host, i, parent_index=i, sub_index=j,
+                                     branch=branch))
         self.count_label.setText(f"共 {len(self.host.steps)} 步")
 
 
@@ -3391,12 +3408,17 @@ class MainWindow(QMainWindow):
         for i in range(len(self.steps)):
             step = self.steps[i]
             self.cards_lay.insertWidget(self.cards_lay.count() - 1, StepCard(self, i))
-            # 父卡片(或其子步骤)展开时,else 子步骤以缩进子卡片紧随其后
+            # 父卡片(或其子步骤)展开时, then/else 两个分支的子步骤都以缩进子卡片紧随其后
             ek = self.expanded_key
-            if ek and ek[0] == i and isinstance(step.get("else"), list):
-                for j in range(len(step["else"])):
-                    self.cards_lay.insertWidget(
-                        self.cards_lay.count() - 1, StepCard(self, i, parent_index=i, sub_index=j))
+            if ek and ek[0] == i:
+                for branch in ("then", "else"):
+                    subs = step.get(branch)
+                    if not isinstance(subs, list):
+                        continue
+                    for j in range(len(subs)):
+                        self.cards_lay.insertWidget(
+                            self.cards_lay.count() - 1,
+                            StepCard(self, i, parent_index=i, sub_index=j, branch=branch))
         self.step_count_label.setText(f"共 {len(self.steps)} 步")
         self._refresh_yaml_text()
 
@@ -3498,50 +3520,50 @@ class MainWindow(QMainWindow):
         self.render_cards()
         self._auto_save()
 
-    # ── else 子步骤操作 ──
-    def _else_list(self, parent_index):
-        return self.steps[parent_index].setdefault("else", [])
+    # ── then / else 子步骤操作(2026-10-11: then 原来没有子步骤, 只能靠"取反条件+else"绕) ──
+    def _sub_list(self, parent_index, branch="else"):
+        return self.steps[parent_index].setdefault(branch, [])
 
-    def add_sub(self, parent_index, action_key):
+    def add_sub(self, parent_index, action_key, branch="else"):
         if self.worker:
             return
         step = schema.new_step(action_key)
-        else_list = self._else_list(parent_index)
-        else_list.append(step)
-        self.expanded_key = (parent_index, len(else_list) - 1)
+        subs = self._sub_list(parent_index, branch)
+        subs.append(step)
+        self.expanded_key = (parent_index, branch, len(subs) - 1)
         self.render_cards()
         self._auto_save()
         self._scroll_to_end()
 
-    def move_sub(self, parent_index, sub_index, delta):
+    def move_sub(self, parent_index, sub_index, delta, branch="else"):
         if self.worker:
             return
-        else_list = self.steps[parent_index].get("else") or []
+        subs = self.steps[parent_index].get(branch) or []
         new = sub_index + delta
-        if not (0 <= new < len(else_list)):
+        if not (0 <= new < len(subs)):
             return
-        else_list[sub_index], else_list[new] = else_list[new], else_list[sub_index]
-        if self.expanded_key == (parent_index, sub_index):
-            self.expanded_key = (parent_index, new)
+        subs[sub_index], subs[new] = subs[new], subs[sub_index]
+        if self.expanded_key == (parent_index, branch, sub_index):
+            self.expanded_key = (parent_index, branch, new)
         self.render_cards()
         self._auto_save()
 
-    def dup_sub(self, parent_index, sub_index):
+    def dup_sub(self, parent_index, sub_index, branch="else"):
         if self.worker:
             return
-        else_list = self._else_list(parent_index)
-        else_list.insert(sub_index + 1, copy.deepcopy(else_list[sub_index]))
-        self.expanded_key = (parent_index, sub_index + 1)
+        subs = self._sub_list(parent_index, branch)
+        subs.insert(sub_index + 1, copy.deepcopy(subs[sub_index]))
+        self.expanded_key = (parent_index, branch, sub_index + 1)
         self.render_cards()
         self._auto_save()
 
-    def del_sub(self, parent_index, sub_index):
+    def del_sub(self, parent_index, sub_index, branch="else"):
         if self.worker:
             return
-        else_list = self.steps[parent_index].get("else") or []
-        if 0 <= sub_index < len(else_list):
-            del else_list[sub_index]
-        if self.expanded_key and len(self.expanded_key) == 2 and self.expanded_key[0] == parent_index:
+        subs = self.steps[parent_index].get(branch) or []
+        if 0 <= sub_index < len(subs):
+            del subs[sub_index]
+        if self.expanded_key and len(self.expanded_key) >= 2 and self.expanded_key[0] == parent_index:
             self.expanded_key = (parent_index,)  # 收回到父卡片
         self.render_cards()
         self._auto_save()

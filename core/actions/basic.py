@@ -310,22 +310,35 @@ def do_if_impl(runner, step, negate):
 
     if negate:
         passed = not passed
-    # ★ 条件分支也要留痕: 走没走 else 直接决定后面为什么"少跑了几步"
-    _else_n = len(step.get("else") or [])
-    log.info(f"[if{'(not)' if negate else ''}] 条件{'成立' if passed else '不成立'}"
-             f"({condition!r}) → " + ("跳过 else" if passed else f"执行 else({_else_n} 步)"))
-
+    # ★ 条件分支也要留痕: 走哪个分支直接决定后面为什么"多跑/少跑了几步"
+    then_branch = step.get("then") or []
+    else_branch = step.get("else") or []
     if passed:
-        # ★ 必须清掉上一次尝试可能留下的子结果 —— if 步骤带 retry 时, 第 1 次走 else
-        #   失败会往 _pending_sub_results 里塞失败子行; 重试成功走这里直接 return,
-        #   残留的子行会被 _execute 当成"本次结果"追加进结果表 → 幽灵 FAIL 行。
-        #   后果不只是显示: report.add_result(module, False, ...) 让该用例 failed>=1,
-        #   Excel 汇总于是把这条**整体通过**的用例标成 FAIL。
+        what = f"执行 then({len(then_branch)} 步)" if then_branch else "跳过(没有 then 子步骤)"
+    else:
+        what = f"执行 else({len(else_branch)} 步)" if else_branch else "跳过(没有 else 子步骤)"
+    log.info(f"[if{'(not)' if negate else ''}] 条件{'成立' if passed else '不成立'}"
+             f"({condition!r}) → {what}")
+
+    _run_branch(runner, then_branch if passed else else_branch)
+
+
+def _run_branch(runner, steps):
+    """执行 if 的某个分支子步骤(条件成立→`then`, 不成立→`else`)。
+
+    ★ 子结果进 `_pending_sub_results`, 由 `_execute` 追加到结果表; 子步骤失败直接抛,
+      由主循环按重试/失败流程处理。
+    ★ **空分支必须清掉 `_pending_sub_results`**(原来的注释):
+      if 步骤带 retry 时, 第 1 次走 A 分支失败会往里面塞失败子行; 重试走了 B 分支(或空分支)
+      时, 残留的子行会被 `_execute` 当成"本次结果"追加进结果表 → 幽灵 FAIL 行。
+      后果不只是显示: `report.add_result(module, False, ...)` 让该用例 failed>=1,
+      Excel 汇总于是把这条**整体通过**的用例标成 FAIL。
+    """
+    if not steps:
         runner._pending_sub_results = None
         return
-    else_branch = step.get("else", [])
     runner._pending_sub_results = []
-    for s in else_branch:
+    for s in steps:
         desc = s.get("desc", runner._step_desc(s))
         ss = ""
         try:

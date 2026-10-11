@@ -178,11 +178,34 @@ def test_del_step_rolls_expanded_key_back(win):
 
 
 def test_add_sub_appends_and_expands(win):
+    """子步骤默认加到 else 分支; 展开键形如 (父序号, 分支, 子序号) —— 有两个分支后必带分支名"""
     win.create_case("测试组", group="测试组")
     win.add_step("if")
     win.add_sub(0, "click")
     assert len(win.steps[0]["else"]) == 1
-    assert win.expanded_key == (0, 0)
+    assert win.expanded_key == (0, "else", 0)
+
+
+def test_add_sub_to_then_branch(win):
+    """★ then 分支(条件成立时执行)也要能加/管子步骤(2026-10-11 用户要求)"""
+    win.create_case("测试组", group="测试组")
+    win.add_step("if")
+    win.add_sub(0, "click", "then")
+    win.add_sub(0, "back", "then")
+    win.add_sub(0, "sleep")                     # 默认仍是 else
+    from gui import schema as _S
+    assert [next((k for k in s if k in _S.ACTION_BY_KEY), None)
+            for s in win.steps[0]["then"]] == ["click", "back"]
+    assert len(win.steps[0]["else"]) == 1, "then 与 else 必须互不干扰"
+    assert win.expanded_key == (0, "else", 0)
+    win.steps[0]["then"][0]["desc"], win.steps[0]["then"][1]["desc"] = "T1", "T2"
+    win.move_sub(0, 0, 1, "then")               # else 不动
+    assert [s["desc"] for s in win.steps[0]["then"]] == ["T2", "T1"]
+    assert len(win.steps[0]["else"]) == 1
+    win.dup_sub(0, 0, "then")
+    assert len(win.steps[0]["then"]) == 3
+    win.del_sub(0, 0, "then")
+    assert len(win.steps[0]["then"]) == 2 and len(win.steps[0]["else"]) == 1
 
 
 def test_add_sub_wait_shortcut(win):
