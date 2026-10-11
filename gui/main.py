@@ -71,6 +71,24 @@ def _run_ocr_selfcheck_async():
     threading.Thread(target=_work, name="ocr-selfcheck", daemon=True).start()
 
 
+def _prune_debug_async():
+    """后台给 Test_img/debug/ 封顶 —— 调试产物(点击标记/失败截图)不该无限堆。
+
+    用户要求(2026-10-11): "测试的调试图片也要限制一下"。测试期有 conftest 每轮清,
+    打包版没有, 跑几个月能堆到几个 GB。策略见 core.bootstrap.prune_debug_artifacts。
+    """
+    import threading
+
+    def _work():
+        try:
+            from core.bootstrap import prune_debug_artifacts
+            prune_debug_artifacts()
+        except Exception:
+            pass
+
+    threading.Thread(target=_work, name="prune-debug", daemon=True).start()
+
+
 def main():
     _detach_console()
 
@@ -91,6 +109,7 @@ def main():
     setup_logger()
     _run_backup_async()
     _run_ocr_selfcheck_async()
+    _prune_debug_async()
     app = QApplication(sys.argv)
     # 应用图标(任务栏/窗口):自绘 乐动品牌融合(O传感器+对勾);ico 含 16~256 多尺寸
     # ★ 不要在 main() 里再 `import os` —— 函数内 import 会把 os 变成**整个函数**

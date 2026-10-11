@@ -256,3 +256,81 @@ def _ensure_update_section(cfg_path):
     _atomic_write(cfg_path, text.rstrip("\r\n") + eol + block)
     log.info("[初始化] config.yaml 缺少 update 段, 已补上默认配置(自动更新启用)")
     return True
+
+
+#: 调试图片的封顶策略(用户要求 2026-10-11: "测试的调试图片也要限制一下")
+#: 每次真机运行都会往 Test_img/debug/ 存模板点击标记、失败截图与失败前的时序证据 ——
+#: 长期跑下来会慢慢堆满盘(打包版没有测试期那套清理)。
+DEBUG_KEEP_PER_DIR = 200          # 每个子目录最多留最新的 200 个文件
+DEBUG_MAX_TOTAL_MB = 300          # 整个 debug 目录最多占 300MB(超了按最旧优先删)
+
+
+def _debug_entries(debug_dir):
+    """[(mtime, size, path)] —— debug 目录下所有文件(含子目录)"""
+    out = []
+    for root, _dirs, files in os.walk(debug_dir):
+        for fn in files:
+            p = os.path.join(root, fn)
+            try:
+                st = os.stat(p)
+            except OSError:
+                continue
+            out.append((st.st_mtime, st.st_size, p))
+    return out
+
+
+def prune_debug_artifacts(app_dir=None, keep_per_dir=DEBUG_KEEP_PER_DIR,
+                          max_total_mb=DEBUG_MAX_TOTAL_MB):
+    """给调试产物封顶: 每个子目录只留最新的 N 个, 整体超过上限时按最旧优先删。
+
+    返回 (删掉的文件数, 释放的字节数)。任何异常都吞掉 —— 清理绝不能影响启动。
+
+    ★ 为什么要它: 模板点击标记(每次模板点击一张)、失败截图、失败前时序证据都落在
+      Test_img/debug/ 下; 跑几个月能堆到几个 GB, 而它们只是**排查用**的中间产物。
+      测试期有 conftest 每轮清, 打包版没有 —— 这里补上。
+    """
+    root = _app_root(app_dir)
+    if not root:
+        return 0, 0
+    debug_dir = os.path.join(root, "Test_img", "debug")
+    if not os.path.isdir(debug_dir):
+        return 0, 0
+    try:
+        entries = _debug_entries(debug_dir)
+        doomed = []
+        # ① 每个目录只留最新 keep_per_dir 个
+        by_dir = {}
+        for mt, size, p in entries:
+            by_dir.setdefault(os.path.dirname(p), []).append((mt, size, p))
+        for _d, items in by_dir.items():
+            items.sort(reverse=True)                  # 新 → 旧
+            doomed.extend(items[keep_per_dir:])
+        # ② 整体体积超上限 → 按最旧优先继续删(不算已判死的)
+        dead = {p for _mt, _s, p in doomed}
+        total = sum(s for _mt, s, _p in entries if _p not in dead)
+        if total > max_total_mb * 1024 * 1024:
+            for mt, size, p in sorted(entries, key=lambda x: x[0]):   # 旧 → 新
+                if total <= max_total_mb * 1024 * 1024:
+                    break
+                if p in dead:
+                    continue
+                dead.add(p)
+                total -= size
+        freed = n = 0
+        for _mt, size, p in entries:
+            if p in dead and _remove(p):
+                n += 1
+                freed += size
+        # 顺手收掉空目录
+        for root2, dirs, files in os.walk(debug_dir, topdown=False):
+            if root2 != debug_dir and not os.listdir(root2):
+                try:
+                    os.rmdir(root2)
+                except OSError:
+                    pass
+        if n:
+            log.info(f"[初始化] 调试产物封顶: 删除 {n} 个旧文件, 释放 {freed / 1048576:.0f}MB")
+        return n, freed
+    except Exception as e:          # 清理失败绝不能影响启动
+        log.debug(f"[初始化] 调试产物清理跳过: {e}")
+        return 0, 0

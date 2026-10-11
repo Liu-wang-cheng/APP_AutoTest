@@ -32,6 +32,9 @@ REM   (config\ Test_cases\ Test_img\ backups\ reports\ —— 跑一次打包版
 REM   删除会连带毁掉使用者的配置与用例(实测踩过: 构建前得先把它们挪走才敢跑)。
 if exist "dist\AutoTest\AutoTest.exe" del /f /q "dist\AutoTest\AutoTest.exe"
 if exist "dist\AutoTest\_internal" rmdir /s /q "dist\AutoTest\_internal"
+REM ★ 旧的分发包(AutoTest_v*.zip)一直是**构建产物**, 不是用户数据 —— 不清的话每发一版就地多留 215MB(实测攒到 1.7GB)。只删 zip, 绝不碰同一目录下的
+REM   config\ Test_cases\ backups\ 等用户数据。
+if exist "dist\AutoTest_v*.zip" del /f /q "dist\AutoTest_v*.zip" 2>nul
 
 echo [4/4] PyInstaller 打包(目录模式 onedir, 首次约需几分钟)...
 "%PY%" -m PyInstaller AutoTest.spec --noconfirm --distpath dist --workpath build\pyi || exit /b 1

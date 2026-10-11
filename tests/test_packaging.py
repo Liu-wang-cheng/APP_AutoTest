@@ -868,3 +868,54 @@ def test_build_bat_only_removes_program_files():
     assert r"rmdir /s /q build" in text, r"build\ 中间产物该删(可再生产)"
     assert "verify_package.py" in text, "没有验证产物"
     assert "--pack-only" in text, "没有打分发 zip 这一步"
+
+
+# ── 调试产物封顶(用户要求 2026-10-11: "测试的调试图片也要限制一下") ──
+
+def test_prune_debug_artifacts_keeps_newest_per_dir(tmp_path, monkeypatch):
+    """每个子目录只留**最新**的 N 个; 用户数据(debug 之外)一律不动"""
+    import os as _os
+    from core import bootstrap
+
+    monkeypatch.setattr(bootstrap, "_app_root", lambda app_dir=None: str(tmp_path))
+    clicks = tmp_path / "Test_img" / "debug" / "clicks" / "用例A"
+    clicks.mkdir(parents=True)
+    for i in range(5):
+        f = clicks / f"f{i}.png"
+        f.write_bytes(b"x" * 10)
+        _os.utime(f, (1000 + i, 1000 + i))          # mtime 递增: f4 最新
+    keep = tmp_path / "Test_img" / "templates" / "模板.png"   # 不该被碰
+    keep.parent.mkdir(parents=True)
+    keep.write_bytes(b"TPL")
+
+    n, freed = bootstrap.prune_debug_artifacts(keep_per_dir=2)
+    assert n == 3 and freed == 30, (n, freed)
+    assert sorted(p.name for p in clicks.iterdir()) == ["f3.png", "f4.png"]
+    assert keep.exists(), "debug 之外的文件被误删了"
+
+
+def test_prune_debug_artifacts_caps_total_size(tmp_path, monkeypatch):
+    """整体体积超上限 → 按**最旧优先**继续删(数量没超也一样)"""
+    import os as _os
+    from core import bootstrap
+
+    monkeypatch.setattr(bootstrap, "_app_root", lambda app_dir=None: str(tmp_path))
+    d = tmp_path / "Test_img" / "debug" / "failures"
+    d.mkdir(parents=True)
+    for i in range(4):
+        f = d / f"big{i}.bin"
+        f.write_bytes(b"y" * 1024)
+        _os.utime(f, (2000 + i, 2000 + i))
+    # 上限 2KB: 4×1KB → 必须删到只剩 2 个(最旧的两个)
+    n, freed = bootstrap.prune_debug_artifacts(keep_per_dir=99, max_total_mb=2 / 1024)
+    assert n == 2 and sorted(p.name for p in d.iterdir()) == ["big2.bin", "big3.bin"], \
+        sorted(p.name for p in d.iterdir())
+
+
+def test_prune_debug_artifacts_is_safe_when_missing(tmp_path, monkeypatch):
+    """没有 debug 目录 / 清理出错都不能影响启动"""
+    from core import bootstrap
+    monkeypatch.setattr(bootstrap, "_app_root", lambda app_dir=None: str(tmp_path))
+    assert bootstrap.prune_debug_artifacts() == (0, 0)
+    monkeypatch.setattr(bootstrap, "_app_root", lambda app_dir=None: "")
+    assert bootstrap.prune_debug_artifacts() == (0, 0)
