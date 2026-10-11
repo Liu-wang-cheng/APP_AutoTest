@@ -208,3 +208,23 @@ def test_swipe_direction_still_works_after_coordinate_support(runner):
     runner._execute({"swipe": "left"})
     sx, sy, ex, ey = runner.d.swiped
     assert ex < sx and sy == ey
+
+
+def test_empty_assert_value_fails_loudly_instead_of_passing(runner):
+    """★ 空值的文本断言**必须报错**, 不能"不检测就通过"。
+
+    真机实测(2026-10-11): `d(textContains="")` 匹配**任意**元素(exists=True) ——
+    于是值为空的断言会立刻"通过", 用户看到的是"连续两个断言, 第二个没检测成功却通过了"。
+    空值还更危险地影响 click: 会点到随机位置。所以保护加在 _find_element 入口,
+    所有判断/点击一起受益。
+    """
+    # None 也要走同一条报错: 手写 YAML 的 `assert:`(空)解析出来就是 None,
+    # 排在 startswith 之后会先撞 AttributeError(用户看到的是崩栈而不是中文报错)
+    for bad in ("", "   ", "\t", None):
+        with pytest.raises(ValueError, match="为空"):
+            runner._find_element(bad)
+    with pytest.raises(ValueError, match="为空"):
+        runner._execute({"assert": ""})
+    # 正常的断言/点击不受影响
+    runner._execute({"assert": "确认"})
+    runner._execute({"click": "确认"})

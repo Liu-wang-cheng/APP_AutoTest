@@ -251,6 +251,14 @@ class ActionRunner:
         return [(t, None) for t in texts]
 
     def _find_element(self, value):
+        # ★ 空值必须**明确报错**(2026-10-11 真机实测): `d(textContains="")` 会匹配到
+        #   **任意**元素(exists=True) —— 于是"空的文本断言"不检测就通过、"空的点击"
+        #   点到随机位置。宁可报错也不能静默放过(用户实测: 连续两个断言, 第二个没检测
+        #   成功却通过了, 根因就是它的值空了)。
+        #   ★ 放在最前面: 手写 YAML 里的 `assert:`(后面什么都没写)解析出来是 **None**,
+        #   排在 startswith 之后的话会先撞 AttributeError, 用户看到的是一句看不懂的崩栈。
+        if not str(value or "").strip():
+            raise ValueError("定位串为空: 请填断言文本 / 模板名 / x,y 坐标")
         # XPath(v1.4 Appium 用例迁移来的定位串): 以 // 开头或 xpath= 前缀
         if value.startswith("//") or value.startswith("xpath="):
             return XPathElement(self.d, value[6:] if value.startswith("xpath=") else value)
