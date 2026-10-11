@@ -199,28 +199,45 @@ def test_text_present_falls_back_to_ocr(monkeypatch):
     assert calls, f"持续读不到时也该按 5 轮周期做 OCR: {calls}"
 
 
-def test_ocr_only_on_every_fifth_round(monkeypatch):
-    """★ 5 轮规则(用户 2026-10-11): 第 1~4 轮只读无障碍树, 第 5/10/15… 轮才 OCR。
+def test_normal_page_does_ocr_on_every_fifth_round(monkeypatch):
+    """★ 正常页面: 前 4 轮只读无障碍树, 第 5/10/15… 轮才截图识别(用户定的 5 组循环)。
 
-    单次判断(round_no=None)不受限 —— 那种场合 OCR 是唯一机会, 不该被轮次挡掉。
+    正常页面也要周期性兜底的原因: 有时文字**画在屏幕上但没进无障碍树**(WebView 局部),
+    只读树会一直判不到。单次判断(round_no=None)不受限 —— 那是唯一机会。
     """
     from core import ocr, session
-    xml = '<node text="扫地机器人0087"/>'            # 稀疏: 满足走 OCR 的前提
+    xml = '<node text="甲"/><node text="乙"/><node text="丙"/><node text="丁"/><node text="戊"/>'
     monkeypatch.setattr(ocr, "available", lambda: True)
-    monkeypatch.setattr(ocr, "sparse", lambda x, **k: True)
+    monkeypatch.setattr(ocr, "sparse", lambda x, **k: False)        # 正常页面
     calls = []
     monkeypatch.setattr(ocr, "find_detail",
                         lambda d, texts: (calls.append(1), (None, "", None))[1])
 
     for round_no in (1, 2, 3, 4, 6, 7, 8, 9, 11):
-        assert session.text_present_detail(None, ["不会命中"], xml=xml,
-                                           round_no=round_no)[0] is None
+        session.text_present_detail(None, ["不会命中"], xml=xml, round_no=round_no)
     assert calls == [], f"非 5 的倍数轮不该做 OCR: {len(calls)} 次"
     for round_no in (5, 10, 15):
         session.text_present_detail(None, ["不会命中"], xml=xml, round_no=round_no)
     assert len(calls) == 3, f"第 5/10/15 轮应各做一次: {len(calls)}"
-    session.text_present_detail(None, ["不会命中"], xml=xml)     # 单次判断
+    session.text_present_detail(None, ["不会命中"], xml=xml)          # 单次判断
     assert len(calls) == 4, "单次判断(round_no=None)仍应允许 OCR"
+
+
+def test_sparse_page_does_ocr_every_round(monkeypatch):
+    """★ 页面主体没暴露(插件页, 树稀疏) → **每轮都允许** OCR(不等 5 轮)。
+
+    这种页面上原生本来就什么都读不到, 再按 5 轮节流等于让断言干等(用户 2026-10-11 定稿)。
+    """
+    from core import ocr, session
+    xml = '<node text="扫地机器人0087"/>'          # 稀疏
+    monkeypatch.setattr(ocr, "available", lambda: True)
+    monkeypatch.setattr(ocr, "sparse", lambda x, **k: True)
+    calls = []
+    monkeypatch.setattr(ocr, "find_detail",
+                        lambda d, texts: (calls.append(1), (None, "", None))[1])
+    for round_no in (1, 2, 3, 4, 5):
+        session.text_present_detail(None, ["不会命中"], xml=xml, round_no=round_no)
+    assert len(calls) == 5, f"稀疏页面每轮都该做 OCR: {len(calls)} 次"
 
 
 def test_text_present_empty_and_no_ocr(monkeypatch):

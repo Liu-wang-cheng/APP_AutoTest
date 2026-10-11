@@ -463,10 +463,14 @@ def text_present_detail(d, texts, xml=None, round_no=None):
             for t in wanted:
                 if t in raw:
                     return t, attr, raw, node[2]
-    # ★ OCR 兜底: ①页面主体没暴露(树稀疏) ②且**轮到了**才做 —— 轮询里前 4 轮只读无障碍树
-    #   (见 ocr.OCR_EVERY_N_ROUNDS, 用户要求 2026-10-11); 单次判断(round_no=None)不受限,
-    #   那种场合 OCR 是唯一的机会。
-    if ocr.sparse(xml) and ocr.available() and ocr.round_allows_ocr(round_no):
+    # ★ OCR 兜底的两条路(用户定稿 2026-10-11):
+    #   ① **页面主体没暴露**(树稀疏, 插件页切视图后的典型症状) → **每轮都允许** OCR ——
+    #      这种页面上原生本来就什么都读不到, 不兜底等于断言必挂;
+    #   ② **正常页面** → 按 **5 轮循环**兜底(前 4 轮只读无障碍树, 第 5/10/15… 轮截图识别)。
+    #      正常页面多这一道的原因: 有时文字**画在屏幕上但没进无障碍树**(WebView 局部),
+    #      只读树会一直判不到。代价是每 5 轮多约 1 秒。
+    #   ★ 单次判断(round_no=None, 没给 timeout 的"只查一次")不受轮次限制 —— 那是唯一机会。
+    if ocr.available() and (ocr.sparse(xml) or ocr.round_allows_ocr(round_no)):
         hit, line, pos = ocr.find_detail(d, wanted)
         if hit:
             log.info(f"[OCR兜底] 无障碍树里没有, 截图识别命中「{hit}」"
