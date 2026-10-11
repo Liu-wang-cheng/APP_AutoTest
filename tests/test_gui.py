@@ -3467,3 +3467,28 @@ def test_grab_step_two_fields_roundtrip(win):
     from gui import schema
     assert win.steps[0]["grab"] == "面积,时间"
     assert next((k for k in win.steps[0] if k in schema.ACTION_BY_KEY), None) == "grab"
+
+
+def test_report_uses_one_sheet_per_case_execution(qapp, monkeypatch, tmp_path):
+    """★ 同一个报告文件里, **每次执行**一张工作表(用例名-1 / 用例名-2 …)。
+
+    用户要求(2026-10-11): 报告是同一个, 但要用不同工作表区分每次执行的结果 ——
+    以前按模块分表, 同一用例跑 N 轮全堆在一张表里, 看不出哪几行属于第几轮;
+    顺带也修掉"同一个用例文件里有多个用例时共用一张表"。
+    """
+    from openpyxl import load_workbook
+
+    from gui import runner_thread as rt
+    a = _write_case(tmp_path, "组甲", "a.yaml", "甲用例")
+    b = _write_case(tmp_path, "组甲", "b.yaml", "乙用例")
+    done, _calls = _run_worker(qapp, monkeypatch, rt, tmp_path, [a, b], repeat=2)
+    assert done and done[0][0] is True, done
+
+    wb = load_workbook(tmp_path / "rep.xlsx")
+    names = [s for s in wb.sheetnames if s != "汇总"]
+    assert names == ["甲用例-1", "乙用例-1", "甲用例-2", "乙用例-2"], \
+        f"应按「用例名-第几次」分表: {names}"
+    # 汇总表也要按每次执行各占一行(表名就是行的"用例名称")
+    summary = [c.value for row in wb["汇总"].iter_rows() for c in row if c.value]
+    for n in names:
+        assert n in summary, f"汇总表里没有 {n}: {summary}"

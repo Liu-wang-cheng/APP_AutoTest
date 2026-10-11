@@ -11,7 +11,7 @@ from PySide6.QtCore import QThread, Signal
 from core import session
 from core.runner import ActionRunner, UserStopped
 from core.driver import BASE_DIR, load_config
-from core.excel_report import ExcelReport
+from core.excel_report import ExcelReport, case_sheet_name
 from core.logger import get_logger
 
 log = get_logger()
@@ -89,7 +89,7 @@ class RunWorker(QThread):
         if self.runner:
             self.runner.stop()
 
-    def _emit_pre_result(self, d, module, report, r):
+    def _emit_pre_result(self, d, sheet, report, r):
         """单条前置结果 → 执行结果表 + 报告(带该项自己的耗时)。
 
         ★ 用户要求: 前置也要**一条一条**显示结果和耗时, 不要全部执行完再刷出来;
@@ -107,8 +107,8 @@ class RunWorker(QThread):
         # ★ 报告写入失败不能拖垮执行: 组名(module)里出现非法字符曾让 create_sheet
         #   抛错 → 冒到 run() 兜底 except → 整轮以"执行异常"中断
         try:
-            report.set_step_desc(module, desc)
-            report.add_result(module, r["ok"], err, "")
+            report.set_step_desc(sheet, desc)
+            report.add_result(sheet, r["ok"], err, "")
         except Exception as e:
             log.warning(f"[report] 前置结果写入报告失败(忽略, 不影响执行): {e}")
         self.step_done.emit({"desc": desc, "passed": r["ok"], "error": err,
@@ -152,6 +152,10 @@ class RunWorker(QThread):
                         break
                     case_name = case.get("name", "未命名用例")
                     steps = case.get("steps") or []
+                    # ★ 报告按「**一次执行**」分表(用户要求 2026-10-11): 同一用例跑 N 轮各占
+                    #   一张表(用例名-1 / 用例名-2 …), 不再把几轮结果堆在同一张表里;
+                    #   顺带也解决"同一个用例文件里有多个用例时共用一张表"。
+                    sheet = case_sheet_name(case_name, rnd + 1)
                     # 用例所在 APP 组 = 用例文件所在目录名
                     group = os.path.basename(
                         os.path.dirname(os.path.abspath(fp)))
@@ -171,7 +175,7 @@ class RunWorker(QThread):
                         on_progress=self.status.emit,
                         should_cancel=lambda: self._stop_requested,
                         # ★ 每完成一条立刻落表(用户要求: 一条一条显示结果和耗时)
-                        on_item_done=lambda r, m=module:
+                        on_item_done=lambda r, m=sheet:
                         self._emit_pre_result(d, m, report, r))
                     # ★ 任一前置项未通过 → 阻断:本轮不再执行任何用例(用户要求)
                     failed = [r["desc"] for r in pre_results if not r["ok"]]
@@ -211,8 +215,8 @@ class RunWorker(QThread):
                     # 与 pytest 相同结构写入 Excel 报告
                     for r2 in runner.results:
                         try:
-                            report.set_step_desc(module, r2.get("desc", ""))
-                            report.add_result(module, r2["passed"], r2.get("error", ""),
+                            report.set_step_desc(sheet, r2.get("desc", ""))
+                            report.add_result(sheet, r2["passed"], r2.get("error", ""),
                                               r2.get("screenshot", ""))
                         except Exception as e:
                             # 同上: 报告写入问题不该让整轮跑不下去

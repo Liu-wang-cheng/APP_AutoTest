@@ -15,6 +15,17 @@ from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from core.driver import BASE_DIR
 
 
+def case_sheet_name(case_name, run_no=None):
+    """一张表(一次执行)的名字: **用例名 + 第几次执行**(用户要求 2026-10-11)。
+
+    ★ 为什么按"次"分表: 同一用例重复跑 N 轮时, 原来所有轮的结果堆在同一张表里, 看不出
+      哪几行属于第几轮; 顺带也解决了"同一个用例文件里有多个用例时共用一张表"。
+    run_no: 从 1 开始的执行序号; 不给就只有用例名(单次调用/旧接口)。
+    """
+    name = str(case_name or "用例")
+    return f"{name}-{run_no}" if run_no else name
+
+
 class ExcelReport:
     TITLE_FONT = Font(name="Microsoft YaHei", size=16, bold=True, color="1F4E79")
     HEADER_FONT = Font(name="Microsoft YaHei", size=11, bold=True, color="FFFFFF")
@@ -121,8 +132,14 @@ class ExcelReport:
         #   / 和 \, 于是组名带「:」「[」「?」时 create_sheet 抛错 → 冒到 RunWorker.run
         #   的兜底 except → **整轮**以"执行异常"中断, 设备侧已跑的部分白跑。
         #   组名(module)是 GUI 里可自由编辑的文本, 很容易踩到。
-        safe_name = re.sub(r'[\\*?:/\[\]]', "_", str(case_name))[:31] or "用例"
-        ws = self.wb.create_sheet(title=safe_name)
+        base = re.sub(r'[\\*?:/\[\]]', "_", str(case_name))[:31] or "用例"
+        # ★ 31 字截断后可能撞名(openpyxl 对重名直接抛) → 追加 -2 / -3 …
+        title, n = base, 2
+        while title in self.wb.sheetnames:
+            suffix = f"-{n}"
+            title = base[:31 - len(suffix)] + suffix
+            n += 1
+        ws = self.wb.create_sheet(title=title)
         for c, w in zip("ABCD", [28, 8, 28, 20]):
             ws.column_dimensions[c].width = w
 
