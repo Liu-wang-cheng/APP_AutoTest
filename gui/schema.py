@@ -283,13 +283,27 @@ def validate_step(step):
     return errors
 
 
+def primary_action_key(step):
+    """这一步**会被执行**的动作键 —— 卡片 chip 与摘要都用它, 保证显示=实际执行。
+
+    ★ 判据必须与引擎一致(core.registry 的优先级顺序)。曾经这里(以及卡片)取的是
+      dict 里第一个键, 而引擎按优先级取 —— `{assert: .., click: ..}` 会显示"断言"
+      却执行"点击"(2026-10-11 实测)。
+    ★ grab/match 只在 schema 里(引擎不把它们当主动作), 所以引擎判据返回空时按键序兜底。
+    """
+    try:
+        from core import registry as reg          # 局部导入: schema 也要能单独被工具导入
+        keys = reg.main_action_keys(step)
+        if keys:
+            return keys[0]
+    except Exception:
+        pass
+    return next((k for k in step if k in ACTION_BY_KEY), None)
+
+
 def step_summary(step):
     """生成步骤卡片的一行摘要(优先显示步骤说明 desc)"""
-    action_key = None
-    for key in step:
-        if key in ACTION_BY_KEY:
-            action_key = key
-            break
+    action_key = primary_action_key(step)
     if action_key is None:
         if "wait" in step and len(step) <= 2:
             return f"延时等待 {step['wait']} 秒"

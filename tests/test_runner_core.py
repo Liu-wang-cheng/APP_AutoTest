@@ -57,7 +57,14 @@ def runner():
     return ActionRunner(FakeDevice(), cfg, case_wait=None, case_name="测试用例")
 
 
-def test_dispatch_by_priority(runner):
+def test_multiple_main_actions_raise_instead_of_masking(runner):
+    """★ 2026-10-11 改: 一步里多个主动作**不再静默屏蔽**, 直接报错。
+
+    旧行为是"priority 小的先命中, 屏蔽后面"(从源项目的有序分发表原样迁移来的有意设计),
+    但它正是最难查的那类失败: 真机上表现为"设好时间却没设、直接去断言"(set_time 被
+    assert 顶掉)。而界面根本造不出这种步骤(不能改动作类型), 只会从手写/导入的 YAML 进来
+    —— 所以在这里明确报错、点名要拆的动作, 比默默少跑一步好。
+    """
     hit = []
 
     @reg.action("fake_hi", priority=10)
@@ -66,8 +73,24 @@ def test_dispatch_by_priority(runner):
     @reg.action("fake_lo", priority=99)
     def _lo(r, s): hit.append("lo")
 
-    runner._execute({"fake_hi": True, "fake_lo": True})
-    assert hit == ["hi"]        # priority 小的先命中,屏蔽后面
+    with pytest.raises(ValueError) as e:
+        runner._execute({"fake_hi": True, "fake_lo": True})
+    assert hit == [], "报错前不该执行任何动作(否则等于先做了一半)"
+    assert "fake_hi" in str(e.value) and "fake_lo" in str(e.value), str(e.value)
+
+
+def test_priority_order_still_decides_the_primary_action():
+    """优先级判据仍然有效: 它决定"哪一个会被执行"(卡片显示与报错点名都靠它)"""
+    @reg.action("fake_hi", priority=10)
+    def _hi(r, s): pass
+
+    @reg.action("fake_lo", priority=99)
+    def _lo(r, s): pass
+
+    step = {"fake_lo": True, "fake_hi": True}
+    assert reg.main_action_keys(step) == ["fake_hi", "fake_lo"]
+    assert reg.primary_action_key(step) == "fake_hi"
+    assert reg.main_action_keys({"fake_hi": True}) == ["fake_hi"]
 
 
 def test_grab_coexists_with_action(runner, monkeypatch):

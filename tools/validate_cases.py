@@ -13,6 +13,8 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from core.driver import BASE_DIR, load_yaml_file
+import core.actions            # noqa: F401  导入即注册全部动作(下面要查"一步几个主动作")
+from core import registry as reg
 from gui import schema
 from tests.test_yaml_runner import iter_all_steps, iter_modules
 
@@ -47,6 +49,18 @@ def check_case(fn, module, ci, case):
             if "必填" in err:
                 print(f"[FAIL] {fn} 「{name}」{where}: {err}")
                 bad += 1
+        # ★ 组合类问题(2026-10-11): 一步里多个主动作、或抓取+比对写同一步 —— 引擎会直接
+        #   报错(不再静默丢一个), 与其跑到那一步才炸, 不如在这里提前拦下并说清怎么改。
+        mains = reg.main_action_keys(step)
+        if len(mains) > 1:
+            print(f"[FAIL] {fn} 「{name}」{where}: 一步里有多个动作 {mains} —— "
+                  f"引擎只执行 {mains[0]}, 其余会被丢掉; 请拆成多个步骤")
+            bad += 1
+        if ("grab" in step or "grab_area" in step) and \
+                ("match" in step or "match_area" in step):
+            print(f"[FAIL] {fn} 「{name}」{where}: 抓取与比对写在同一「步」里 —— "
+                  f"引擎只做抓取; 请拆成两个步骤")
+            bad += 1
     return bad
 
 

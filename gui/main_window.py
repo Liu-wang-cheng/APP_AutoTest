@@ -1047,10 +1047,11 @@ class _StepsHost(QObject):
 
     @staticmethod
     def _find_action(step):
-        for key in step:
-            if key in schema.ACTION_BY_KEY:
-                return schema.ACTION_BY_KEY[key]
-        return None
+        # ★ 用 schema.primary_action_key(与引擎同一判据, 按优先级): 卡片显示的动作必须
+        #   就是会被执行的那个 —— 原来按 dict 键序取, {assert, click} 会显示"断言"却
+        #   执行"点击"(2026-10-11 实测)。
+        key = schema.primary_action_key(step)
+        return schema.ACTION_BY_KEY.get(key) if key else None
 
     def expand_card(self, key):
         self.expanded_key = key
@@ -3645,10 +3646,11 @@ class MainWindow(QMainWindow):
         self.cards_scroll.widget().setEnabled(not locked)  # 卡片区只读(仍可滚动)
 
     def _find_action(self, step):
-        for key in step:
-            if key in schema.ACTION_BY_KEY:
-                return schema.ACTION_BY_KEY[key]
-        return None
+        # ★ 用 schema.primary_action_key(与引擎同一判据, 按优先级): 卡片显示的动作必须
+        #   就是会被执行的那个 —— 原来按 dict 键序取, {assert, click} 会显示"断言"却
+        #   执行"点击"(2026-10-11 实测)。
+        key = schema.primary_action_key(step)
+        return schema.ACTION_BY_KEY.get(key) if key else None
 
     # ── 底部标签页 ──
     def _make_bottom(self):

@@ -41,3 +41,30 @@ def dispatch_order():
 
 def fixed_bool_keys() -> set:
     return {k for k, a in ACTIONS.items() if a.fixed_bool}
+
+
+#: 与主动作**共存于同一步**的键: 它们不是"主动作", 由 runner._execute 单独处理,
+#: 因此可以和任意一个主动作写在一起(如 click + grab / click + wait_for)。
+#: ★ 引擎(runner)与界面(卡片显示什么动作)必须用同一份定义 —— 判据分家过一次,
+#:   结果是 {assert, click} 这种步骤"卡片显示断言、实际执行点击"(2026-10-11 实测)。
+COEXIST_KEYS = frozenset({"grab", "match", "screenshot", "wait_for"})
+
+
+def main_action_keys(step) -> list:
+    """步骤里的**主动作**键, 按执行优先级升序 —— 第一个就是真正会被执行的那个。
+
+    grab/match/screenshot/wait_for 不算主动作(见 COEXIST_KEYS), 它们与主动作共存。
+    ★ `wait_for` 特殊: 它**既是注册动作**(优先级 110, 可以单独成步), 又在共存集合里
+      —— 所以这里必须显式排除, 否则 `click + wait_for` 这种正常写法会被误判成
+      "一步多个动作"而报错(2026-10-11 守护测试当场抓到这个错)。
+    """
+    if not isinstance(step, dict):
+        return []
+    return [a.key for a in dispatch_order()
+            if a.key in step and a.key not in COEXIST_KEYS]
+
+
+def primary_action_key(step):
+    """会被执行的那个主动作键; 没有主动作(如只有 grab)则返回 None"""
+    keys = main_action_keys(step)
+    return keys[0] if keys else None

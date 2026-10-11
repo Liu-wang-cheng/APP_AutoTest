@@ -582,26 +582,41 @@ class ActionRunner:
         screenshot = ""
         executed_key = None
         # 1. 主操作:按优先级找第一个命中的动作键执行
-        for act in reg.dispatch_order():
-            if act.key in step:
-                act.fn(self, step)
-                executed_key = act.key
-                break
+        # ★ 一步里写**多个主动作**时不再静默丢掉后面的(2026-10-11 实测量过: 300 对全部
+        #   只跑一个): 真机上是"设好时间却没设、直接去断言"(set_time 被 assert 顶掉)这种
+        #   最难查的失败。设计上可与主动作共存的键(grab/match/screenshot/wait_for)不算
+        #   主动作, 照旧共存执行。
+        main = reg.main_action_keys(step)
+        if len(main) > 1:
+            raise ValueError(
+                f"一步里有多个动作: {', '.join(main)} —— 引擎只会执行优先级最高的一个"
+                f"({main[0]}), 其余的会被静默丢掉; 请把它们拆成多个步骤")
+        if main:
+            reg.ACTIONS[main[0]].fn(self, step)
+            executed_key = main[0]
         # 2. 数据抓取/对比(与主动作共存于一步)
         # grab/match 现在有"面积/时间"两个独立输入框(grab_area/grab_time),
         # 老写法 grab: 面积,时间 仍然兼容 —— 两种都由 do_grab 内部按字段摊开
-        if "grab" in step or "grab_area" in step:
+        has_grab = "grab" in step or "grab_area" in step
+        has_match = "match" in step or "match_area" in step
+        # ★ 抓取与比对写在同一"步"里同样是静默丢一个(它们是 if/elif): 抓取从当前页取值,
+        #   比对是拿取值去比**另一个页面**, 一步里做两件事语义上就不成立 —— 报错而不是
+        #   悄悄只做前一半(2026-10-11 实测: {grab,match} 只跑了 grab)。
+        if has_grab and has_match:
+            raise ValueError("一步里同时有『抓取数据』和『比对数据』 —— 引擎只执行抓取, "
+                             "比对会被静默丢掉; 请把它们拆成两个步骤")
+        if has_grab:
             from core.actions.data_ops import do_grab
             do_grab(self, step.get("grab_area", step.get("grab", "")),
                     step.get("grab_time"))
-        elif "match" in step or "match_area" in step:
+        elif has_match:
             from core.actions.data_ops import do_match
             do_match(self, step.get("match_area", step.get("match", "")),
                      step.get("match_time"))
         # 3. 等待条件(与主动作共存)。
         # "点一下,再等某元素出现" 是很自然的写法(如 click: 安静 + wait_for: 安静,标准,强力),
-        # 但主分发只执行优先级最高的一个动作,wait_for 会被静默丢掉 —— 所以这里单独补执行。
-        # 独立使用时(整个步骤只有 wait_for)已在上面命中,不重复执行。
+        # 但主分发只认一个主动作(两个主动作已经改成直接报错, 见上), wait_for 在这里单独补执行。
+        # 独立使用时(整个步骤只有 wait_for)不会走到这里,不重复执行。
         if "wait_for" in step and executed_key != "wait_for":
             from core.actions.basic import do_wait_for
             do_wait_for(self, step)
