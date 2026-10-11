@@ -29,6 +29,19 @@ _cache = {"t": 0.0, "texts": []}
 CACHE_SECS = 1.5          # 同一帧不重复识别(一次识别约 1s)
 SPARSE_MIN_TEXTS = 5      # 层级里可见文本少于此数 ⇒ 认为页面主体没暴露
 
+#: 判断类轮询里**每隔几轮**做一次 OCR 兜底(用户要求 2026-10-11: "前四次普通检测, 第 5 次 OCR")
+#: 前 4 轮只读无障碍树(快、准), 第 5 轮才截图识别 —— OCR 一次约 1 秒, 而且识别结果不如
+#: 原生可靠, 没必要每轮都做。
+OCR_EVERY_N_ROUNDS = 5
+
+
+def round_allows_ocr(round_no):
+    """这一轮要不要允许 OCR 兜底。round_no 从 1 开始计数。
+
+    单次判断(没有轮询)传 None —— 那种场合 OCR 是**唯一**的机会, 不该被轮次限制挡掉。
+    """
+    return round_no is None or (round_no > 0 and round_no % OCR_EVERY_N_ROUNDS == 0)
+
 
 _available = None          # 自检结果缓存(None = 还没查过)
 

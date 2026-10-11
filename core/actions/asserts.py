@@ -106,7 +106,7 @@ def _assert_any(runner, texts, images, timeout):
     end = time.time() + timeout if timeout > 0 else None
     n = 0
     while True:
-        if texts and runner._text_present(*texts):
+        if texts and runner._text_present(*texts, round_no=n + 1):
             log.info(f"[断言] 命中文本(任一): {texts}")
             return
         for name in images:

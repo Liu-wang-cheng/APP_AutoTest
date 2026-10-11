@@ -199,12 +199,14 @@ def _wait_texts(d, texts, timeout, should_cancel=None):
       每次轮询只 dump 一次, 所有候选共用(逐个 _any_present 会 dump N 次)。
     """
     end = time.time() + timeout
+    round_no = 0
     while True:
+        round_no += 1
         if should_cancel and should_cancel():
             return None
         xml = warm_webview(d)
         for t in texts:
-            if text_present(d, [t], xml=xml):
+            if text_present(d, [t], xml=xml, round_no=round_no):
                 return t
         if time.time() >= end:
             return None
@@ -435,7 +437,7 @@ def visible_nodes(xml):
     return out
 
 
-def text_present_detail(d, texts, xml=None):
+def text_present_detail(d, texts, xml=None, round_no=None):
     """判断类的**详情版**: 返回 (命中的候选, 命中来源, 命中的原文, 坐标|None)。
 
     来源三种: "text"(节点文本) / "desc"(无障碍描述 content-desc) / "ocr"(截图识别)。
@@ -461,7 +463,10 @@ def text_present_detail(d, texts, xml=None):
             for t in wanted:
                 if t in raw:
                     return t, attr, raw, node[2]
-    if ocr.sparse(xml) and ocr.available():
+    # ★ OCR 兜底: ①页面主体没暴露(树稀疏) ②且**轮到了**才做 —— 轮询里前 4 轮只读无障碍树
+    #   (见 ocr.OCR_EVERY_N_ROUNDS, 用户要求 2026-10-11); 单次判断(round_no=None)不受限,
+    #   那种场合 OCR 是唯一的机会。
+    if ocr.sparse(xml) and ocr.available() and ocr.round_allows_ocr(round_no):
         hit, line, pos = ocr.find_detail(d, wanted)
         if hit:
             log.info(f"[OCR兜底] 无障碍树里没有, 截图识别命中「{hit}」"
@@ -470,7 +475,7 @@ def text_present_detail(d, texts, xml=None):
     return None, "", "", None
 
 
-def text_present(d, texts, xml=None):
+def text_present(d, texts, xml=None, round_no=None):
     """页面上有没有这些文本 —— **判断类统一入口**(原生优先, 树稀疏时 OCR 兜底)。
 
     ① 原生: 一次层级 dump, 在 **text 与 content-desc 两个属性**里做子串匹配, 且**只看
@@ -482,7 +487,7 @@ def text_present(d, texts, xml=None):
     xml: 调用方已经 dump 过就传进来, 省一次 dump(如断言轮询里)。
     ★ 需要知道"命中来自哪儿"的调用方用 text_present_detail(断言就靠它把日志写清楚)。
     """
-    return text_present_detail(d, texts, xml=xml)[0] is not None
+    return text_present_detail(d, texts, xml=xml, round_no=round_no)[0] is not None
 
 
 def _any_present(d, texts, xml=None):

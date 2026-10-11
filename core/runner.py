@@ -283,19 +283,32 @@ class ActionRunner:
             return self.d(textContains=value if not value.startswith("=") else value[1:])[index]
         return el
 
-    def _text_present(self, *texts, timeout=None):
+    def _text_present(self, *texts, timeout=None, round_no=None):
         """判断类统一入口(转发 session.text_present): 原生优先 → 树稀疏时 OCR 兜底。
 
         ★ 插件页(WebView)切视图后主体不再提供可访问节点, 只读无障碍树的判断
           (if 条件/wait_for/wait_loading…)会集体判错 —— 见 core/ocr.py 注释。
         timeout: 给了就轮询等待(等价原 `d(textContains=..).exists(timeout=..)`)
+        round_no: 调用方自己的轮次计数(从 1 起); 不给就用本函数循环的计数。
+                  OCR 兜底只在第 5/10/15… 轮触发(见 ocr.OCR_EVERY_N_ROUNDS)。
         """
         wanted = [t for t in texts if t]
         if not wanted:
             return False
         end = time.time() + timeout if timeout else None
+        n = 0
         while True:
-            if text_present(self.d, wanted):
+            n += 1
+            # ★ 轮次要按场合给: 调用方给了就用它的(断言/等待各自计数); 自己在**轮询**时
+            #   用自己的计数; **单次判断**(没给 timeout, 只查一次)不算轮询 —— 那种场合
+            #   OCR 是唯一机会, 传 None 让它不受"5 轮一次"的限制(否则插件页永远用不上)
+            if round_no is not None:
+                rn = round_no
+            elif end is not None:
+                rn = n
+            else:
+                rn = None
+            if text_present(self.d, wanted, round_no=rn):
                 return True
             if end is None or time.time() >= end:
                 return False
@@ -553,7 +566,8 @@ class ActionRunner:
             #   ★ 日志要区分**命中的来源**(节点文本/无障碍描述/OCR): 曾经这里一律写成
             #     "OCR 兜底命中", 结果真机上一次假通过被指向 OCR, 排查方向整个跑偏
             #     (实际是某个看不见控件的 content-desc 里含候选词, 2026-10-11)。
-            hit, src, raw, pos = text_present_detail(self.d, values, xml=xml)
+            hit, src, raw, pos = text_present_detail(self.d, values, xml=xml,
+                                                     round_no=check_count + 1)
             if hit:
                 where = {"text": "节点文本", "desc": "无障碍描述(看不见的控件)",
                          "ocr": "截图识别(OCR)"}.get(src, src)

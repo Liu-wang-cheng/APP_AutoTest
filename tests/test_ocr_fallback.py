@@ -159,6 +159,9 @@ def _make_runner(d):
     r = ActionRunner.__new__(ActionRunner)      # 不跑 __init__(会连设备/加载模型)
     r.d = d
     r.stopped = False
+    r._cancel_check = None
+    r._sleep = lambda s: None                   # 轮询间隔空转(否则 5 轮要真等 5 秒)
+    r._poll_sleep = lambda n: None
     return r
 
 
@@ -172,16 +175,52 @@ def test_text_present_native_hit(monkeypatch):
 
 
 def test_text_present_falls_back_to_ocr(monkeypatch):
-    """★ 树稀疏(插件页切视图后只剩标题)时, 判断类要能靠 OCR 命中"""
+    """★ 树稀疏(插件页切视图后只剩标题)时, 判断类要能靠 OCR 命中。
+
+    ★ 2026-10-11 起 OCR 不再每轮都做: **前 4 轮只读无障碍树, 第 5 轮才截图识别**
+      (用户要求), 之后 10、15… 轮再各做一次。
+    """
     from core import ocr
     d = _Runner(xml='<node text="扫地机器人0087"/>')
     r = _make_runner(d)
     monkeypatch.setattr(ocr, "available", lambda: True)
-    monkeypatch.setattr(ocr, "find_detail",
-                        lambda dev, texts: (texts[0], "屏幕上读到 " + texts[0], (1, 2))
-                        if "吸尘" in texts[0] else (None, "", None))
+    calls = []
+
+    def _find(dev, texts):
+        calls.append(texts[0])
+        return ((texts[0], "屏幕上读到 " + texts[0], (1, 2))
+                if "吸尘" in texts[0] else (None, "", None))
+
+    monkeypatch.setattr(ocr, "find_detail", _find)
     assert r._text_present("正在吸尘") is True
-    assert r._text_present("回充中") is False
+    assert calls == ["正在吸尘"], f"应在第 5 轮做**一次** OCR 就命中: {calls}"
+    calls.clear()
+    assert r._text_present("回充中") is False          # 一直读不到 → 超时才返回
+    assert calls, f"持续读不到时也该按 5 轮周期做 OCR: {calls}"
+
+
+def test_ocr_only_on_every_fifth_round(monkeypatch):
+    """★ 5 轮规则(用户 2026-10-11): 第 1~4 轮只读无障碍树, 第 5/10/15… 轮才 OCR。
+
+    单次判断(round_no=None)不受限 —— 那种场合 OCR 是唯一机会, 不该被轮次挡掉。
+    """
+    from core import ocr, session
+    xml = '<node text="扫地机器人0087"/>'            # 稀疏: 满足走 OCR 的前提
+    monkeypatch.setattr(ocr, "available", lambda: True)
+    monkeypatch.setattr(ocr, "sparse", lambda x, **k: True)
+    calls = []
+    monkeypatch.setattr(ocr, "find_detail",
+                        lambda d, texts: (calls.append(1), (None, "", None))[1])
+
+    for round_no in (1, 2, 3, 4, 6, 7, 8, 9, 11):
+        assert session.text_present_detail(None, ["不会命中"], xml=xml,
+                                           round_no=round_no)[0] is None
+    assert calls == [], f"非 5 的倍数轮不该做 OCR: {len(calls)} 次"
+    for round_no in (5, 10, 15):
+        session.text_present_detail(None, ["不会命中"], xml=xml, round_no=round_no)
+    assert len(calls) == 3, f"第 5/10/15 轮应各做一次: {len(calls)}"
+    session.text_present_detail(None, ["不会命中"], xml=xml)     # 单次判断
+    assert len(calls) == 4, "单次判断(round_no=None)仍应允许 OCR"
 
 
 def test_text_present_empty_and_no_ocr(monkeypatch):

@@ -220,7 +220,7 @@ def do_wait_for(runner, step):
                 return
         else:
             # ★ 判断走 runner._text_present: 原生优先 + 树稀疏时 OCR 兜底
-            if runner._text_present(*(split_texts(value) or [value])):
+            if runner._text_present(*(split_texts(value) or [value]), round_no=n + 1):
                 log.info(f"[wait_for] 等到文本(任一): {value}")
                 return
         n += 1
@@ -240,10 +240,12 @@ def do_wait_loading(runner, step):
     """
     timeout = step.get("timeout", 30)
     end = time.time() + timeout
+    n = 0
     while time.time() < end:
+        n += 1
         # ★ 判断走 runner._text_present —— 树稀疏时"看不到加载提示"是假象,
-        #   只读无障碍树会把"还在加载"误判成"已加载完"
-        if not runner._text_present(*_LOADING_TEXTS):
+        #   只读无障碍树会把"还在加载"误判成"已加载完"; 轮次传下去, OCR 仍按 5 轮一次
+        if not runner._text_present(*_LOADING_TEXTS, round_no=n):
             return
         runner._sleep(1)
     log.warning(f"[wait_loading] {timeout}s 后加载提示仍在,继续执行")
