@@ -150,6 +150,8 @@ def do_match(runner, value="", time_kw=None):
             elif stored == "":
                 mismatches.append(f"'{key}'没有抓取过(主页为空), 记录页={found}")
             elif found != stored:
+                if key == "预约时间" and _same_clock(stored, found):
+                    continue
                 try:
                     if abs(float(stored) - float(found)) <= 1:
                         continue
@@ -364,6 +366,21 @@ def extract_metric(nodes, kind, want=""):
         raise ValueError(f"页面上有多个{name}候选: {desc} —— 请在步骤的{name}框里填关键字"
                          f"(如 真空吸尘器)指明要哪一个; 猜错不会报错, 只会悄悄比错数据")
     return f"{cands[0][0]:g}"
+
+
+def _same_clock(a, b):
+    """两个 HH:MM 是否表示**同一时刻**(容忍前导零差异: 记录页可能显示 "9:35")。
+
+    ★ 这是**容错**, 不是已确认的缺陷: `set_time` 写进 store 的一律是零填充格式
+      ("09:35"), 而记录页显示几位数没有在真机上确认过(2026-10-11)。只在前导零上
+      等价 —— 不会把一个时刻判成另一个, 所以**不会造成假通过**。
+    """
+    def norm(s):
+        m = re.fullmatch(r"\s*(\d{1,2}):(\d{2})\s*", str(s or ""))
+        return "%02d:%s" % (int(m.group(1)), m.group(2)) if m else None
+
+    na, nb = norm(a), norm(b)
+    return na is not None and na == nb
 
 
 def extract_value(runner, nodes, kw):
