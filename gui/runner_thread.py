@@ -76,8 +76,8 @@ class RunWorker(QThread):
             preconditions = [{"type": k, "enabled": bool(v)}
                              for k, v in preconditions.items()]
         self.pre_items = preconditions
-        # ★ {APP组: [前置项]} —— 切到某组时执行那组的前置(用户要求: 前置与 APP 组绑定);
-        #   没给的组回退 self.pre_items
+        # ★ {APP组: [前置项]} —— **每个用例执行前**都跑它所在组的那套前置(2026-10-11 用户
+        #   要求"每次执行都要跑前置"); 组没给配置时回退 self.pre_items
         self.pre_by_group = pre_by_group or {}
         self.repeat = max(1, int(repeat))  # 整个队列重复的轮数
         self.runner = None
@@ -146,7 +146,6 @@ class RunWorker(QThread):
             report = ExcelReport()
             all_passed = True
             total_rounds = self.repeat
-            prepared_group = None       # 已经做过前置的 APP 组
             for rnd in range(total_rounds):
                 for module, case, fp in tasks:
                     if self._stop_requested:
@@ -157,37 +156,31 @@ class RunWorker(QThread):
                     group = os.path.basename(
                         os.path.dirname(os.path.abspath(fp)))
 
-                    # ★ 前置: 切到某组时按**该组**的配置全量执行一次(用户要求:
-                    #   前置条件与 APP 组绑定); 同组后续用例只重启 APP。
-                    if group != prepared_group:
-                        items = resolve_group_preconditions(
-                            self.pre_by_group, group, self.pre_items)
-                        self.status.emit(
-                            f"前置准备[{group or '默认组'}]({case_name})...")
-                        pre_results = session.prepare_items(
-                            d, cfg, items,
-                            on_progress=self.status.emit,
-                            should_cancel=lambda: self._stop_requested,
-                            # ★ 每完成一条立刻落表(用户要求: 一条一条显示结果和耗时)
-                            on_item_done=lambda r, m=module:
-                            self._emit_pre_result(d, m, report, r))
-                        prepared_group = group
-                        # ★ 任一前置项未通过 → 阻断:本轮不再执行任何用例(用户要求)
-                        failed = [r["desc"] for r in pre_results if not r["ok"]]
-                        if failed:
-                            detail = "、".join(failed)
-                            self.log_line.emit(f"[前置] 未通过,阻断本轮执行: {detail}")
-                            self.precondition_failed.emit(detail)
-                            self.finished_run.emit(False, f"前置检查未通过: {detail}")
-                            return
-                    else:
-                        self.status.emit(f"重启 APP({case_name})...")
-                        session.restart_app(d, cfg)
-                        desc = pre_step_desc("restart")
-                        report.set_step_desc(module, desc)
-                        report.add_result(module, True, "", "")
-                        self.step_done.emit({"desc": desc, "passed": True,
-                                             "error": "", "screenshot": ""})
+                    # ★ 前置: **每个用例执行前**都按该组的配置全量跑一遍(2026-10-11 用户要求:
+                    #   "每次执行都要跑前置")。前置项按 APP 组配置(resolve_group_preconditions),
+                    #   但**不再**同组复用 —— 重复轮次里的同一个用例也会重跑。
+                    #   · 代价: 一轮 N 个用例 = N 次全量前置(充电等待这类是"看到即返回",
+                    #     缺东西才等超时), 偶发失败的阻断影响面也相应变大;
+                    #   · 是否重启 APP 由前置列表里的 restart 项决定(不再硬编码"同组之间重启")。
+                    items = resolve_group_preconditions(
+                        self.pre_by_group, group, self.pre_items)
+                    self.status.emit(
+                        f"前置准备[{group or '默认组'}]({case_name})...")
+                    pre_results = session.prepare_items(
+                        d, cfg, items,
+                        on_progress=self.status.emit,
+                        should_cancel=lambda: self._stop_requested,
+                        # ★ 每完成一条立刻落表(用户要求: 一条一条显示结果和耗时)
+                        on_item_done=lambda r, m=module:
+                        self._emit_pre_result(d, m, report, r))
+                    # ★ 任一前置项未通过 → 阻断:本轮不再执行任何用例(用户要求)
+                    failed = [r["desc"] for r in pre_results if not r["ok"]]
+                    if failed:
+                        detail = "、".join(failed)
+                        self.log_line.emit(f"[前置] 未通过,阻断本轮执行: {detail}")
+                        self.precondition_failed.emit(detail)
+                        self.finished_run.emit(False, f"前置检查未通过: {detail}")
+                        return
                     if self._stop_requested:
                         break
 

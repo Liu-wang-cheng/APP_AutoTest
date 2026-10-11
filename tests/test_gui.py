@@ -1067,32 +1067,31 @@ def _run_worker(qapp, monkeypatch, rt, tmp_path, files, repeat):
     return done, calls
 
 
-def test_repeat_does_not_rerun_preconditions_in_same_group(qapp, monkeypatch, tmp_path):
-    """★ 同一用例重复 N 轮**不**重跑全量前置 —— 只有"换 APP 组"才重跑(用户问过两次)。
+def test_preconditions_run_before_every_case_execution(qapp, monkeypatch, tmp_path):
+    """★ **每个用例执行前**都跑一次全量前置(2026-10-11 用户要求: "每次执行都要跑前置")。
 
-    实证: repeat=2 跑同一条用例, 记录 prepare_items(全量前置)与 restart_app(只重启)的调用序列。
-    期望 = 第 1 轮做一次全量前置, 第 2 轮只重启 APP。语义来自 runner_thread 里
-    prepared_group 在**轮次循环之外**初始化 —— 谁把它挪进循环, 这条就红。
+    实证: repeat=2 跑同一条用例, 记录 prepare_items(全量前置)与 restart_app 的调用序列 ——
+    期望两轮各跑一次全量前置。曾经是"每个 APP 组只跑一次, 同组后续用例只重启 APP"
+    (prepared_group 复用); 改完之后那条旁路没有了, 谁把它加回来, 这条就红。
     """
     from gui import runner_thread as rt
     f = _write_case(tmp_path, "组甲", "a.yaml", "冒烟")
     done, calls = _run_worker(qapp, monkeypatch, rt, tmp_path, [f], repeat=2)
     assert done and done[0][0] is True, done
-    assert calls == ["prepare", "restart"], (
-        f"同组重复 2 轮的前置调用序列异常: {calls} "
-        f"(期望 ['prepare','restart'] —— 只有换组才重跑全量前置)")
+    assert calls == ["prepare", "prepare"], (
+        f"重复 2 轮的前置调用序列异常: {calls} (期望每轮都跑一次全量前置)")
 
 
-def test_switching_group_reruns_preconditions(qapp, monkeypatch, tmp_path):
-    """组来回切换(甲→乙→甲)时, **切回**甲组要再跑一次全量前置"""
+def test_preconditions_run_for_every_case_in_a_queue(qapp, monkeypatch, tmp_path):
+    """队列里多个用例(含同组连续)也逐个跑前置, 不再"同组复用一次"""
     from gui import runner_thread as rt
     a1 = _write_case(tmp_path, "组甲", "a.yaml", "甲1")
-    b = _write_case(tmp_path, "组乙", "b.yaml", "乙1")
-    a2 = _write_case(tmp_path, "组甲", "c.yaml", "甲2")
-    done, calls = _run_worker(qapp, monkeypatch, rt, tmp_path, [a1, b, a2], repeat=1)
+    a2 = _write_case(tmp_path, "组甲", "b.yaml", "甲2")     # 同组连续
+    b = _write_case(tmp_path, "组乙", "c.yaml", "乙1")      # 换组
+    done, calls = _run_worker(qapp, monkeypatch, rt, tmp_path, [a1, a2, b], repeat=1)
     assert done and done[0][0] is True, done
     assert calls == ["prepare", "prepare", "prepare"], (
-        f"换组时的前置调用序列异常: {calls} (期望每次换组都做一次全量前置)")
+        f"3 个用例的前置调用序列异常: {calls} (期望每个用例各一次)")
 
 
 def test_runworker_run_smoke(qapp, monkeypatch, tmp_path):
@@ -2793,10 +2792,12 @@ def test_preconditions_save_and_stop_hints_go_to_run_log(qapp, monkeypatch, tmp_
 
 
 def test_runworker_preconditions_follow_app_group(qapp, monkeypatch, tmp_path):
-    """★ 用户要求: 前置条件与 APP 组绑定, 切到某组用例时执行那组的前置。
+    """★ 前置条件按 APP 组**取配置**, 且**每个用例执行前都跑一遍**(2026-10-11 用户要求:
+    "每次执行都要跑前置"; 此前是"每组只跑一次, 同组后续用例只重启 APP")。
 
     队列 三星A → 三星C → 涂鸦B → 三星A:
-      组序列 三星(跑) → 三星(同组, 只重启) → 涂鸦(切组, 跑) → 三星(切回, 跑)
+      · 每个用例用的是**它所在组**的那套前置(三星=sx / 涂鸦=ty), 组没配回退默认
+      · 4 个用例 = 4 次全量前置(同组的两个用例也各自跑一次)
     """
     import types
     from gui import runner_thread as rt
@@ -2843,8 +2844,9 @@ def test_runworker_preconditions_follow_app_group(qapp, monkeypatch, tmp_path):
                        pre_by_group={"三星": sx, "涂鸦智能T4": ty})
     worker.run()
 
-    assert seen == [sx, ty, sx], f"应按组切换执行对应前置: {[i[0]['type'] for i in seen]}"
-    assert len(restarts) == 1, f"同组第二个用例只该重启 APP: {len(restarts)} 次"
+    assert seen == [sx, sx, ty, sx], \
+        f"应按组取前置、且每个用例都跑一次: {[i[0]['type'] for i in seen]}"
+    assert restarts == [], "不再有「同组只重启 APP」的旁路(每个用例都跑前置)"
 
 
 def test_runworker_preconditions_fall_back_when_group_missing(qapp, monkeypatch, tmp_path):
