@@ -70,7 +70,14 @@ datas = [
 #      所以本地怎么测都正常, 只有打包后才暴露)
 for pkg in ("rapidocr_onnxruntime", "ddddocr", "uiautomator2"):
     try:
-        datas += collect_data_files(pkg, include_py_files=False)
+        # ★ rapidocr 要**连 .py 一起收**(include_py_files=True): 它自己把包目录
+        #   sys.path.append 进去, 然后用**裸模块名** import("ch_ppocr_v3_det") 再
+        #   getattr(module, "TextDetector")。只收 config.yaml 的话那个目录会变成
+        #   **命名空间包**(有目录没 __init__.py) -> 导入"成功"但取不到类 ->
+        #   打包版 OCR 一识别就报 "module 'ch_ppocr_v3_det' has no attribute 'TextDetector'"
+        #   (实测 2026-10-11 用户日志)。其余两个包不需要源码, 照旧只收数据。
+        datas += collect_data_files(pkg,
+                                    include_py_files=(pkg == "rapidocr_onnxruntime"))
     except Exception as e:
         print(f"[spec] 收集 {pkg} 数据文件失败(打包后 OCR 可能不可用): {e}")
 

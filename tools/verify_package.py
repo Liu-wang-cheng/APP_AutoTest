@@ -84,12 +84,23 @@ _REQUIRED_RESOURCES = (
     ("adbutils/binaries/adb.exe", "设备通信自带的 adb"),
     ("ddddocr/common.onnx", "文字识别模型"),
     ("rapidocr_onnxruntime/config.yaml", "OCR 配置"),
+    # ★ OCR 的**动态导入模块**必须作为文件在包里: rapidocr 把包目录 append 进 sys.path
+    #   后按裸模块名 import, 只收数据文件的话目录会变成命名空间包 -> 识别时报
+    #   "module 'ch_ppocr_v3_det' has no attribute 'TextDetector'"(实测 2026-10-11)
+    ("rapidocr_onnxruntime/ch_ppocr_v3_det/__init__.py", "OCR 检测模块(动态导入)"),
+    ("rapidocr_onnxruntime/ch_ppocr_v3_det/text_detect.py", "OCR 检测实现"),
+    ("rapidocr_onnxruntime/ch_ppocr_v3_rec/__init__.py", "OCR 识别模块(动态导入)"),
+    ("rapidocr_onnxruntime/ch_ppocr_v2_cls/__init__.py", "OCR 方向分类模块(动态导入)"),
     ("rapidocr_onnxruntime/models/ch_PP-OCRv3_rec_infer.onnx", "OCR 识别模型"),
     ("pypinyin/pinyin_dict.json", "拼音词典"),
     ("config/locators.yaml", "定位器配置"),
     ("config/config.example.yaml", "配置模板"),
     ("gui/assets/app_icon.ico", "程序图标"),
     ("VERSION", "版本号(更新脚本读它取证)"),
+    # 推理/视觉的关键二进制: 缺了会"能启动、一跑用例就崩"(本轮排查一并钉住)
+    ("onnxruntime/capi/onnxruntime.dll", "OCR 推理引擎"),
+    ("onnxruntime/capi/onnxruntime_pybind11_state.pyd", "OCR 推理绑定"),
+    ("cv2/cv2.pyd", "图像处理"),
     ("PySide6/plugins/platforms/qwindows.dll", "真实 Windows 窗口平台"),
     ("PySide6/plugins/platforms/qoffscreen.dll", "离屏平台(本验证也用它)"),
 )
