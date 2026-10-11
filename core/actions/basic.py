@@ -64,6 +64,7 @@ def do_click(runner, step):
     if xy:
         runner.d.click(xy[0], xy[1])
         runner.last_click = (xy[0], xy[1], "坐标")
+        log.info(f"[点击] 坐标 ({xy[0]},{xy[1]})")
         return
     if runner._is_image(value):
         runner._click_by_template(value, timeout)
@@ -95,22 +96,27 @@ def do_long_click(runner, step):
             duration = dur3
         elif isinstance(value, (list, tuple)) and len(value) >= 3:
             duration = value[2]           # 老写法允许 [x, y, duration]
+        what = f"坐标 ({x},{y})"
     elif runner._is_image(value):
         pos = runner._assert_template(value, step.get("timeout", runner.click_timeout))
         runner.last_click = (pos[0], pos[1], str(value))
         x, y = pos
+        what = f"模板 {value} @ ({x},{y})"
     else:
         el = runner._find_element(value)
         if not el.exists(timeout=runner.click_timeout):
             raise AssertionError(f"未找到长按目标: {value}")
         if hasattr(el, "long_click"):     # XPathElement 原生支持长按
+            log.info(f"[长按] 文本「{value}」 {float(duration):g}s")
             el.long_click(float(duration))
             runner._sleep(1)
             return
         b = el.info["bounds"]
         x, y = (b["left"] + b["right"]) // 2, (b["top"] + b["bottom"]) // 2
+        what = f"文本「{value}」 @ ({x},{y})"
     # 原地滑动=长按。★ duration 单位是秒(uiautomator2 语义)——曾经 ×1000
     # 当毫秒用,4 秒长按变成 4000 秒(66 分钟),机器人被持续按住前进键不放
+    log.info(f"[长按] {what} {float(duration):g}s")
     runner.d.swipe(x, y, x, y, duration=float(duration))
     runner._sleep(1)
 
@@ -118,12 +124,15 @@ def do_long_click(runner, step):
 @reg.action("input", priority=15)
 def do_input(runner, step):
     """向当前聚焦元素写入文本"""
-    runner.d(focused=True).set_text(str(step["input"]))
+    text = str(step["input"])
+    runner.d(focused=True).set_text(text)
+    log.info(f"[输入] {text[:40]}{'…' if len(text) > 40 else ''}")
 
 
 @reg.action("back", priority=40, fixed_bool=True)
 def do_back(runner, step):
     runner.d.press("back")
+    log.info("[返回] 系统返回键")
 
 
 @reg.action("swipe", priority=65)
@@ -137,6 +146,7 @@ def do_swipe(runner, step):
     value = step["swipe"]
     xy = parse_xy(value, 4)
     if xy:
+        log.info(f"[滑动] 坐标 ({xy[0]},{xy[1]})→({xy[2]},{xy[3]})")
         runner.d.swipe(*xy)
     elif looks_like_numbers(value):
         # 是数字但个数不对(如写了 3 个) —— 报清楚, 别让人以为是"方向名不认识"
@@ -155,6 +165,7 @@ def do_swipe(runner, step):
         }.get(name)
         if quad is None:
             raise ValueError(f"swipe 方向不认识: {value}(支持 left/right/up/down/fast-*)")
+        log.info(f"[滑动] {name} ({quad[0]},{quad[1]})→({quad[2]},{quad[3]})")
         runner.d.swipe(*quad)
     runner._sleep(step.get("wait_after", 1))
 
@@ -182,6 +193,7 @@ def do_find_click(runner, step):
         el = runner._find_element(v)
         if el.exists(timeout=1):
             el.click()
+            log.info(f"[find_click] 命中并点击: {v}")
             return
     raise AssertionError(f"find_click 全部候选未找到: {values}")
 
@@ -204,10 +216,12 @@ def do_wait_for(runner, step):
             screen = runner.d.screenshot(format="opencv")
             if vision.find_in_gray(cv2.cvtColor(screen, cv2.COLOR_BGR2GRAY),
                                    vision.resolve_template(value), min_matches=4):
+                log.info(f"[wait_for] 等到模板: {value}")
                 return
         else:
             # ★ 判断走 runner._text_present: 原生优先 + 树稀疏时 OCR 兜底
             if runner._text_present(*(split_texts(value) or [value])):
+                log.info(f"[wait_for] 等到文本(任一): {value}")
                 return
         n += 1
         runner._poll_sleep(n)
@@ -296,6 +310,10 @@ def do_if_impl(runner, step, negate):
 
     if negate:
         passed = not passed
+    # ★ 条件分支也要留痕: 走没走 else 直接决定后面为什么"少跑了几步"
+    _else_n = len(step.get("else") or [])
+    log.info(f"[if{'(not)' if negate else ''}] 条件{'成立' if passed else '不成立'}"
+             f"({condition!r}) → " + ("跳过 else" if passed else f"执行 else({_else_n} 步)"))
 
     if passed:
         # ★ 必须清掉上一次尝试可能留下的子结果 —— if 步骤带 retry 时, 第 1 次走 else

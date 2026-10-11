@@ -8,7 +8,7 @@ import numpy as np
 from PIL import Image
 
 from core import registry as reg
-from core.driver import BASE_DIR
+from core.driver import BASE_DIR, split_texts
 from core.logger import get_logger
 
 log = get_logger()
@@ -67,6 +67,8 @@ def compare_screen(runner, baseline, threshold=0.6, inverse=False):
     else:
         if similarity < threshold:
             raise AssertionError(f"{msg},低于阈值 {threshold:.0%}")
+    # ★ 通过也要留痕: 只记失败的话, 报告里看不出"比对到底比了多少、阈值多少"
+    log.info(f"[截图比对] {msg},阈值 {threshold:.0%} → 通过")
     runner._last_compare_msg = msg
 
 
@@ -78,10 +80,45 @@ def do_assert(runner, step):
     if isinstance(val, dict):
         val = val.get("value", str(val))
         timeout = val.get("timeout", timeout) if isinstance(val, dict) else timeout
-    if runner._is_image(val):
-        runner._assert_template(val, timeout)
-    else:
-        runner._assert_locator(val, timeout)
+    # ★ 先**拆分**再判断图片(顺序很重要): `断言: 干燥拖布,完成.png` 整串以 .png 结尾,
+    #   先判图片的话会被当成**一个**模板文件名 → 找不到文件直接 FileNotFoundError。
+    values = split_texts(val) or [str(val)]
+    if len(values) == 1:
+        # 单个值: 图片走模板断言、其余走文本断言(保持原有语义与报错文案)
+        if runner._is_image(values[0]):
+            runner._assert_template(values[0], timeout)
+        else:
+            runner._assert_locator(val, timeout)
+        return
+    # ★ 多值里**混了模板图**(2026-10-11 实测出来的一类坑): 其中的图片走模板匹配,
+    #   其余的走文本, **任一命中即通过**; 以前要么崩(图片在最后)、要么静默忽略(图片在前)。
+    imgs = [v for v in values if runner._is_image(v)]
+    if imgs:
+        return _assert_any(runner, [v for v in values if not runner._is_image(v)],
+                           imgs, timeout)
+    runner._assert_locator(val, timeout)
+
+
+def _assert_any(runner, texts, images, timeout):
+    """文本候选 与 模板候选 **任一命中即通过**; 都没有则超时报错(报出全部候选)。"""
+    import cv2
+    from core import vision
+    end = time.time() + timeout if timeout > 0 else None
+    n = 0
+    while True:
+        if texts and runner._text_present(*texts):
+            log.info(f"[断言] 命中文本(任一): {texts}")
+            return
+        for name in images:
+            screen = runner.d.screenshot(format="opencv")
+            if vision.find_in_gray(cv2.cvtColor(screen, cv2.COLOR_BGR2GRAY),
+                                   vision.resolve_template(name), min_matches=4):
+                log.info(f"[断言] 命中模板: {name}")
+                return
+        if end and time.time() >= end:
+            raise AssertionError(f"超时({timeout}s)未找到(文本或模板任一): {texts + images}")
+        n += 1
+        runner._poll_sleep(n)
 
 
 def _resolve_baseline(runner, value):

@@ -130,6 +130,109 @@ def test_prepare_items_runs_in_order_and_reports(monkeypatch):
     assert res[2]["desc"] == "电量门槛≥80%", f"展示名应带参数: {res[2]['desc']}"
 
 
+def test_charging_flow_clicks_recharge_then_polls(monkeypatch):
+    """★ 等待充电的流程(用户 2026-10-11 复述): 首次判断非充电 → 点击回充按钮 →
+    之后**只循环判定状态**(按超时时间决定等多久), 进入充电即返回 True —— 且**只点一次**。
+    """
+    from core import session
+    dev = FakeDev()
+    clicks = []
+    monkeypatch.setattr(session, "click_template",
+                        lambda d, name, timeout=10: clicks.append(name) or (500, 600))
+    monkeypatch.setattr(session, "get_battery_level", lambda d: 42)
+    monkeypatch.setattr(session.time, "sleep", lambda s: None)
+    seq = iter([False, True])          # 进入时非充电, 循环里第一次判定就充上了
+    monkeypatch.setattr(session, "is_charging", lambda d, text=None: next(seq))
+    assert session.ensure_charging(dev, timeout=60) is True
+    assert clicks == ["开始回充.png"], f"回充按钮应只点一次: {clicks}"
+
+
+def test_charging_waits_until_timeout_then_returns_false(monkeypatch):
+    """一直没充上 → 按超时结束并返回 False(不假装成功)"""
+    from core import session
+    clicks = []
+    monkeypatch.setattr(session, "click_template",
+                        lambda d, name, timeout=10: clicks.append(name) or (1, 2))
+    monkeypatch.setattr(session, "get_battery_level", lambda d: 42)
+    monkeypatch.setattr(session.time, "sleep", lambda s: None)
+    monkeypatch.setattr(session, "is_charging", lambda d, text=None: False)
+    assert session.ensure_charging(FakeDev(), timeout=0) is False
+    assert clicks, "连按钮都没点就去等, 流程不对"
+
+
+def test_charging_skips_click_when_already_charging(monkeypatch):
+    """已经在充电: 不点回充按钮, 直接通过"""
+    from core import session
+    clicks = []
+    monkeypatch.setattr(session, "click_template", lambda d, name, timeout=10: clicks.append(name))
+    monkeypatch.setattr(session, "is_charging", lambda d, text=None: True)
+    assert session.ensure_charging(FakeDev(), timeout=60) is True
+    assert clicks == []
+
+
+@pytest.mark.parametrize("tpl,expect", [(None, "开始回充.png"), ("回充.png", "回充.png"),
+                                        ("开始回充.png", "开始回充.png")])
+def test_charging_recharge_template_is_configurable(monkeypatch, tpl, expect):
+    """★ 回充按钮的**模板名可配**(用户要求: 有的组就是拿本组的模板图去点的)"""
+    from core import session
+    seen = []
+    monkeypatch.setattr(session, "click_template",
+                        lambda d, name, timeout=10: seen.append(name) or (1, 2))
+    monkeypatch.setattr(session, "is_charging", lambda d, text=None: False)
+    monkeypatch.setattr(session.time, "sleep", lambda s: None)
+    session.ensure_charging(FakeDev(), timeout=0, recharge_tpl=tpl)
+    assert seen == [expect]
+
+
+def test_charging_text_first_then_template_fallback(monkeypatch):
+    """配了文本就先按文本点; 文本命不中再落到模板(两条都要能走)"""
+    from core import session
+    seen = []
+    monkeypatch.setattr(session, "click_template",
+                        lambda d, name, timeout=10: seen.append(name) or (1, 2))
+    monkeypatch.setattr(session, "is_charging", lambda d, text=None: False)
+    monkeypatch.setattr(session.time, "sleep", lambda s: None)
+
+    dev = FakeDev(present=("回充",))                 # 页面上有「回充」文本
+    session.ensure_charging(dev, timeout=0, recharge_text="回充", recharge_tpl="回充.png")
+    assert dev.clicked == ["回充"], f"应先按文本点: {dev.clicked}"
+    assert seen == [], "文本已经点到了, 不该再走模板"
+
+    dev2 = FakeDev(present=())                       # 文本命不中
+    session.ensure_charging(dev2, timeout=0, recharge_text="回充", recharge_tpl="回充.png")
+    assert dev2.clicked == []
+    assert seen == ["回充.png"], f"文本没命中应落到模板: {seen}"
+
+
+def test_charging_recharge_settings_are_declared_and_pass_through(monkeypatch):
+    """★ 两个参数要 ①在 PRECONDITION_TYPES 里声明(GUI 才显示输入框) ②被 _run_one 透传"""
+    from core import session
+    keys = {p["key"]: p for p in session.PRECONDITION_TYPES["charging"]["params"]}
+    assert "recharge_tpl" in keys and "recharge_text" in keys, f"参数没声明: {list(keys)}"
+    assert keys["recharge_tpl"]["type"] == "text"      # 对话框按 text 渲染输入框
+    assert keys["recharge_tpl"]["default"] == "开始回充.png"
+    assert keys["recharge_text"]["type"] == "text"
+
+    seen = []
+    monkeypatch.setattr(session, "click_template",
+                        lambda d, name, timeout=10: seen.append(name) or (1, 2))
+    monkeypatch.setattr(session, "is_charging", lambda d, text=None: False)
+    monkeypatch.setattr(session.time, "sleep", lambda s: None)
+    session._run_one(FakeDev(), {"target_device": "X"},
+                     {"type": "charging", "timeout": 0, "recharge_tpl": "我的回充.png"},
+                     on_progress=None, should_cancel=None)
+    assert seen == ["我的回充.png"], f"_run_one 没把配置传下去: {seen}"
+
+
+def test_charging_summary_shows_configured_button(monkeypatch):
+    """展示名里要能看出自己配了什么(默认不占地方)"""
+    from core import session
+    assert session._item_label({"type": "charging", "timeout": 1200}) == "等待充电(20分钟)"
+    lbl = session._item_label({"type": "charging", "timeout": 1200,
+                               "recharge_tpl": "回充.png", "recharge_text": "回充"})
+    assert "回充.png" in lbl and "文本:回充" in lbl, lbl
+
+
 def test_item_label_distinguishes_instances():
     """同类型多实例的展示名要能区分(报告里靠它识别)"""
     assert session._item_label({"type": "battery", "min_level": 50}) == "电量门槛≥50%"

@@ -327,9 +327,41 @@ class ActionRunner:
                 except Exception as e:
                     log.debug(f"[click] 行点击回退异常: {e}")
                 el.click()
+                # ★ 点击必须留痕(写清点了谁、落在哪): 真机排查"点不动/点错地方"时,
+                #   这是唯一能拿到的第一手信息(模板点击一直有, 文本/坐标以前是空白)
+                log.info(f"[点击] 文本「{value}」 @ {self._center_of(el)}")
                 return
             check_count += 1
             self._poll_sleep(check_count)
+
+    @staticmethod
+    def _center_of(el):
+        """元素的中心坐标(拿不到就写"位置未知") —— 只用于日志, 不能因它出错"""
+        try:
+            b = el.info["bounds"]
+            return f"({(b['left'] + b['right']) // 2},{(b['top'] + b['bottom']) // 2})"
+        except Exception:
+            return "位置未知"
+
+    @staticmethod
+    def _element_desc(el):
+        """命中元素的"长什么样"(类名/文本/描述/坐标) —— 排查**断言假通过**就看这一行。
+
+        ★ 为什么必须记: 断言是 `textContains` + content-desc 兜底, 页面上**按钮的
+          无障碍描述**同样算命中。真机上出现过「断言: 暂停」瞬间通过 —— 其实匹配到的
+          是暂停**图标按钮**的描述, 并不是真的暂停了(2026-10-11)。只记查询值的话,
+          这种假通过永远看不出来。
+        """
+        try:
+            i = el.info or {}
+            b = i.get("bounds") or {}
+            pos = (f"@ ({(b['left'] + b['right']) // 2},{(b['top'] + b['bottom']) // 2})"
+                   if b else "")
+            desc = i.get("contentDescription") or i.get("content-desc") or ""
+            return (f"元素[{(i.get('className') or '?').split('.')[-1]}] "
+                    f"text={i.get('text') or ''!r} desc={desc!r} {pos}").strip()
+        except Exception:
+            return "元素信息读不到"
 
     def _click_row_fallback(self, value, text_val):
         """点不动文字节点时,改为点击包含它的整行(RN 列表行)
@@ -348,6 +380,7 @@ class ActionRunner:
                 else:
                     self.d.click((int(rm.group(2)) + int(rm.group(4))) // 2,
                                  (int(rm.group(3)) + int(rm.group(5))) // 2)
+                log.info(f"[点击] 文本「{value}」点不动 → 点它所在的整行({rm.group(1)})")
                 return True
         return False
 
@@ -479,11 +512,18 @@ class ActionRunner:
             #   轻量 exists() 不触发 —— 不预热会一直读到空页(真机实测 30s 白等)
             xml = warm_webview(self.d)
             for v in values:
-                if self._find_element(v).exists(timeout=1):
+                el = self._find_element(v)
+                if el.exists(timeout=1):
+                    # ★ 必须写清**命中了什么**: 断言是 textContains + content-desc 兜底,
+                    #   页面上"按钮的无障碍描述"也算命中 —— 真机上出现过"断言: 暂停"
+                    #   立刻通过(其实是匹配到了暂停**图标按钮**的描述, 并不是真的暂停了)。
+                    #   只记查询值的话, 这种假通过永远看不出来。
+                    log.info(f"[断言] 命中「{v}」← {self._element_desc(el)}")
                     return
             # ★ 兜底(用户定的方向: 原生优先, OCR 兜底): 页面主体没暴露时截图识别。
             #   复用统一入口并带上本次的 xml —— 省一次 dump, 且语义与其它判断一致
             if text_present(self.d, values, xml=xml):
+                log.info(f"[断言] 原生没命中, OCR 兜底命中(候选: {value})")
                 return
             check_count += 1
             self._poll_sleep(check_count)

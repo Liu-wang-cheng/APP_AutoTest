@@ -270,17 +270,42 @@ def ensure_device_page(d, device_name="", ready_text=DEFAULT_DEVICE_READY_TEXT,
 
 
 def ensure_charging(d, timeout=1200, on_progress=None, should_cancel=None,
-                    ready_text=None, device_name=""):
+                    ready_text=None, device_name="", recharge_tpl=None,
+                    recharge_text=None):
     """确保设备处于充电状态(未充电则回充),默认超时 20 分钟;should_cancel 可中断等待
 
-    ready_text:  充电判定文本(可配置, 多个用逗号/顿号分隔);留空用默认「充电」
+    ready_text:    充电判定文本(可配置, 多个用逗号/顿号分隔);留空用默认「充电」
+    recharge_tpl:  回充按钮的**模板名**(按当前 APP 组的模板目录解析);
+                   留空用默认「开始回充.png」
+    recharge_text: 回充按钮的**文本**(可选)。填了就先用文本点, 文本命不中再落到模板。
+
+    ★ 为什么回充按钮要能配(2026-10-11 用户要求): 各 APP 的按钮/图标不一样, 有的组
+      就是拿本组的模板图去点的 —— 写死「开始回充.png」时, 换个组就得改代码。
     """
     charging = is_charging(d, ready_text)
     if charging:
         log.info("[前置] 设备处于充电状态")
         return True
-    log.info("[前置] 设备未充电,点击开始回充...")
-    click_template(d, "开始回充.png")
+    tpl = (recharge_tpl or "").strip() or "开始回充.png"
+    text = (recharge_text or "").strip()
+    log.info(f"[前置] 设备未充电,点击回充按钮(文本:{text or '未配'}, 模板:{tpl})...")
+    clicked = False
+    if text:
+        el = d(textContains=text)
+        if el.exists(timeout=3):
+            el.click()
+            clicked = True
+            log.info(f"[前置] 已按文本点击回充按钮「{text}」")
+        else:
+            log.info(f"[前置] 没找到文本「{text}」的回充按钮, 改用模板「{tpl}」")
+    if not clicked:
+        pos = click_template(d, tpl)
+        if pos:
+            clicked = True
+            log.info(f"[前置] 已按模板点击回充按钮「{tpl}」@ ({pos[0]}, {pos[1]})")
+        else:
+            # 不直接判失败: 机器可能已经在回充路上(只是状态文本还没变), 继续等更稳
+            log.warning(f"[前置] 文本/模板都没点到回充按钮(模板:{tpl}), 继续等待充电状态")
     time.sleep(2)
     if d(textContains="确认").exists(timeout=3):
         d(textContains="确认").click()
@@ -540,7 +565,16 @@ PRECONDITION_TYPES = {
         {"key": "timeout", "label": "超时(秒)", "default": 1200, "type": "int"},
         {"key": "ready_text", "label": "充电判定文本", "default": DEFAULT_CHARGING_TEXT,
          "type": "text",
-         "hint": "看到这些文本即算在充电; 多个用逗号/顿号分隔(中英文逗号均可), 任一命中即可"}]},
+         "hint": "看到这些文本即算在充电; 多个用逗号/顿号分隔(中英文逗号均可), 任一命中即可"},
+        # ★ 用户要求(2026-10-11): 回充按钮要能配 —— 各 APP/各组的按钮图标不一样,
+        #   有的组就是拿**本组的模板图**去点的(模板按当前 APP 组目录解析)
+        {"key": "recharge_tpl", "label": "回充按钮模板名", "default": "开始回充.png",
+         "type": "text",
+         "hint": "填本组 templates 目录里的模板文件名(如 开始回充.png / 回充.png); "
+                 "留空 = 用默认「开始回充.png」"},
+        {"key": "recharge_text", "label": "回充按钮文本(可选)", "default": "",
+         "type": "text",
+         "hint": "填了就**先用文本点**(如 回充); 文本命不中再落到模板。留空只用模板"}]},
     "map_load": {"label": "等待地图加载", "params": [
         {"key": "timeout", "label": "单轮超时(秒)", "default": 10, "type": "int"},
         {"key": "rounds", "label": "重试轮数", "default": 6, "type": "int"},
@@ -600,7 +634,9 @@ def _run_one(d, cfg, item, on_progress, should_cancel):
         return ensure_charging(d, timeout=int(item.get("timeout", 1200)),
                                on_progress=on_progress, should_cancel=should_cancel,
                                ready_text=item.get("ready_text"),
-                               device_name=cfg.get("target_device", ""))
+                               device_name=cfg.get("target_device", ""),
+                               recharge_tpl=item.get("recharge_tpl"),
+                               recharge_text=item.get("recharge_text"))
     if t == "enter_device":
         return ensure_device_page(
             d,
@@ -716,8 +752,15 @@ def _item_label(item):
         extra = f"≥{item.get('min_level', 50)}%"
     elif t == "map_load" and item.get("ready_text"):
         extra = f"({item['ready_text']})"
-    elif t == "charging" and item.get("timeout"):
-        extra = f"({int(item['timeout']) // 60}分钟)"
+    elif t == "charging":
+        bits = []
+        if item.get("timeout"):
+            bits.append(f"{int(item['timeout']) // 60}分钟")
+        if item.get("recharge_text"):
+            bits.append(f"文本:{item['recharge_text']}")
+        if item.get("recharge_tpl"):            # 只显示**自己配过**的模板名(默认不占地方)
+            bits.append(f"模板:{item['recharge_tpl']}")
+        extra = f"({', '.join(bits)})" if bits else ""
     elif t == "tap_blank":
         x, y = _parse_point(item.get("point")) or DEFAULT_BLANK_POINT
         extra = f"({x},{y})"

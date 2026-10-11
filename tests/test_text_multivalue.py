@@ -13,9 +13,100 @@
 """
 from pathlib import Path
 
+import numpy as np
+import pytest
+
 from core.driver import split_texts
+from core.runner import ActionRunner
 
 ROOT = Path(__file__).resolve().parent.parent
+
+
+# ── 多值断言的**执行**语义(2026-10-11: 只守分隔符不够, 要看真的能跑) ──
+
+class _Dev:
+    """页面文本固定几条的设备桩(≥5 条 → 判断类不走 OCR 兜底)"""
+    serial = "fake"
+
+    def __init__(self, texts=()):
+        self.texts = list(texts) + ["填充%d" % i for i in range(5)]
+
+    def dump_hierarchy(self):
+        return "".join(f'<node text="{t}"/>' for t in self.texts)
+
+    def screenshot(self, path=None, format=None):
+        return np.zeros((1920, 1080, 3), dtype=np.uint8)
+
+    def window_size(self):
+        return (1080, 1920)
+
+    def __call__(self, **kw):
+        q = kw.get("textContains") or kw.get("text") or ""
+        hit = bool(q) and any(q in t for t in self.texts)
+
+        class R:
+            def exists(self, timeout=1):
+                return hit
+
+            def click(self):
+                pass
+        return R()
+
+
+def _runner(texts=()):
+    r = ActionRunner(_Dev(texts), {"step_interval": 0, "default_timeout": 1,
+                                   "click_timeout": 1}, case_name="t")
+    r._sleep = lambda s: None
+    return r
+
+
+@pytest.mark.parametrize("value", ["清洁中,正在吸尘", "清洁中，正在吸尘", "清洁中、正在吸尘",
+                                   "清洁中;正在吸尘", "清洁中\n正在吸尘"])
+def test_multivalue_assert_passes_when_any_value_matches(value):
+    """★ 多值断言 = **任一命中即通过**(第二个值命中也要通过)"""
+    _runner(("正在吸尘",))._execute({"assert": value, "timeout": 1})
+
+
+def test_multivalue_assert_fails_loudly_when_none_matches():
+    with pytest.raises(AssertionError) as e:
+        _runner(("正在吸尘",))._execute({"assert": "清洁中，已暂停", "timeout": 1})
+    assert "清洁中" in str(e.value) and "已暂停" in str(e.value), str(e.value)
+
+
+def test_generic_candidate_matches_anywhere_on_the_page():
+    """★ 这是**语义, 不是 bug**, 但必须知道它: 断言是"页面上任意文本包含该值就算命中"。
+
+    所以 `assert: 干燥拖布,已完成,已取消` 里的「已完成」会被**任何**含"已完成"的文本顶掉
+    —— 真机上「清洗拖布 已完成」这种进度文案就让断言**瞬间通过**, 与清扫是否结束无关
+    (2026-10-11 用户报"第二个断言没有生效", 就是这个)。候选词不能太通用。
+    """
+    _runner(("清洗拖布 已完成",))._execute({"assert": "干燥拖布,已完成,已取消", "timeout": 1})
+
+
+@pytest.mark.parametrize("value", ["干燥拖布,完成.png", "完成.png,干燥拖布"])
+def test_assert_mixing_a_template_no_longer_crashes(value, monkeypatch):
+    """★ 多值里混模板图: 以前「图片在最后」会被整串当成模板文件名 → FileNotFoundError;
+    「图片在前」则把图名当文本找(静默忽略)。现在按多值语义: 文本命中也算通过。"""
+    _runner(("干燥拖布",))._execute({"assert": value, "timeout": 1})
+
+
+def test_assert_in_multivalue_can_match_by_template(monkeypatch):
+    """多值里的模板候选也要真的能命中(文本都不在时)"""
+    from core import vision
+    from core.actions import asserts
+    monkeypatch.setattr(vision, "find_in_gray", lambda s, t, **kw: (300, 400))
+    monkeypatch.setattr(vision, "resolve_template", lambda n: n)
+    monkeypatch.setattr(asserts.time, "sleep", lambda s: None)
+    _runner(("正在吸尘",))._execute({"assert": "干燥拖布,完成.png", "timeout": 1})
+
+
+def test_assert_none_of_text_or_template_reports_all_candidates(monkeypatch):
+    from core import vision
+    monkeypatch.setattr(vision, "find_in_gray", lambda s, t, **kw: None)
+    monkeypatch.setattr(vision, "resolve_template", lambda n: n)
+    with pytest.raises(AssertionError) as e:
+        _runner(("正在吸尘",))._execute({"assert": "干燥拖布,完成.png", "timeout": 1})
+    assert "干燥拖布" in str(e.value) and "完成.png" in str(e.value), str(e.value)
 
 # core 里允许出现裸 .split(",") 的白名单(目前为空;确属非文本语义的在此登记并写明理由)
 _ALLOWED_BARE_SPLIT = set()
