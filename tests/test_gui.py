@@ -3386,10 +3386,11 @@ def test_template_dropdown_rescans_when_opened(win, monkeypatch, tmp_path):
     现在每次打开下拉前重扫模板目录。
     """
     import core.vision as vision
-    tpl = tmp_path / "tpls"
-    tpl.mkdir()
-    monkeypatch.setattr(vision, "TEMPLATE_DIR", str(tpl), raising=False)
-    monkeypatch.setattr(vision, "_template_app_group", "", raising=False)
+    # ★ 2026-10-11: 模板一律按 APP 组存放(全局 Test_img/templates 已删)
+    tpl = tmp_path / "Test_cases" / "组甲" / "templates"
+    tpl.mkdir(parents=True)
+    monkeypatch.setattr(vision, "_template_app_group", "组甲", raising=False)
+    monkeypatch.setattr(vision, "group_templates_dir", lambda g: str(tpl), raising=False)
     (tpl / "旧模板.png").write_bytes(b"\x89PNG\r\n\x1a\n")
 
     combo, _getter = mw._make_field_widget(

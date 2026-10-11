@@ -16,7 +16,9 @@ from core.logger import get_logger
 
 log = get_logger()
 
-TEMPLATE_DIR = os.path.join(BASE_DIR, "Test_img", "templates")
+# ★ 2026-10-11: 旧的全局模板目录 Test_img/templates 已删除(模板一律按 APP 组存放:
+#   Test_cases/<组>/templates/)。原来这里的 TEMPLATE_DIR 回退一并去掉 ——
+#   否则它只会返回一个不存在目录下的路径, 报错信息反而误导。
 
 # ── 模板按 APP 前缀解析(适配不同 APP) ──
 # config.yaml 的 app.template_prefix(如 涂鸦)→ 模板文件命名 <前缀>_<名称>.png;
@@ -71,10 +73,9 @@ def set_template_app_group(group):
 def list_templates():
     """当前 APP 组可用的模板名列表(带 .png 扩展名, 去 APP 前缀)"""
     names = []
-    search_dirs = []
-    if _template_app_group:
-        search_dirs.append(group_templates_dir(_template_app_group))
-    search_dirs.append(TEMPLATE_DIR)
+    if not _template_app_group:
+        return names                # 没有当前 APP 组: 没有可列出的模板
+    search_dirs = [group_templates_dir(_template_app_group)]
     for sd in search_dirs:
         if not os.path.isdir(sd):
             continue
@@ -97,29 +98,27 @@ def resolve_template(name, app_group=None):
     - 用例 YAML 永远写无前缀名称(换 APP 不改用例,只换模板文件+前缀配置)
     - ★ 模板按 APP 组子目录存放: templates/<APP组>/<前缀_名>.png(用户要求)
     - app_group 缺省时用模块级 set_template_app_group 设置的当前组
-    - 绝对路径原样返回;带目录分隔符的相对路径按 TEMPLATE_DIR 下相对路径处理
+    - 绝对路径原样返回;带目录分隔符的相对路径按**组模板目录**下的相对路径处理
     """
     p = str(name)
     if os.path.isabs(p):
         return p
-    if os.sep in p or "/" in p:
-        return os.path.join(TEMPLATE_DIR, p)
     g = _template_app_group if app_group is None else app_group
+    if not g:
+        return p                    # 没有当前 APP 组(理论上不该发生): 原样返回
+    gdir = group_templates_dir(g)
+    if os.sep in p or "/" in p:
+        return os.path.join(gdir, p)
     prefix = _template_prefix()
-    if g:
-        gdir = group_templates_dir(g)
-        if prefix:
-            cand = os.path.join(gdir, f"{prefix}_{p}")
-            if os.path.exists(cand):
-                return cand
-        cand = os.path.join(gdir, p)
-        if os.path.exists(cand):
-            return cand
     if prefix:
-        cand = os.path.join(TEMPLATE_DIR, f"{prefix}_{p}")
+        cand = os.path.join(gdir, f"{prefix}_{p}")
         if os.path.exists(cand):
             return cand
-    return os.path.join(TEMPLATE_DIR, p)
+    cand = os.path.join(gdir, p)
+    if os.path.exists(cand):
+        return cand
+    # 找不到: 返回组目录下的**预期位置** —— 报错里能一眼看出"这张图该放哪"
+    return os.path.join(gdir, p)
 
 _sift = None
 _lock = threading.Lock()

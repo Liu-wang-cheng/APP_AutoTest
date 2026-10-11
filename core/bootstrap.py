@@ -32,7 +32,10 @@ _SEED_FILES = (
 #: 本地没有的文件解压出来当默认值, 本地已有的**绝不覆盖** —— 更新/重装都
 #: 不会动用户改过的用例与模板(用户要求 2026-09-24)。
 #: screenshots 之类的运行产物在 spec 里就不进包, 这里只管"缺才补"。
-_SEED_DIRS = ("Test_cases", "Test_img/templates")
+# ★ 2026-10-11: 去掉 "Test_img/templates" —— 模板一律按 APP 组存放
+#   (Test_cases/<组>/templates/), 那个全局目录已删(用户确认没有老版本了);
+#   留着它会让程序每次启动又把空目录建回来。
+_SEED_DIRS = ("Test_cases",)
 #: 用户配置的模板(只生成, 之后由用户在 GUI 里改)
 _CONFIG_TEMPLATE = "config/config.example.yaml"
 _CONFIG_TARGET = "config/config.yaml"

@@ -133,28 +133,48 @@ def test_ncc_fallback_missing_file_returns_none(tmp_path):
 
 # ── 模板按 APP 前缀解析 ──
 
+def _fake_group_dir(tmp_path, monkeypatch):
+    """把"组模板目录"指到 tmp —— ★ 2026-10-11 起模板一律按 APP 组存放
+    (Test_cases/<组>/templates/), 那个全局的 Test_img/templates 已删除。"""
+    monkeypatch.setattr(vision, "_template_app_group", "组甲")
+    monkeypatch.setattr(vision, "group_templates_dir",
+                        lambda g: str(tmp_path / "groups" / str(g) / "templates"))
+    d = tmp_path / "groups" / "组甲" / "templates"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
 def test_resolve_template_prefers_prefixed_file(tmp_path, monkeypatch):
-    (tmp_path / "涂鸦_开始清扫.png").write_bytes(b"x")
-    (tmp_path / "开始清扫.png").write_bytes(b"y")
-    monkeypatch.setattr(vision, "TEMPLATE_DIR", str(tmp_path))
+    d = _fake_group_dir(tmp_path, monkeypatch)
+    (d / "涂鸦_开始清扫.png").write_bytes(b"x")
+    (d / "开始清扫.png").write_bytes(b"y")
     monkeypatch.setattr(vision, "_template_prefix", lambda: "涂鸦")
     assert vision.resolve_template("开始清扫.png").endswith("涂鸦_开始清扫.png")
 
 
 def test_resolve_template_falls_back_to_plain_name(tmp_path, monkeypatch):
     """带前缀的文件不存在时回退原名(兼容旧命名/部分共用模板)"""
-    (tmp_path / "开始清扫.png").write_bytes(b"y")
-    monkeypatch.setattr(vision, "TEMPLATE_DIR", str(tmp_path))
+    d = _fake_group_dir(tmp_path, monkeypatch)
+    (d / "开始清扫.png").write_bytes(b"y")
     monkeypatch.setattr(vision, "_template_prefix", lambda: "涂鸦")
     assert vision.resolve_template("开始清扫.png").endswith("开始清扫.png")
-    assert vision.resolve_template("不存在.png").endswith("不存在.png")
+    # 全都没有 → 返回**组目录下的预期位置**(报错里能看出该放哪)
+    got = vision.resolve_template("不存在.png")
+    assert got.endswith("不存在.png") and str(d) in got, got
 
 
 def test_resolve_template_without_prefix_config(tmp_path, monkeypatch):
-    (tmp_path / "开始清扫.png").write_bytes(b"y")
-    monkeypatch.setattr(vision, "TEMPLATE_DIR", str(tmp_path))
+    d = _fake_group_dir(tmp_path, monkeypatch)
+    (d / "开始清扫.png").write_bytes(b"y")
     monkeypatch.setattr(vision, "_template_prefix", lambda: "")
     assert vision.resolve_template("开始清扫.png").endswith("开始清扫.png")
+
+
+def test_resolve_template_path_with_separator_uses_group_dir(tmp_path, monkeypatch):
+    """带路径分隔符的相对路径也按**组模板目录**解析(不再是已删的全局目录)"""
+    d = _fake_group_dir(tmp_path, monkeypatch)
+    import os as _os
+    assert _os.path.normpath(vision.resolve_template("sub/x.png")) == _os.path.normpath(str(d / "sub" / "x.png"))
 
 
 def test_resolve_template_absolute_path_untouched(tmp_path):

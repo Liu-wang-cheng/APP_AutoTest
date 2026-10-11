@@ -103,8 +103,3 @@ def test_每个BASE_DIR绑定都被隔离():
             assert not str(val).startswith(str(REAL_ROOT)), (
                 f"{name}.BASE_DIR 仍指向真实仓库({val}), 隔离夹具没生效")
 
-    # ③ vision.TEMPLATE_DIR 是模块级常量, patch BASE_DIR 对它无效 —— 必须单独钉
-    import core.vision as vision
-    if hasattr(vision, "TEMPLATE_DIR"):
-        assert not str(vision.TEMPLATE_DIR).startswith(str(REAL_ROOT)), (
-            "vision.TEMPLATE_DIR 未被隔离(它是 import 时就拼好的模块级常量)")

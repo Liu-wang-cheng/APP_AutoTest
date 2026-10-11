@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""列出用例引用的模板图清单,并检查 Test_img/templates/ 里是否齐全。
+"""列出用例引用的模板图清单,并检查各组 Test_cases/<组>/templates/ 里是否齐全。
 
     python tools/check_templates.py                      # 扫 Test_cases/ 全部文件
     python tools/check_templates.py Test_cases/x.yaml    # 只扫指定文件
@@ -17,7 +17,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from core.driver import BASE_DIR, load_yaml_file
 from tests.test_yaml_runner import iter_all_steps, iter_modules
 
-TEMPLATE_DIR = os.path.join(BASE_DIR, "Test_img", "templates")
+# ★ 2026-10-11: 模板一律按 APP 组存放, 旧的全局 Test_img/templates 已删除
 
 # 这些键的值可能是模板图名
 IMAGE_KEYS = ("click", "click_template", "long_click", "assert", "wait_for", "compare", "diff",
@@ -88,7 +88,7 @@ def main():
     have = set()
     # ★ 模板在 Test_cases/<组>/templates/ 下, 兼容全局 Test_img/templates/
     cases_root = os.path.join(BASE_DIR, "Test_cases")
-    for walk_root in (cases_root, TEMPLATE_DIR):
+    for walk_root in (cases_root,):
         if not os.path.isdir(walk_root):
             continue
         for root_d, _dirs, fnames in os.walk(walk_root):

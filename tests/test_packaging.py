@@ -142,7 +142,6 @@ def test_backup_contains_user_data_only(tmp_path):
     assert "config/config.yaml" in names
     assert any(n.startswith("Test_cases") for n in names), names
     assert any(n.startswith("Test_preconditions") for n in names), names
-    assert any(n.startswith("Test_img/templates") for n in names), names
     assert not any("screenshots" in n for n in names), f"截图不该进备份: {names}"
     assert not any(n.startswith("reports/") for n in names), f"报告不该进备份: {names}"
 
@@ -495,9 +494,6 @@ def test_bootstrap_seeds_default_cases_only_when_missing(tmp_path):
                                                         encoding="utf-8")
     (src / "Test_cases" / "三星" / "templates").mkdir()
     (src / "Test_cases" / "三星" / "templates" / "t.png").write_bytes(b"png")
-    (src / "Test_img" / "templates").mkdir(parents=True)
-    (src / "Test_img" / "templates" / "README.md").write_text("r",
-                                                              encoding="utf-8")
     dst.mkdir()
     # 用户本地已有一个改过的同名用例
     (dst / "Test_cases" / "三星").mkdir(parents=True)
@@ -508,7 +504,6 @@ def test_bootstrap_seeds_default_cases_only_when_missing(tmp_path):
 
     # 缺的补上
     assert (dst / "Test_cases" / "三星" / "templates" / "t.png").read_bytes() == b"png"
-    assert (dst / "Test_img" / "templates" / "README.md").read_text() == "r"
     # 已有的绝不覆盖
     assert (dst / "Test_cases" / "三星" / "a.yaml").read_text(
         encoding="utf-8") == "module: 用户改过的\n"

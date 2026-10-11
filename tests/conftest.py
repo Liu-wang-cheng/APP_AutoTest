@@ -206,11 +206,9 @@ def _isolate_base_dir(monkeypatch, tmp_path):
             continue                # 未安装的可选依赖(如无 PySide6)跳过
         if hasattr(mod, "BASE_DIR"):
             monkeypatch.setattr(mod, "BASE_DIR", str(sandbox), raising=False)
-    # vision.TEMPLATE_DIR 是**模块级常量**(import 时就拼好), 不受 BASE_DIR patch 影响
-    import core.vision as vision
-    if hasattr(vision, "TEMPLATE_DIR"):
-        monkeypatch.setattr(vision, "TEMPLATE_DIR",
-                            str(sandbox / "Test_img" / "templates"), raising=False)
+    # ★ 2026-10-11: 原来这里还要单独钉 vision.TEMPLATE_DIR(全局模板目录是 import 时
+    #   拼好的模块级常量) —— 那个目录已删除, 模板一律走 group_templates_dir(基于
+    #   core.driver.BASE_DIR, 上面的循环已经隔离了)。
     yield
 
 

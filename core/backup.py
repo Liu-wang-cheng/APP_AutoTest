@@ -31,7 +31,6 @@ _BACKUP_ITEMS = (
     ("config/config.yaml", False),
     ("Test_cases", True),
     ("Test_preconditions", True),
-    ("Test_img/templates", True),
 )
 
 
