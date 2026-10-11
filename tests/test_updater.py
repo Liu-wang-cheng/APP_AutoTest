@@ -605,7 +605,10 @@ def test_update_bat_structure(tmp_path):
                  r'move "_update_extracted\_internal" "_internal"',  # 新载荷瞬时到位
                  r'ren "%EXE_NAME%" "%EXE_NAME%.bak"',         # 旧 exe 备份
                  'copy /y "_update_extracted\\%EXE_NAME%"',    # 新 exe 就位
-                 "正在回滚",                                    # 失败回滚
+                 # ★ 只断言**命令**, 不断言中文文案: 脚本按本机 OEM 代码页落盘, 表示不了
+                 #   中文的机器(如英文 Windows, OEM=437)上文案会退化成 '?' ——
+                 #   断言文案的测试在 CI(英文 Windows)上必红(2026-10-11 实测踩到)
+                 r'ren "%EXE_NAME%.bak" "%EXE_NAME%"',         # 回滚: 把备份换回来
                  'start ""', "del /f /q \"%~f0\""):             # 启动新版本 / 自删
         assert must in text, f"bat 缺少关键步骤: {must}"
     # 用 move 而不是 robocopy 拷 400MB —— 这是相对参考项目的关键改进
@@ -626,6 +629,35 @@ def test_update_bat_structure(tmp_path):
     for guarded in ("config.yaml", "Test_cases", "Test_preconditions", "Test_img"):
         assert guarded not in text, f"bat 里出现了用户数据路径: {guarded}"
     assert b"\r\n" in raw and b"\n" not in raw.replace(b"\r\n", b"")
+
+
+def test_update_bat_is_readable_in_the_console_code_page(monkeypatch, tmp_path):
+    """★ 脚本必须**整份**能用 cmd 读它时用的代码页解出来 —— 这是"中文注释被当命令执行"的根治条件。
+
+    ★ 两种机器都要验: 本机 OEM 是 936, 只跑本机**永远发现不了**英文机器/CI 上的问题
+      (2026-10-11 实测: 我的编码改动在本地全绿, CI(英文 Windows) 上两条测试红了)。
+      · 中文 Windows(OEM=936): 落盘是 GBK 中文, 用同一代码页能解出原文;
+      · 英文 Windows(OEM=437): 表示不了中文 → 退化成**纯 ASCII**(单字节, 解析安全),
+        绝不能出现"半个多字节序列"。
+    """
+    app = tmp_path / "app"
+    app.mkdir()
+    (app / "AutoTest.exe").write_bytes(b"MZ")
+    bat_path = os.path.join(str(app), "_update.bat")
+    for cp, is_zh_machine in ((936, True), (437, False)):
+        monkeypatch.setattr(updater, "oem_code_page", lambda cp=cp: cp)
+        updater.generate_update_bat(str(app), pid=1, exe_name="AutoTest.exe")
+        raw = open(bat_path, "rb").read()
+        text = raw.decode(f"cp{cp}")            # cmd 就是这么读的 —— 解不出来就已经完了
+        if is_zh_machine:
+            assert "正在回滚" in text, "中文机器上文案该是中文"
+        else:
+            assert all(b < 128 for b in raw), \
+                "OEM 代码页表示不了中文时必须退化成纯 ASCII(不能留半个多字节序列)"
+        # 无论哪种编码, 关键命令都必须原样在
+        for must in (r'ren "_internal" "_internal_old"',
+                     r'ren "%EXE_NAME%.bak" "%EXE_NAME%"'):
+            assert must in text, f"{cp} 编码下缺少关键命令: {must}"
 
 
 def test_target_marker_still_written(tmp_path):
@@ -706,7 +738,9 @@ def test_update_bat_swaps_and_keeps_rollback_copy_on_success(tmp_path):
     finally:
         alive.kill()
         alive.wait(timeout=10)
-    assert "新版本已启动" in out, out[-400:]
+    # ★ 只断言与语言无关的标记: 脚本的文案按本机代码页落盘, 英文 Windows 上中文会变成 '?',
+    #   而"[OK]" 是 ASCII、两边都在。真正的"成功了"证据是下面几条结构断言。
+    assert "[OK]" in out, out[-400:]
     assert (app / "_internal" / "VERSION").read_text(encoding="utf-8") == "2.0"
     assert (app / "_internal" / "new_only.dll").exists()
     assert (app / "_internal_old" / "VERSION").read_text(encoding="utf-8") == "1.0", \
