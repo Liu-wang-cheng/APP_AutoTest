@@ -1020,6 +1020,81 @@ def _fake_prepare_items(results):
         return out
     return _f
 
+def _record_precondition_calls(monkeypatch, rt, calls):
+    """把"全量前置"与"只重启 APP"换成记录器, 用来实证两者的实际调用序列"""
+    def _prepare(d_, cfg_, items, on_progress=None, should_cancel=None, on_item_done=None):
+        calls.append("prepare")
+        return [{"key": "restart", "desc": "重启 APP", "ok": True, "elapsed": 0.1}]
+
+    monkeypatch.setattr(rt.session, "prepare_items", _prepare)
+    monkeypatch.setattr(rt.session, "restart_app",
+                        lambda d_, cfg, enter_page=True: calls.append("restart"))
+    monkeypatch.setattr(rt.session, "get_battery_level", lambda d_: 50)
+    monkeypatch.setattr(rt, "load_config",
+                        lambda: {"runner": {"step_interval": 0, "default_timeout": 1,
+                                            "click_timeout": 1},
+                                 "app": {"package": "p", "name": "x"},
+                                 "target_device": "SE3L"})
+
+
+def _write_case(tmp_path, group, fname, case_name):
+    d = tmp_path / "Test_cases" / group
+    d.mkdir(parents=True, exist_ok=True)
+    f = d / fname
+    f.write_text(f"module: {group}\ncases:\n  - name: {case_name}\n    steps:\n"
+                 "      - desc: 等一下\n        wait: 0.1\n", encoding="utf-8")
+    return str(f)
+
+
+def _run_worker(qapp, monkeypatch, rt, tmp_path, files, repeat):
+    """同步跑 RunWorker.run(不起 QThread), 返回 (信号收集, 前置调用序列)"""
+    import types
+    import uiautomator2 as u2
+    fake_d = types.SimpleNamespace(
+        implicitly_wait=lambda t: None,
+        dump_hierarchy=lambda: '<node text="100%"/>',
+        screenshot=lambda path=None, format=None: None)
+    monkeypatch.setattr(u2, "connect", lambda dev: fake_d)
+    monkeypatch.setattr(rt, "ExcelReport",
+                        lambda: __import__("core.excel_report", fromlist=["ExcelReport"])
+                        .ExcelReport(path=str(tmp_path / "rep.xlsx")))
+    calls = []
+    _record_precondition_calls(monkeypatch, rt, calls)
+    done = []
+    w = rt.RunWorker("fake-dev", files, [{"type": "restart", "enabled": True}], repeat)
+    w.finished_run.connect(lambda ok, msg: done.append((ok, msg)))
+    w.run()
+    return done, calls
+
+
+def test_repeat_does_not_rerun_preconditions_in_same_group(qapp, monkeypatch, tmp_path):
+    """★ 同一用例重复 N 轮**不**重跑全量前置 —— 只有"换 APP 组"才重跑(用户问过两次)。
+
+    实证: repeat=2 跑同一条用例, 记录 prepare_items(全量前置)与 restart_app(只重启)的调用序列。
+    期望 = 第 1 轮做一次全量前置, 第 2 轮只重启 APP。语义来自 runner_thread 里
+    prepared_group 在**轮次循环之外**初始化 —— 谁把它挪进循环, 这条就红。
+    """
+    from gui import runner_thread as rt
+    f = _write_case(tmp_path, "组甲", "a.yaml", "冒烟")
+    done, calls = _run_worker(qapp, monkeypatch, rt, tmp_path, [f], repeat=2)
+    assert done and done[0][0] is True, done
+    assert calls == ["prepare", "restart"], (
+        f"同组重复 2 轮的前置调用序列异常: {calls} "
+        f"(期望 ['prepare','restart'] —— 只有换组才重跑全量前置)")
+
+
+def test_switching_group_reruns_preconditions(qapp, monkeypatch, tmp_path):
+    """组来回切换(甲→乙→甲)时, **切回**甲组要再跑一次全量前置"""
+    from gui import runner_thread as rt
+    a1 = _write_case(tmp_path, "组甲", "a.yaml", "甲1")
+    b = _write_case(tmp_path, "组乙", "b.yaml", "乙1")
+    a2 = _write_case(tmp_path, "组甲", "c.yaml", "甲2")
+    done, calls = _run_worker(qapp, monkeypatch, rt, tmp_path, [a1, b, a2], repeat=1)
+    assert done and done[0][0] is True, done
+    assert calls == ["prepare", "prepare", "prepare"], (
+        f"换组时的前置调用序列异常: {calls} (期望每次换组都做一次全量前置)")
+
+
 def test_runworker_run_smoke(qapp, monkeypatch, tmp_path):
     """不碰真机跑通 RunWorker.run:前置行(带电量)→ 步骤行 → 完成信号 → 报告落盘"""
     import types
