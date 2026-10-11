@@ -377,3 +377,44 @@ def test_verify_package_ocr_gate(tmp_path):
     (app / "reports" / "test.log").unlink()
     errs = vp._check_ocr_selfcheck(str(app))
     assert errs and "读不到程序日志" in errs[0], errs
+
+
+# ── 真跑一次 OCR(CI 用): 守住"干净环境里依赖/模型能不能用" ──
+
+def test_real_ocr_recognizes_text(monkeypatch):
+    """★ 真加载模型 + 真识别一张合成图(约 3~5 秒, 无网络)。
+
+    平时测试默认把 OCR 关掉(conftest, 为了确定性和速度), 于是"OCR 依赖坏了"没人发现。
+    这里显式打开: 依赖没装 → skip(开发机可能没装); 装了但跑不通 → **失败**(就是要抓的)。
+    ★ 注意分工: 这条管的是"**依赖/模型**本身能不能用"; "打包时漏收依赖"那类(实测漏过
+      ch_ppocr_v3_det、pyclipper)CI 抓不到 —— 那由 build 期的 tools/verify_package.py
+      真启动打包产物 + 检查它自己的 OCR 自检日志来把关。
+    """
+    import numpy as np
+
+    try:
+        import rapidocr_onnxruntime  # noqa: F401
+    except Exception as e:
+        pytest.skip(f"本机没装 rapidocr: {e}")
+
+    from core import ocr
+    monkeypatch.setattr(ocr, "_available", None)
+    monkeypatch.setattr(ocr, "_cache", {"t": 0.0, "texts": []})
+    if not ocr.self_check():
+        pytest.fail("OCR 自检失败(依赖或模型有问题, 见上面日志)")
+
+    try:
+        import cv2
+    except Exception as e:
+        pytest.skip(f"没有 cv2, 画不出测试图: {e}")
+    img = np.full((140, 560, 3), 255, dtype=np.uint8)
+    cv2.putText(img, "TEST 123", (20, 95), cv2.FONT_HERSHEY_SIMPLEX, 2.2, (0, 0, 0), 5)
+
+    class _Dev:
+        serial = "fake-ocr"
+        def screenshot(self, path=None, format=None):
+            return img
+
+    texts = [t for t, _pos in ocr.screen_texts(_Dev(), use_cache=False)]
+    joined = " ".join(texts).upper()
+    assert "TEST" in joined or "123" in joined, f"OCR 没读出合成图上的文字: {texts}"
