@@ -3711,15 +3711,19 @@ class MainWindow(QMainWindow):
 
         # 执行结果
         result_split = QSplitter(Qt.Horizontal)
-        self.result_table = QTableWidget(0, 5)
-        self.result_table.setHorizontalHeaderLabels(["#", "步骤", "结果", "耗时", "错误信息"])
+        # ★ 列里要有"用例名(第几次执行)"(用户要求 2026-10-12): 同一个用例重复跑多轮时,
+        #   以前结果表里看不出现在/这条属于第几轮。
+        self.result_table = QTableWidget(0, 6)
+        self.result_table.setHorizontalHeaderLabels(
+            ["#", "用例(第几次)", "步骤", "结果", "耗时", "错误信息"])
         # ★ 步骤/错误信息两列拉伸占满;结果列随内容自适应(中文总结行放得下);
         #   此前 Stretch 挂在结果列上,列序调整后步骤/错误信息被挤窄显示不全
-        self.result_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
-        self.result_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.Stretch)
-        self.result_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        self.result_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
+        self.result_table.horizontalHeader().setSectionResizeMode(5, QHeaderView.Stretch)
+        self.result_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
         self.result_table.setColumnWidth(0, 40)
-        self.result_table.setColumnWidth(3, 64)
+        self.result_table.setColumnWidth(1, 150)
+        self.result_table.setColumnWidth(4, 64)
         self.result_table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.result_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.result_table.verticalHeader().setVisible(False)
@@ -3975,14 +3979,16 @@ class MainWindow(QMainWindow):
         self.result_table.insertRow(row)
         passed = result.get("passed")
         elapsed = result.get("elapsed")
-        values = [str(row + 1), result.get("desc", ""),
+        values = [str(row + 1), result.get("case", ""), result.get("desc", ""),
                   "PASS" if passed else "FAIL",
                   f"{elapsed:.1f}s" if isinstance(elapsed, (int, float)) else "",
                   result.get("error", "")]
         for col, val in enumerate(values):
             item = QTableWidgetItem(val)
-            if col == 2:
+            if col == 3:
                 item.setForeground(QColor("#16a34a") if passed else QColor("#dc2626"))
+            if col in (3, 4):           # ★ 结果 / 耗时 居中显示(用户要求 2026-10-12)
+                item.setTextAlignment(Qt.AlignCenter)
             item.setData(Qt.UserRole, result.get("screenshot", ""))
             if val:
                 item.setToolTip(val)   # 长文本(步骤/错误信息)悬停看全文
@@ -4034,19 +4040,22 @@ class MainWindow(QMainWindow):
         """阶段状态 → 状态栏;用例开始时在执行结果表插分隔行,让用户看到在跑"""
         self.status_label.setText(message)
         if message.startswith("执行用例"):
-            self._append_result_row("—", "▶ " + message, "", "#f0f4fa")
+            # 分隔行文字放「步骤」列(结果列留给 PASS/FAIL 这类判定)
+            self._append_result_row("—", "", "▶ " + message, "#f0f4fa")
 
     def _append_result_row(self, num, result, desc, bg):
         """向执行结果表追加一行彩色标记行(开始行/用例分隔行/总结行)。
-        列序与表格一致:#、步骤(desc)、结果(result)、耗时、错误信息"""
+        列序与表格一致:#、用例(第几次)、步骤(desc)、结果(result)、耗时、错误信息"""
         row = self.result_table.rowCount()
         self.result_table.insertRow(row)
-        for col, text in enumerate((num, desc, result, "", "")):
+        for col, text in enumerate((num, "", desc, result, "", "")):
             it = QTableWidgetItem(text)
             f = it.font()
             f.setBold(True)
             it.setFont(f)
             it.setBackground(QColor(bg))
+            if col in (0, 3, 4):        # 序号/结果/耗时居中(与数据行对齐)
+                it.setTextAlignment(Qt.AlignCenter)
             self.result_table.setItem(row, col, it)
         self.result_table.scrollToBottom()
         self.tabs.setCurrentIndex(0)

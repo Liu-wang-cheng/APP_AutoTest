@@ -687,8 +687,12 @@ DEFAULT_PRECONDITIONS = [
 ]
 
 
-def _run_one(d, cfg, item, on_progress, should_cancel):
-    """执行单个前置项(按 type 分发);返回 True/False"""
+def _run_one(d, cfg, item, on_progress, should_cancel, collect=None):
+    """执行单个前置项(按 type 分发);返回 True/False。
+
+    collect: 传一个 list 进来时, 「自定义步骤」型前置会把**每一步的结果**(含截图)
+    追加进去 —— GUI 好把前置内部的步骤也一条条落表/进报告(用户要求 2026-10-12)。
+    """
     t = item.get("type")
     if t == "restart":
         restart_app(d, cfg, should_cancel=should_cancel)
@@ -737,11 +741,10 @@ def _run_one(d, cfg, item, on_progress, should_cancel):
                               device_name=cfg.get("target_device", ""),
                               # ★ 让"停止"能穿透到这串前置步骤(见 ActionRunner.stopped):
                               #   否则用户点停止后它会一路跑完
-                              cancel_check=should_cancel,
-                              # ★ 前置是**准备动作**, 不给点击步骤留截图(用户要求:
-                              #   "测试步骤的点击操作才需要截图")
-                              click_shots=False)
+                              cancel_check=should_cancel)
         ok = runner.run_steps(steps)
+        if collect is not None:
+            collect.extend(runner.results)      # 内部每一步的结果(含截图)
         log.info(f"[前置] {item.get('name') or '自定义步骤'}: "
                  f"{'通过' if ok else '有步骤失败'}")
         return ok
@@ -769,8 +772,9 @@ def prepare_items(d, cfg, items, on_progress=None, should_cancel=None,
     """
     results = []
 
-    def _finish(idx, desc, ok, elapsed=0.0):
-        r = {"key": f"pre{idx}", "desc": desc, "ok": bool(ok), "elapsed": elapsed}
+    def _finish(idx, desc, ok, elapsed=0.0, sub=None):
+        r = {"key": f"pre{idx}", "desc": desc, "ok": bool(ok), "elapsed": elapsed,
+             "sub": list(sub or [])}
         results.append(r)
         if on_item_done:
             try:
@@ -787,10 +791,11 @@ def prepare_items(d, cfg, items, on_progress=None, should_cancel=None,
             _finish(i, desc, False)
             continue
         t0 = time.time()
-        ok = _run_one(d, cfg, item, on_progress, should_cancel)
+        sub = []
+        ok = _run_one(d, cfg, item, on_progress, should_cancel, collect=sub)
         if ok is None:
             continue                    # 该项跳过(如未配置文本)
-        _finish(i, desc, ok, time.time() - t0)
+        _finish(i, desc, ok, time.time() - t0, sub=sub)
     return results
 
 

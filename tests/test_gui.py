@@ -892,16 +892,16 @@ def test_run_finished_summary_row_in_result_table(win):
     from PySide6.QtWidgets import QTableWidgetItem
     win.on_run_finished(True, "全部通过(1 轮 × 2 个用例)")
     row = win.result_table.rowCount() - 1
-    texts = [win.result_table.item(row, c).text() for c in range(5)]
-    assert texts == ["—", "全部通过(1 轮 × 2 个用例)", "✔ 全部通过", "", ""],         "列序应为 #、步骤、结果"
-    assert win.result_table.item(row, 2).font().bold()
-    assert win.result_table.item(row, 2).background().color().name() == "#e6f7e9"
+    texts = [win.result_table.item(row, c).text() for c in range(6)]
+    assert texts == ["—", "", "全部通过(1 轮 × 2 个用例)", "✔ 全部通过", "", ""],         "列序应为 #、用例(第几次)、步骤、结果"
+    assert win.result_table.item(row, 3).font().bold()
+    assert win.result_table.item(row, 3).background().color().name() == "#e6f7e9"
     assert win.tabs.currentIndex() == 0, "应自动切到「执行结果」页"
     # 失败路径:红色总结行
     win.on_run_finished(False, "存在失败步骤")
     row = win.result_table.rowCount() - 1
-    assert win.result_table.item(row, 2).text() == "✘ 未通过"
-    assert win.result_table.item(row, 2).background().color().name() == "#fdeaea"
+    assert win.result_table.item(row, 3).text() == "✘ 未通过"
+    assert win.result_table.item(row, 3).background().color().name() == "#fdeaea"
 
 
 def test_zoom_out_never_below_default_size(qapp):
@@ -954,10 +954,10 @@ def test_run_start_and_case_switch_rows(win):
                     ("▶ 执行用例: 划区清扫", "#f0f4fa")], "只有用例开始插行,重启 APP 不插"
     assert win.tabs.currentIndex() == 0, "应自动切到「执行结果」页"
     # 开始行与总结行共存:开始 → 结束
-    win._append_result_row("—", "▶ 开始执行", "2 个用例 × 1 轮 · 设备 X", "#e8f0fe")
+    win._append_result_row("—", "", "▶ 开始执行", "#e8f0fe")
     win.on_run_finished(True, "全部通过(1 轮 × 2 个用例)")
     last = win.result_table.rowCount() - 1
-    assert win.result_table.item(last, 2).text() == "✔ 全部通过"
+    assert win.result_table.item(last, 3).text() == "✔ 全部通过"
 
 
 def test_case_state_lamp(win_with_cases, qapp):
@@ -1069,7 +1069,7 @@ def _write_case(tmp_path, group, fname, case_name):
     return str(f)
 
 
-def _run_worker(qapp, monkeypatch, rt, tmp_path, files, repeat):
+def _run_worker(qapp, monkeypatch, rt, tmp_path, files, repeat, steps_out=None):
     """同步跑 RunWorker.run(不起 QThread), 返回 (信号收集, 前置调用序列)"""
     import types
     import uiautomator2 as u2
@@ -1085,6 +1085,8 @@ def _run_worker(qapp, monkeypatch, rt, tmp_path, files, repeat):
     _record_precondition_calls(monkeypatch, rt, calls)
     done = []
     w = rt.RunWorker("fake-dev", files, [{"type": "restart", "enabled": True}], repeat)
+    if steps_out is not None:
+        w.step_done.connect(lambda r: steps_out.append(dict(r)))
     w.finished_run.connect(lambda ok, msg: done.append((ok, msg)))
     w.run()
     return done, calls
@@ -1190,15 +1192,18 @@ def test_runworker_run_smoke(qapp, monkeypatch, tmp_path):
 def test_result_table_layout_rules(win):
     """执行结果表格布局:步骤/错误信息拉伸,结果列自适应中文(修复显示不全)"""
     from PySide6.QtWidgets import QHeaderView
-    assert win.result_table.horizontalHeader().sectionResizeMode(1) == QHeaderView.Stretch
-    assert win.result_table.horizontalHeader().sectionResizeMode(4) == QHeaderView.Stretch
-    assert win.result_table.horizontalHeader().sectionResizeMode(2) == QHeaderView.ResizeToContents
-    assert [win.result_table.horizontalHeaderItem(i).text() for i in range(5)] == \
-        ["#", "步骤", "结果", "耗时", "错误信息"]
+    assert win.result_table.horizontalHeader().sectionResizeMode(2) == QHeaderView.Stretch
+    assert win.result_table.horizontalHeader().sectionResizeMode(5) == QHeaderView.Stretch
+    assert win.result_table.horizontalHeader().sectionResizeMode(3) == QHeaderView.ResizeToContents
+    # ★ 2026-10-12 起多一列「用例(第几次)」: 重复跑多轮时能看出这条属于第几轮
+    assert [win.result_table.horizontalHeaderItem(i).text() for i in range(6)] == \
+        ["#", "用例(第几次)", "步骤", "结果", "耗时", "错误信息"]
     # 长文本行有 tooltip(悬停看全文)
-    win.on_step_done({"desc": "很长的步骤描述" * 20, "passed": True, "error": "很长的错误" * 20})
-    assert win.result_table.item(0, 1).toolTip() != ""
-    assert win.result_table.item(0, 4).toolTip() != ""
+    win.on_step_done({"case": "用例甲(第2次)", "desc": "很长的步骤描述" * 20,
+                      "passed": True, "error": "很长的错误" * 20})
+    assert win.result_table.item(0, 1).text() == "用例甲(第2次)", "应显示用例名与第几次"
+    assert win.result_table.item(0, 2).toolTip() != ""
+    assert win.result_table.item(0, 5).toolTip() != ""
 
 
 def test_on_run_finished_always_unlocks(win, monkeypatch):
@@ -3556,3 +3561,86 @@ def test_clearing_int_field_removes_the_parameter(win):
     card.widgets["timeout"].setText("12")
     card.widgets["timeout"].editingFinished.emit()
     assert win.steps[0]["timeout"] == 12, win.steps[0]
+
+
+def test_results_carry_case_and_round_label(qapp, monkeypatch, tmp_path):
+    """★ 执行结果每一行都要带「用例名(第几次)」 —— 重复跑多轮时才知道这条属于第几轮。
+
+    用户 2026-10-12: "执行结果中要把用例名称和执行的第几次也要显示出来, 现在看不到
+    目前执行的第几轮"。结果表多了一列「用例(第几次)」, 数据由 worker 逐行盖上。
+    """
+    from gui import runner_thread as rt
+    f = _write_case(tmp_path, "组甲", "a.yaml", "甲用例")
+    steps = []
+    done, _calls = _run_worker(qapp, monkeypatch, rt, tmp_path, [f], repeat=2,
+                               steps_out=steps)
+    assert done and done[0][0] is True, done
+    labels = [r.get("case") for r in steps]
+    assert labels, steps
+    assert all(labels), f"每行都该带用例标签: {labels}"
+    assert labels[0] == "甲用例(第1次)" and labels[-1] == "甲用例(第2次)", labels
+
+
+def test_report_and_table_show_precondition_screenshots(qapp, monkeypatch, tmp_path):
+    """★ 前置也默认截图进报告/结果表; 自定义步骤型前置的**每一步**各占一行(带各自截图)。"""
+    from gui import runner_thread as rt
+    f = _write_case(tmp_path, "组甲", "a.yaml", "甲用例")
+    items = [{"type": "steps", "enabled": True, "name": "前置准备",
+              "steps": [{"desc": "点确认", "click": "确认"}]}]
+    # 复用 _run_worker 的桩, 但前置换成"自定义步骤"
+    import types
+    import uiautomator2 as u2
+    class _El:
+        def exists(self, timeout=1):
+            return True
+
+        def click(self):
+            pass
+
+        @property
+        def info(self):
+            return {"clickable": True, "text": "确认",
+                    "bounds": {"left": 10, "top": 20, "right": 30, "bottom": 40}}
+
+    class _FakeDev:
+        """★ 必须是真的类: `__call__` 塞进 SimpleNamespace 不会让实例可调用
+        (dunder 只在**类型**上找)"""
+
+        def implicitly_wait(self, t):
+            pass
+
+        def dump_hierarchy(self):
+            return '<node text="100%"/>'
+
+        def screenshot(self, path=None, format=None):
+            return None
+
+        def __call__(self, **kw):
+            return _El()
+
+    fake_d = _FakeDev()
+    monkeypatch.setattr(u2, "connect", lambda dev: fake_d)
+    monkeypatch.setattr(rt, "ExcelReport",
+                        lambda: __import__("core.excel_report", fromlist=["ExcelReport"])
+                        .ExcelReport(path=str(tmp_path / "rep.xlsx")))
+    # ★ 这里**不**替换 session.prepare_items —— 要走真实前置路径(自定义步骤型)
+    steps = []
+    w = rt.RunWorker("fake-dev", [f], items, 1)
+    w.step_done.connect(lambda r: steps.append(dict(r)))
+    w.run()
+    descs = [s["desc"] for s in steps if s.get("desc", "").startswith("前置")]
+    assert any("前置准备" in d for d in descs), descs
+    # 子行形如「前置-前置准备(1步): 点确认」(前置项行 + 冒号 + 内部步骤描述)
+    sub = [s for s in steps if ": 点确认" in s.get("desc", "")]
+    assert sub, f"自定义步骤的每一步应各占一行: {descs}"
+    assert sub[0].get("passed") is True, sub[0]
+
+
+def test_result_and_elapsed_columns_are_centered(win):
+    """★ 执行结果里「结果」「耗时」两列居中(用户要求 2026-10-12)"""
+    from PySide6.QtCore import Qt
+    win.on_step_done({"case": "甲(第1次)", "desc": "点一下", "passed": True,
+                      "elapsed": 1.5, "error": ""})
+    row = win.result_table.rowCount() - 1
+    assert win.result_table.item(row, 3).textAlignment() == Qt.AlignCenter, "结果列要居中"
+    assert win.result_table.item(row, 4).textAlignment() == Qt.AlignCenter, "耗时列要居中"

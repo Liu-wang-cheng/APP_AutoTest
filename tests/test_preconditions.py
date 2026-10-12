@@ -441,6 +441,8 @@ def test_precondition_steps_type_runs_steps(monkeypatch):
     class FakeRunner:
         def __init__(self, d, cfg, case_name="", **kw):
             calls.append(("init", case_name))
+            self.results = [{"desc": "点击开始清扫", "passed": True, "error": "",
+                             "screenshot": "shots/p1.png"}]
 
         def run_steps(self, steps):
             calls.append(("run", steps))
@@ -461,7 +463,7 @@ def test_precondition_steps_type_reports_failure(monkeypatch):
     """步骤执行失败 → 该前置项判失败(供阻断逻辑使用)"""
     class FailRunner:
         def __init__(self, *a, **kw):
-            pass
+            self.results = [{"desc": "x", "passed": False, "error": "炸了", "screenshot": ""}]
 
         def run_steps(self, steps):
             return False

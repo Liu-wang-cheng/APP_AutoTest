@@ -80,6 +80,9 @@ class RunWorker(QThread):
         #   要求"每次执行都要跑前置"); 组没给配置时回退 self.pre_items
         self.pre_by_group = pre_by_group or {}
         self.repeat = max(1, int(repeat))  # 整个队列重复的轮数
+        #: 当前这一"次执行"的标签(用例名(第几次)) —— 结果表/报告里要能看出跑的是第几轮。
+        #  ★ 必须在这里初始化: 前置跑在用例之前, 那时循环里还没设过它。
+        self._exec_label = ""
         self.runner = None
         self._stop_requested = False
 
@@ -88,6 +91,13 @@ class RunWorker(QThread):
         self._stop_requested = True
         if self.runner:
             self.runner.stop()
+
+    def _emit_step(self, payload):
+        """发一条结果到执行结果表 —— 统一盖上"用例名(第几次)", 用 户才看得出这是第几轮"""
+        p = dict(payload)
+        if self._exec_label:
+            p.setdefault("case", self._exec_label)
+        self.step_done.emit(p)
 
     def _emit_pre_result(self, d, sheet, report, r):
         """单条前置结果 → 执行结果表 + 报告(带该项自己的耗时)。
@@ -104,15 +114,50 @@ class RunWorker(QThread):
             if batt >= 0:
                 desc += f"(当前电量 {batt}%)"
         err = "" if r["ok"] else "前置未通过(超时或失败)"
+        sub = r.get("sub") or []
+        shot = ""
+        if not sub:
+            # ★ 前置也默认截图(用户要求 2026-10-12), 放进报告 —— 只有自定义步骤型前置
+            #   不带这里(它内部每一步自己有截图, 见下)
+            shot = self._pre_screenshot(d, sheet, desc)
         # ★ 报告写入失败不能拖垮执行: 组名(module)里出现非法字符曾让 create_sheet
         #   抛错 → 冒到 run() 兜底 except → 整轮以"执行异常"中断
         try:
             report.set_step_desc(sheet, desc)
-            report.add_result(sheet, r["ok"], err, "")
+            report.add_result(sheet, r["ok"], err, shot)
         except Exception as e:
             log.warning(f"[report] 前置结果写入报告失败(忽略, 不影响执行): {e}")
-        self.step_done.emit({"desc": desc, "passed": r["ok"], "error": err,
-                             "screenshot": "", "elapsed": r.get("elapsed")})
+        self._emit_step({"desc": desc, "passed": r["ok"], "error": err,
+                         "screenshot": shot, "elapsed": r.get("elapsed")})
+        # 自定义步骤型前置: 内部每一步也各占一行(带自己的截图与耗时)
+        for i, sr in enumerate(sub):
+            sdesc = f"{desc}: {sr.get('desc', '')}"
+            sshot = sr.get("screenshot", "") or ""
+            serr = sr.get("error", "") if not sr.get("passed") else ""
+            try:
+                report.set_step_desc(sheet, sdesc)
+                report.add_result(sheet, bool(sr.get("passed")), serr, sshot)
+            except Exception as e:
+                log.warning(f"[report] 前置子步骤写入报告失败(忽略): {e}")
+            self._emit_step({"desc": sdesc, "passed": bool(sr.get("passed")),
+                             "error": serr, "screenshot": sshot,
+                             "elapsed": sr.get("elapsed")})
+
+    def _pre_screenshot(self, d, sheet, desc):
+        """给一条前置项截一张图(尽力而为, 失败只告警) —— 返回路径或空串"""
+        try:
+            from core import vision as _vision
+            bad = set("\\/:*?\"<>|")
+            safe = "".join(c for c in str(desc) if c not in bad)[:40]
+            path = os.path.join(BASE_DIR, "Test_cases",
+                                _vision.current_app_group() or "未分组", "screenshots",
+                                str(sheet), f"前置_{safe}.png")
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            d.screenshot(path)
+            return path
+        except Exception as e:
+            log.warning(f"[前置] 截图失败(忽略): {type(e).__name__}: {e}")
+            return ""
 
     # ── 线程主体 ──
     def run(self):
@@ -156,6 +201,8 @@ class RunWorker(QThread):
                     #   一张表(用例名-1 / 用例名-2 …), 不再把几轮结果堆在同一张表里;
                     #   顺带也解决"同一个用例文件里有多个用例时共用一张表"。
                     sheet = case_sheet_name(case_name, rnd + 1)
+                    # ★ 本次执行的标签: 结果表每行都带它, 一眼看出"现在跑的是第几轮"
+                    self._exec_label = f"{case_name}(第{rnd + 1}次)"
                     # 用例所在 APP 组 = 用例文件所在目录名
                     group = os.path.basename(
                         os.path.dirname(os.path.abspath(fp)))
@@ -205,8 +252,9 @@ class RunWorker(QThread):
                         r2 = dict(r)
                         r2["elapsed"] = round(now - last_ts["t"], 1)
                         last_ts["t"] = now
-                        self.step_done.emit(r2)
+                        self._emit_step(r2)
 
+                    runner.shot_subdir = sheet      # 截图进 screenshots/<用例名-第N次>/
                     runner.on_result = on_result
                     self.runner = runner
                     passed = runner.run_steps(steps)

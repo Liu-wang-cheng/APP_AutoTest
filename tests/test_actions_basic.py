@@ -350,9 +350,10 @@ def test_precondition_click_steps_do_not_force_screenshots(runner):
     assert r.last_click, "前置里的点击仍然要记落点(日志/排查用), 只是不截图"
 
 
-def test_preconditions_steps_use_click_shots_false():
-    """结构性守护: 前置跑自定义步骤时必须显式关掉点击截图, 别哪天被删掉"""
+def test_preconditions_also_force_click_screenshots():
+    """结构性守护: 前置里的自定义步骤**也**要强制截图(用户 2026-10-12 改的要求:
+    "前置也改为默认截图, 并放入报告中") —— 所以 session 里不该再关掉 click_shots。"""
     import os as _os
     src = open(_os.path.join(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))),
                              "core", "session.py"), encoding="utf-8").read()
-    assert "click_shots=False" in src, "前置的 ActionRunner 没有关掉点击强制截图"
+    assert "click_shots=False" not in src, "前置又把它关掉了(用户要求前置也截图)"
