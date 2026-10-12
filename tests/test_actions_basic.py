@@ -384,3 +384,24 @@ def test_step_start_event_fires_once_per_attempt(runner, monkeypatch):
     starts.clear()
     assert runner.run_steps([{"desc": "重试步骤", "click": "确认", "retry": 2}]) is True
     assert starts == [("重试步骤", 1), ("重试步骤", 2), ("重试步骤", 3)], starts
+
+
+def test_screenshots_are_split_per_execution(runner):
+    """★ 同一个用例跑多轮时, 截图必须落到**不同的目录**(否则后一轮覆盖前一轮)。
+
+    真机现象(用户 2026-10-12): "多轮用例的测试截图没有区分开, 报告里每次截图都是同一个"
+    —— 报告里的截图是**嵌进去的图片**, 而每轮的路径都是 screenshots/<用例名>/stepNN.png,
+    后一轮把文件覆盖掉, 于是每轮嵌的都是同一份。
+    """
+    outs = []
+    runner.d.screenshot = lambda path=None, format=None: outs.append(path)
+    assert runner.run_steps([{"desc": "点一下", "click": "确认", "screenshot": True}])
+    runner.shot_subdir = "甲用例-第2次"          # worker 每次执行会设成"用例名-第N次"
+    assert runner.run_steps([{"desc": "点一下", "click": "确认", "screenshot": True}])
+    # 只要"有路径"的那几次(TraceRecorder 每步也会截一帧 format="opencv", path=None)
+    paths = [p for p in outs if p]
+    assert len(paths) == 2, outs
+    first, second = [p.replace("\\", "/") for p in paths]
+    assert first != second, f"两轮截图路径不能相同: {first}"
+    assert f"screenshots/{runner.case_name}/" in first, first
+    assert "screenshots/甲用例-第2次/" in second, second

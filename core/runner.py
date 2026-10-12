@@ -103,6 +103,8 @@ class ActionRunner:
         self.results = []
         self.store = {}          # grab/match 数据暂存
         self.last_click = None   # (x, y, label) —— 供步骤截图叠加点击标记
+        #: 截图子目录名(worker 传"用例名-第N次", 让多轮截图互不覆盖); 空则用 case_name
+        self.shot_subdir = ""
         self._stopped = False    # 停止标志,GUI 停止按钮置位(对外经 stopped 属性读)
         # ★ 外部取消信号(如前置阶段的 should_cancel 回调): 与自身停止标志等效。
         #   前置里的「自定义步骤」会新建一个 ActionRunner, 它拿不到主 runner 的
@@ -750,8 +752,13 @@ class ActionRunner:
                 safe_desc = re.sub(r'[\\/:*?"<>|\s]+', "_",
                                    str(step.get("desc") or ""))[:30]
                 idx = len(self.results) + 1
+                # ★ 目录名要能区分**第几次执行**: 用 shot_subdir(worker 传的"用例名-第N次"),
+                #   否则同一个用例跑多轮时, 每轮的 step01_xxx.png 是**同一个路径** ——
+                #   后一轮把前一轮覆盖掉, 报告里(图片是嵌进去的)每轮看着就是同一张图
+                #   (用户 2026-10-12 实测报的正是这个)。没给(单元测试/旧调用)时退回用例名。
+                sub = getattr(self, "shot_subdir", "") or self.case_name or "case"
                 path = (f"Test_cases/{_vision.current_app_group() or '未分组'}/"
-                        f"screenshots/{self.case_name or 'case'}/"
+                        f"screenshots/{sub}/"
                         f"step{idx:02d}_{safe_desc}.png")
             # screenshots/ 开头的路径补全 Test_img/ 前缀(reports/ 等其他路径原样)
             if path.startswith("screenshots/"):

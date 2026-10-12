@@ -10,6 +10,7 @@ from datetime import datetime
 
 from openpyxl import Workbook
 from openpyxl.drawing.image import Image as XLImage
+from openpyxl.worksheet.hyperlink import Hyperlink
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 
 from core.driver import BASE_DIR
@@ -34,6 +35,8 @@ class ExcelReport:
     PASS_FONT = Font(name="Microsoft YaHei", size=10, bold=True, color="006100")
     PASS_FILL = PatternFill(start_color="C6EFCE", end_color="C6EFCE", fill_type="solid")
     FAIL_FONT = Font(name="Microsoft YaHei", size=10, bold=True, color="9C0006")
+    #: 汇总页里"用例名称"做成跳转链接(点一下直达那一次的详情页), 用 Excel 惯用的蓝色下划线
+    LINK_FONT = Font(name="Microsoft YaHei", size=10, color="0563C1", underline="single")
     FAIL_FILL = PatternFill(start_color="FFC7CE", end_color="FFC7CE", fill_type="solid")
     BORDER = Border(*[Side(style="thin", color="B0B0B0")] * 4)
 
@@ -66,6 +69,12 @@ class ExcelReport:
 
         case = self._cases[case_name]
         ws = case["sheet"]
+        # ★ 记下这次执行的起止时间(汇总页要显示"结束时间", 用户要求 2026-10-12):
+        #   第一条结果的时间当开始, 最后一条当结束 —— 报告写入点是每步跑完时, 秒级够用。
+        now = datetime.now()
+        if case.get("started") is None:
+            case["started"] = now
+        case["ended"] = now
         case["total"] += 1
         r = case["row"]
         status = "PASS" if passed else "FAIL"
@@ -146,7 +155,8 @@ class ExcelReport:
         for ci, h in enumerate(["步骤", "结果", "错误信息", "截图"], 1):
             self._style_header(ws.cell(row=1, column=ci, value=h))
         ws.row_dimensions[1].height = 26
-        return {"sheet": ws, "row": 2, "total": 0, "passed": 0, "failed": 0, "_last_desc": ""}
+        return {"sheet": ws, "row": 2, "total": 0, "passed": 0, "failed": 0, "_last_desc": "",
+                "started": None, "ended": None}
 
     def _border_range(self, ws, r1, c1, r2, c2):
         for r in range(r1, r2 + 1):
@@ -155,7 +165,7 @@ class ExcelReport:
 
     def save(self):
         ws = self.summary_ws
-        ncols = 7
+        ncols = 8
 
         # ── 标题 ──
         ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=ncols)
@@ -180,11 +190,12 @@ class ExcelReport:
         ws.cell(row=3, column=1).alignment = Alignment(horizontal="center")
 
         # ── 汇总表头 ──
-        headers = ["序号", "用例名称", "优先级", "结果", "步骤数", "通过", "失败"]
+        headers = ["序号", "用例名称", "优先级", "结果", "步骤数", "通过", "失败", "结束时间"]
         ws.column_dimensions["A"].width = 6
         ws.column_dimensions["B"].width = 24
         for c in "CDEFG":
             ws.column_dimensions[c].width = 10
+        ws.column_dimensions["H"].width = 18       # 结束时间(带日期)
         for ci, h in enumerate(headers, 1):
             self._style_header(ws.cell(row=5, column=ci, value=h))
         ws.row_dimensions[5].height = 26
@@ -193,11 +204,24 @@ class ExcelReport:
         r, seq = 6, 1
         for case_name, case in self._cases.items():
             total, passed, failed = case["total"], case["passed"], case["failed"]
-            for ci, val in enumerate([seq, case_name, "", "", total, passed, failed], 1):
+            # ★ 带日期: 长跑(比如连续几十小时、跨零点)时只写 HH:MM:SS 会分不清是哪天
+            end_txt = case["ended"].strftime("%m-%d %H:%M:%S") if case.get("ended") else ""
+            for ci, val in enumerate([seq, case_name, "", "", total, passed, failed,
+                                      end_txt], 1):
                 cell = ws.cell(row=r, column=ci, value=val)
                 cell.font = self.NORMAL_FONT
                 cell.alignment = Alignment(horizontal="center", vertical="center")
                 cell.border = self.BORDER
+            # ★ 用例名称做成**内部超链接**, 点一下直接跳到那一次执行的详情页(用户要求 2026-10-12)。
+            #   用工作表**实际标题**(已做过非法字符替换与撞名去重), 不是原始用例名 ——
+            #   否则重名/含非法字符时链接会指错地方甚至报错。名字里的单引号要写成两个。
+            nc = ws.cell(row=r, column=2)
+            sheet_title = str(case["sheet"].title)
+            # ★ 必须用 Hyperlink(location=...): 直接赋 `"#'表'!A1"` 这种字符串, openpyxl 会
+            #   当成**外部**链接建一个 rId 关系, location 为空 → Excel 里点不动(实测)。
+            nc.hyperlink = Hyperlink(ref=nc.coordinate,
+                                     location="'%s'!A1" % sheet_title.replace("'", "''"))
+            nc.font = self.LINK_FONT
             # 结果
             rc = ws.cell(row=r, column=4)
             if failed == 0:
