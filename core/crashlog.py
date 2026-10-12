@@ -34,8 +34,15 @@ def _data_dir():
 
 
 def install(data_dir=None, qt=True):
-    """装上三条取证手段; 任何一条失败都不影响程序启动"""
+    """装上三条取证手段; 任何一条失败都不影响程序启动
+
+    ★ data_dir 缺省(生产启动)时**幂等**: 重复调用直接返回, 不覆盖旧句柄、不重装钩子
+      (审查 2026-10-12 —— 重装会泄漏上一个 crash.log 句柄, Windows 上文件被占住删不掉)。
+      测试显式传 data_dir, 每次都是全新安装。
+    """
     global _crash_file
+    if _crash_file is not None and data_dir is None:
+        return
     # ① 原生崩溃栈 → reports/crash.log
     try:
         root = data_dir or _data_dir()
@@ -82,3 +89,20 @@ def install(data_dir=None, qt=True):
             qInstallMessageHandler(_qt_handler)
         except Exception as e:
             log.debug(f"[取证] Qt 消息处理器未装上(忽略): {e}")
+
+
+def disable():
+    """撤销取证(仅测试用): 关 faulthandler、合上 crash.log 句柄 ——
+    不然测试的临时目录里那个文件一直被占着, Windows 上删不掉"""
+    global _crash_file
+    try:
+        import faulthandler
+        faulthandler.disable()
+    except Exception:
+        pass
+    f, _crash_file = _crash_file, None
+    if f is not None:
+        try:
+            f.close()
+        except Exception:
+            pass

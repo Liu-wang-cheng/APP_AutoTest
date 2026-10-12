@@ -1900,7 +1900,7 @@ class MainWindow(QMainWindow):
         self.data = self._empty_data()
         self.case_idx = 0
         self.worker = None
-        self._retired_worker = None  # 刚跑完、线程还没真正退出的 worker(见 _retire_worker)
+        self._retired_workers = []   # 刚跑完、线程还没真正退出的 worker(见 _retire_worker)
         self.expanded_key = None  # 展开的卡片: (顶层序号,) 或 (父序号, 子序号)
         self._preview_path = None  # 当前预览的截图路径
 
@@ -3991,7 +3991,8 @@ class MainWindow(QMainWindow):
             f"[运行] {len(case_files)} 个文件 × {repeat} 轮 设备={device_id}")
 
     def on_stop(self):
-        if self.worker:
+        w = self.worker
+        if w:
             # ★ 防误点: 停止前先确认(用户要求 2026-10-12)。与"关窗"那条确认同一套写法,
             #   说明里写清楚会发生什么 —— 停止不是失败, 已跑出的结果都会保留。
             if QMessageBox.question(
@@ -4000,7 +4001,13 @@ class MainWindow(QMainWindow):
                     QMessageBox.Yes | QMessageBox.No, QMessageBox.No) != QMessageBox.Yes:
                 return
             self._set_status("停止中(当前步骤结束后退出)...", self.status_label)
-            self.worker.request_stop()
+            try:
+                # ★ 用 w 而非 self.worker(审查 2026-10-12): 确认框的模态循环会泵事件,
+                #   队列里的 finished_run 可能恰好在框内被分发 → on_run_finished 已把
+                #   self.worker 清掉; 对 None 调 request_stop 是 AttributeError。
+                w.request_stop()
+            except RuntimeError:
+                pass            # C++ 对象已删(执行恰已结束): 无需再停
 
     def on_step_started(self, result):
         """步骤开始 → 先插一行「执行中」, 跑完由 on_step_done 就地改成通过/失败。
@@ -4131,7 +4138,9 @@ class MainWindow(QMainWindow):
             # ★ 手动停止**不是失败**(用户要求 2026-10-12: "同时按你的建议修改手动停止的显示"):
             #   以前停止也走 passed=False 这条路 → 状态栏与总结行都渲染成红色"未通过",
             #   容易让人以为这轮跑砸了。停止是中性结果, 单独给个"⏹ 已停止"(灰蓝底)。
-            stopped = "停止" in message
+            #   ★ 精确匹配而不是子串(审查 2026-10-12): 前置等待的失败消息里带着用户文案
+            #     (如「设备已停止充电」), 子串命中会把真失败渲染成中性"已停止"
+            stopped = message == "已手动停止"
             if stopped:
                 self.status_label.setText("⏹ " + message)
                 self._append_result_row("—", "⏹ 已停止", message, "#eef2f7")
@@ -4160,6 +4169,9 @@ class MainWindow(QMainWindow):
           Qt qFatal("QThread: Destroyed while thread is still running") → 整个进程闪退
           (用户实测 2026-10-12: 2.0.7 点「停止」必闪退 —— idle.end_run 把尾巴从微秒级
           拉长到毫秒级, 这个从 2.0.6 就埋着的竞态开始输了)。
+        ★ 退休区是**列表**(审查 2026-10-12): 上一轮还没退完、新一轮已经结束时会同时
+          有两个 —— 单槽会被后者覆盖, 旧 worker 的最后一个引用被丢, 换个更窄的窗口
+          复发同一个 qFatal。
         """
         w, self.worker = self.worker, None
         if w is None:
@@ -4170,14 +4182,16 @@ class MainWindow(QMainWindow):
             finished = True      # 问不了就当它已结束(测试替身) —— 清理代码绝不抛
         if finished:             # 尾巴已经跑完(信号排队太久) → 现在丢就安全
             return
-        # finished(QThread 内建, run() 返回后才发)时放掉退休引用 —— 发送者就是它自己,
-        # 用 sender() 比对, 防止迟到的旧信号误清新一轮的退休引用
+        # finished(QThread 内建, run() 返回后才发)时放掉退休引用 —— 发送者就是它自己
         w.finished.connect(self._on_worker_thread_finished)
-        self._retired_worker = w
+        self._retired_workers.append(w)
 
     def _on_worker_thread_finished(self):
-        if self.sender() is self._retired_worker:
-            self._retired_worker = None
+        w = self.sender()
+        try:
+            self._retired_workers.remove(w)
+        except ValueError:
+            pass
 
     def closeEvent(self, event):
         # ★ 留痕: 日志里出现这行 = **用户正常关窗**(不是崩溃/被杀)。下次排查"闪退"时,
@@ -4185,13 +4199,20 @@ class MainWindow(QMainWindow):
         log.info("[退出] 收到关窗请求")
         self._save_expanded_groups()      # 关窗前记住组展开状态(下次打开还原)
         self._cleanup_update_backups()    # 正常关窗 = 本次更新确实可用, 可以扔掉旧版本
-        w = self._retired_worker          # 上一轮刚结束、线程还在跑收尾尾巴 → 等它
-        if w is not None and not w.isFinished():
-            w.wait(2000)                  # 尾巴毫秒级; 2s 是给慢盘兜底报告的余量
+        w_list = list(self._retired_workers)   # 上一轮刚结束、线程还在跑收尾尾巴 → 等
+        for w in w_list:
+            try:
+                if not w.isFinished():
+                    w.wait(2000)               # 尾巴毫秒级; 2s 是给慢盘兜底报告的余量
+            except RuntimeError:
+                pass                           # C++ 对象已删: 无需等
         if self.worker:
             if QMessageBox.question(self, "正在执行", "用例正在执行,停止并退出?") == QMessageBox.Yes:
-                self.worker.request_stop()
-                self.worker.wait(5000)
+                try:
+                    self.worker.request_stop()
+                    self.worker.wait(5000)
+                except RuntimeError:
+                    pass                       # 同上: 退休/删除竞态下对象可能已不在
                 event.accept()
             else:
                 event.ignore()

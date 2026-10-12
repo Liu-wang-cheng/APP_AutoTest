@@ -16,9 +16,8 @@ from core import crashlog                                          # noqa: E402
 
 def test_install_creates_crash_log_and_hooks(tmp_path):
     """装上后: crash.log 建好、未捕获异常钩子挂上"""
-    old_main, old_thread = sys.excepthook, getattr(sys, "threading", None)
     import threading
-    old_thread_hook = threading.excepthook
+    old_main, old_thread_hook = sys.excepthook, threading.excepthook
     try:
         crashlog.install(data_dir=str(tmp_path), qt=False)      # qt=False: 别动测试里的 Qt
         assert os.path.isfile(tmp_path / "reports" / "crash.log"), "crash.log 没建"
@@ -27,11 +26,13 @@ def test_install_creates_crash_log_and_hooks(tmp_path):
     finally:
         sys.excepthook = old_main
         threading.excepthook = old_thread_hook
+        crashlog.disable()      # 关句柄+faulthandler: 别占住 tmp_path(Windows 删不掉)
 
 
 def test_uncaught_exception_lands_in_the_log(tmp_path):
     """未捕获异常(主线程/子线程)都要写进正常日志 —— 打包版 stderr 是空的, 平时完全静默"""
     import threading
+    old_main, old_thread_hook = sys.excepthook, threading.excepthook
     recs = []
 
     class _H(logging.Handler):
@@ -55,6 +56,11 @@ def test_uncaught_exception_lands_in_the_log(tmp_path):
         t.join()
     finally:
         crashlog.log.removeHandler(h)
+        # ★ 钩子必须恢复(审查 2026-10-12): 不然此后整个会话的未捕获异常都走 crashlog
+        #   的链, 且 crash.log 句柄一直占着这个 tmp_path, Windows 上临时目录清不掉
+        sys.excepthook = old_main
+        threading.excepthook = old_thread_hook
+        crashlog.disable()
     joined = "\n".join(recs)
     assert "[未捕获异常]" in joined, recs
     assert "主线程炸了" in joined and "子线程炸了" in joined, joined

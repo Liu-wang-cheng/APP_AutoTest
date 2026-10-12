@@ -19,9 +19,9 @@
     兜底清理接住, 不是新问题。
 
 ★ 何时算"在执行用例"
-    `gui/runner_thread.RunWorker.run` 进入时 `begin_run()`、退出时(含异常)`end_run()`;
-    前置条件、用例步骤、报告落盘全在这段区间内。用**计数**而不是布尔 —— 万一将来出现
-    嵌套/并发的执行入口, 少一次 end_run 不会把闸门永久焊死。
+    `gui/runner_thread.RunWorker.run` 进入时 `begin_run()`、退出时(含异常)`end_run(token)`;
+    前置条件、用例步骤、报告落盘全在这段区间内。用**令牌集**而不是布尔 —— 嵌套/并发的
+    执行入口互不干扰, 迟到/重复的 end_run 也动不了别的轮次的计数(审查 2026-10-12)。
 
 ★ 清理函数怎么接(唯一写法)
     在最前面加三行, 内部实现一行都不用改:
@@ -43,33 +43,43 @@ log = get_logger()
 
 _lock = threading.RLock()
 _cond = threading.Condition(_lock)   # 用同一个锁: "补做"完成时唤醒等待者
-_depth = 0                       # >0 = 正在执行用例
+_active = set()                  # 在执行的"令牌"集 —— 非空 = 正在执行用例
+_token_seq = 0                   # 令牌发号器(begin_run 发一个, end_run 凭令牌销账)
 _pending = []                    # [(名字, 可调用)] —— 运行中被推迟的清理, 保持顺序
 _names = set()                   # 同一件事只排一次(封顶清理每次失败都会调一次)
 _flushing = False                # 补做正在进行, 避免 repeat 叠加
 
 
 def begin_run():
-    """标记"开始执行用例"——此后到达的清理一律推迟"""
-    global _depth
+    """标记"开始执行用例"——此后到达的清理一律推迟。返回令牌, end_run 时带回"""
+    global _token_seq
     with _lock:
-        _depth += 1
+        _token_seq += 1
+        _active.add(_token_seq)
+        return _token_seq
 
 
-def end_run():
-    """标记"本轮执行结束"——把运行中推迟的清理补做一遍(后台线程, 不拖住调用方)"""
-    global _depth
+def end_run(token=None):
+    """标记"本轮执行结束"——把运行中推迟的清理补做一遍(后台线程, 不拖住调用方)
+
+    token: begin_run 返回的令牌。带上它, "上一轮迟到的收尾"就不会动新一轮的
+    计数(审查 2026-10-12); 不带(旧调用/测试)退回减一语义。
+    """
     with _lock:
-        _depth = max(0, _depth - 1)
-        if _depth:
-            return
-    _flush_in_thread()
+        if token is not None:
+            if token not in _active:
+                return               # 不属于任何在跑的轮次(重复销账/异物): 不动别人的计数
+            _active.discard(token)
+        elif _active:
+            _active.pop()
+    if not _active:
+        _flush_in_thread()
 
 
 def is_busy():
     """现在是否在执行用例"""
     with _lock:
-        return _depth > 0
+        return bool(_active)
 
 
 def defer(name, fn):
@@ -79,7 +89,13 @@ def defer(name, fn):
             return False
         _names.add(name)
         _pending.append((name, fn))
+        # ★ "闸门刚开"的缝隙(审查 2026-10-12): is_busy()→defer() 两步之间本轮恰好
+        #   结束、补做线程已扫过空队列返回 —— 再不自己触发一次, 这件清理就滞留到
+        #   下一次 end_run / 下次启动(本次会话内静默失效)
+        orphaned = not _active and not _flushing
     log.info(f"[清理] 正在执行用例, {name} 推迟到本轮结束后再做")
+    if orphaned:
+        _flush_in_thread()
     return True
 
 
@@ -127,7 +143,7 @@ def _flush_now():
             with _lock:
                 if not _pending:
                     return
-                if _depth:
+                if _active:
                     # 又开始跑用例了: 原样留着(名字也留着, 免得重复排), 等下一次 end_run
                     log.debug("[清理] 又开始了新一轮执行, 推迟的清理继续等")
                     return
@@ -146,9 +162,10 @@ def _flush_now():
 
 def reset():
     """清空状态(仅测试用) —— 计数归零、丢弃排队项, 不执行任何清理"""
-    global _depth, _flushing
+    global _token_seq
     with _lock:
-        _depth = 0
+        _active.clear()
+        _token_seq = 0
         _flushing = False
         _pending.clear()
         _names.clear()

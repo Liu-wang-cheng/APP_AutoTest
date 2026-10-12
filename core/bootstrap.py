@@ -436,7 +436,7 @@ def prune_run_artifacts(app_dir=None, keep_runs=None, max_total_mb=None,
             for name in os.listdir(gdir):
                 p = os.path.join(gdir, name)
                 if os.path.isdir(p):
-                    case = name.rsplit("-第", 1)[0]
+                    case = _shot_case_of(name)
                     by_case.setdefault(case, []).append(p)
             for plist in by_case.values():
                 plist.sort(key=os.path.getmtime, reverse=True)     # 新 → 旧
@@ -571,6 +571,19 @@ def trim_traces(failures_dir, keep=None):
     return n, freed
 
 
+def _shot_case_of(name):
+    """截图目录名 → 用例键。两种形态都认(审查 2026-10-12):
+    「用例名-第N次」(现行) / 「用例名-N」(2.0.7 短暂生成过的) —— 后者若不认,
+    已装 2.0.7 的机器上那些目录就永远没人收。"""
+    stem, sep, tail = name.rpartition("-第")
+    if sep and tail.endswith("次") and tail[:-1].isdigit():
+        return stem
+    stem, sep, tail = name.rpartition("-")
+    if sep and tail.isdigit():
+        return stem
+    return name
+
+
 def trim_case_screenshots(shots_dir, case_name="", keep=None):
     """某个用例的截图: 只留最新 N 次执行的目录(每次执行结束后调用 → 循环覆盖)
 
@@ -582,13 +595,15 @@ def trim_case_screenshots(shots_dir, case_name="", keep=None):
         return 0, 0
     from core import idle
     if idle.is_busy():
-        idle.defer("截图循环",
+        # ★ defer 名里带用例键(审查 2026-10-12): 一轮跑 N 个用例就调 N 次, 写死
+        #   "截图循环"会被去重成只剩第一个用例, 其余用例的封顶被静默丢弃
+        idle.defer(f"截图循环({case_name or '全部'})",
                    lambda: trim_case_screenshots(shots_dir, case_name, keep))
         return 0, 0
     dirs = []
     for name in os.listdir(shots_dir):
         p = os.path.join(shots_dir, name)
-        if os.path.isdir(p) and (not case_name or name.rsplit("-第", 1)[0] == case_name):
+        if os.path.isdir(p) and (not case_name or _shot_case_of(name) == case_name):
             dirs.append(p)
     n, freed = keep_newest(dirs, keep)
     if n:

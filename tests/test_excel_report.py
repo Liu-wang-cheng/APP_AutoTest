@@ -144,8 +144,6 @@ def test_summary_link_escapes_single_quote_in_sheet_name(tmp_path):
     wb = load_workbook(tmp_path / "r.xlsx")
     cell = wb["汇总"].cell(row=6, column=2)
     assert cell.hyperlink.location == "'张三''s 用例'!A1", cell.hyperlink.location
-    assert cell.hyperlink.location.replace("''", "'").strip("'").split("'!")[0] in \
-        [s.replace("''", "'") for s in wb.sheetnames] or True   # 只要转义成对即可
 
 
 def test_summary_shows_case_end_time(tmp_path):

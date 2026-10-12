@@ -310,19 +310,29 @@ class ActionRunner:
         n = 0
         while True:
             n += 1
-            if rounds is not None and n > rounds:
-                return False                 # 按次数轮询: 查够了就收手
-            # ★ 轮次要按场合给: 调用方给了就用它的(断言/等待各自计数); 自己在**轮询**时
-            #   用自己的计数; **单次判断**(没给 timeout, 只查一次)不算轮询 —— 那种场合
-            #   OCR 是唯一机会, 传 None 让它不受"5 轮一次"的限制(否则插件页永远用不上)
-            if round_no is not None:
-                rn = round_no
-            elif end is not None:
-                rn = n
+            if rounds is not None:
+                # ★ 按**次数**轮询(if 条件的"两轮×五次"): 查够就收手, 不看时间。
+                #   (2.0.7 曾把"查够"的判断放在 end 之后, 而 rounds 模式 end=None ——
+                #    首次失败即 return False, 文本条件实际只查 1 次, 审查 2026-10-12 抓到)
+                if n > rounds:
+                    return False
+                rn = n          # OCR 兜底落在第 5/10/15… 次(与其它条件同一节奏)
             else:
-                rn = None
+                # 调用方给了轮次就用它的(断言/等待各自计数); 自己在**轮询**时用自己的
+                # 计数; **单次判断**(没给 timeout, 只查一次)不算轮询 —— 那种场合 OCR 是
+                # 唯一机会, 传 None 让它不受"5 轮一次"的限制(否则插件页永远用不上)
+                if round_no is not None:
+                    rn = round_no
+                elif end is not None:
+                    rn = n
+                else:
+                    rn = None
             if text_present(self.d, wanted, round_no=rn):
                 return True
+            if rounds is not None:
+                if n < rounds:
+                    self._poll_sleep(n)   # 与其它条件同一阶梯(1/2/5s); 末次不再白睡
+                continue
             if end is None or time.time() >= end:
                 return False
             self._sleep(1)

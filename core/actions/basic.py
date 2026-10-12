@@ -277,7 +277,10 @@ IF_TOTAL_CHECKS = IF_ROUNDS * IF_CHECKS_PER_ROUND
 def _if_checks(step):
     """这一步的 if 条件要检测几次"""
     try:
-        return max(IF_TOTAL_CHECKS, int(step.get("timeout", 0) or 0))
+        # ★ 上限 120(审查 2026-10-12): timeout 的旧语义是"秒", 被重载成"次数"后大值
+        #   会爆炸 —— timeout: 1800 → 1800 次 × 阶梯(1/2/5s) ≈ 2.5 小时, 像挂死。
+        #   120 次 ≈ 9 分钟, 比任何合理的等待都长。
+        return min(max(IF_TOTAL_CHECKS, int(step.get("timeout", 0) or 0)), 120)
     except (TypeError, ValueError):
         return IF_TOTAL_CHECKS
 
@@ -291,7 +294,7 @@ def do_if_impl(runner, step, negate):
     ID:      if: com.xxx:id/btn
     """
     condition = step.get("if", step.get("if not", ""))
-    timeout = step.get("timeout", 5)
+    # (timeout 已不再被直接读 —— 检测次数统一由 _if_checks 按"两轮×五次, 上限 120"定)
     passed = False
 
     checks = _if_checks(step)
@@ -311,7 +314,8 @@ def do_if_impl(runner, step, negate):
                         passed = False
                     if passed:
                         break
-                runner._poll_sleep(i + 1)
+                if i + 1 < checks:           # 末次已定局, 不再白睡(审查 2026-10-12)
+                    runner._poll_sleep(i + 1)
             break
     else:
         if runner._is_image(condition):
@@ -324,23 +328,31 @@ def do_if_impl(runner, step, negate):
                         passed = True
                         break
                     except AssertionError:
-                        runner._poll_sleep(i + 1)
+                        if i + 1 < checks:
+                            runner._poll_sleep(i + 1)
             else:
                 import cv2
                 from core import vision
+                # ★ 先解析到组模板目录(审查 2026-10-12): 裸名直接丢给 find_in_gray 会在
+                #   getmtime 处 FileNotFoundError —— 异常不受 except AssertionError 接,
+                #   步骤直接报错, 而不是老实判"条件不成立"。wait_for/_assert_template
+                #   都先 resolve, 这里原本漏了。
+                tpl = vision.resolve_template(condition)
                 for i in range(checks):      # ★ 模板条件原来只查一次(晚一秒就判错), 现在会等
                     screen = runner.d.screenshot(format="opencv")
                     if vision.find_in_gray(cv2.cvtColor(screen, cv2.COLOR_BGR2GRAY),
-                                           condition, min_matches=3) is not None:
+                                           tpl, min_matches=3) is not None:
                         passed = True
                         break
-                    runner._poll_sleep(i + 1)
+                    if i + 1 < checks:
+                        runner._poll_sleep(i + 1)
         elif ":id/" in condition:
             for i in range(checks):          # ★ 同样统一节奏(原来是 u2 自己按秒轮询)
                 if runner.d(resourceId=condition).exists(timeout=0.2):
                     passed = True
                     break
-                runner._poll_sleep(i + 1)
+                if i + 1 < checks:
+                    runner._poll_sleep(i + 1)
         else:
             # 多值(逗号/顿号/分号/换行分隔): 任一命中即条件成立(与 assert 的多值语义一致)。
             # v1.4 的 TextViewContentChecker(driver, ["充电中","充电完成"], t) 就是这个语义,

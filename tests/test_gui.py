@@ -1032,7 +1032,8 @@ def _fake_prepare_items(results):
     真实实现是每执行完一条就回调一次(用户要求前置结果一条一条落表), 所以桩也要回调,
     否则 RunWorker 收不到任何前置行。
     """
-    def _f(d_, cfg_, items, on_progress=None, should_cancel=None, on_item_done=None):
+    def _f(d_, cfg_, items, on_progress=None, should_cancel=None, on_item_done=None,
+           shot_subdir=None):
         out = []
         for r in results:
             r = dict(r)
@@ -1045,7 +1046,8 @@ def _fake_prepare_items(results):
 
 def _record_precondition_calls(monkeypatch, rt, calls):
     """把"全量前置"与"只重启 APP"换成记录器, 用来实证两者的实际调用序列"""
-    def _prepare(d_, cfg_, items, on_progress=None, should_cancel=None, on_item_done=None):
+    def _prepare(d_, cfg_, items, on_progress=None, should_cancel=None, on_item_done=None,
+                 shot_subdir=None):
         calls.append("prepare")
         return [{"key": "restart", "desc": "重启 APP", "ok": True, "elapsed": 0.1}]
 
@@ -3732,6 +3734,13 @@ def test_manual_stop_shows_neutral_summary(win):
     row = win.result_table.rowCount() - 1
     assert win.result_table.item(row, 3).text() == "✘ 未通过"
     assert win.result_table.item(row, 3).background().color().name() == "#fdeaea"
+    # ★ 失败消息里**含**"停止"二字也不算停止(审查 2026-10-12): 判定是精确匹配,
+    #   前置等待的文案(如「设备已停止充电」)子串命中会把真失败渲染成中性灰蓝
+    win.on_run_finished(False, "前置检查未通过: 设备已停止充电")
+    row = win.result_table.rowCount() - 1
+    assert win.result_table.item(row, 3).text() == "✘ 未通过", \
+        win.result_table.item(row, 3).text()
+    assert win.result_table.item(row, 3).background().color().name() == "#fdeaea"
 
 
 def test_on_run_finished_不在线程活着时丢worker引用(win, qapp):
@@ -3779,15 +3788,15 @@ def test_on_run_finished_不在线程活着时丢worker引用(win, qapp):
                 qapp.processEvents()
                 _time.sleep(0.01)
             assert win.worker is None, "on_run_finished 没清 self.worker(解锁逻辑坏了)"
-            assert win._retired_worker is w, \
+            assert w in win._retired_workers, \
                 "worker 引用必须保到 QThread.finished(run() 真正返回)为止"
             assert w.isRunning(), "此刻 run() 的收尾尾巴应该还在跑(模拟 1.5s)"
             # 线程真正返回后, 退休引用必须放掉 —— 不许每轮漏一个 wrapper
             deadline = _time.time() + 10
-            while win._retired_worker is not None and _time.time() < deadline:
+            while win._retired_workers and _time.time() < deadline:
                 qapp.processEvents()
                 _time.sleep(0.01)
-            assert win._retired_worker is None
+            assert win._retired_workers == []
             assert not w.isRunning()
         finally:
             w.wait(3000)
@@ -3824,3 +3833,61 @@ def test_stop_asks_for_confirmation(win, monkeypatch):
         assert win.status_label.text().startswith("停止中")
     finally:
         win.worker = None
+
+
+def test_on_stop_survives_worker_dying_during_dialog(win, monkeypatch):
+    """★ 确认框的模态循环会泵事件(审查 2026-10-12): 队列里的 finished_run 可能恰好在
+    框内被分发 → on_run_finished 把 worker 清掉; 选"是"返回后对 None 调
+    request_stop 是 AttributeError。修法是进框前先捕获局部引用 —— 这条钉住它。
+
+    另一半(RuntimeError: C++ 对象已删)也一并钉: request_stop 抛 RuntimeError 必须吞掉。
+    """
+    import gui.main_window as mw
+
+    class _W:
+        def request_stop(self):
+            raise RuntimeError("Internal C++ object already deleted")
+
+    win.worker = _W()
+    try:
+        monkeypatch.setattr(mw.QMessageBox, "question",
+                            staticmethod(lambda *a, **k: mw.QMessageBox.Yes))
+        win.on_stop()                       # 不应向外抛
+        assert win.status_label.text().startswith("停止中")
+    finally:
+        win.worker = None
+
+
+def test_shot_dir_name_matches_cleaner_and_is_sanitized():
+    """截图目录名必须是清理代码认得的「用例键-第N次」, 且洗掉文件系统非法字符。
+
+    审查 2026-10-12: 以前直接用报告表名(「用例名-N」)当目录, trim/prune 按
+    「用例名-第N次」解析永远匹配不上, 逐用例封顶静默失效。
+    """
+    from gui.runner_thread import _shot_dir_name
+    assert _shot_dir_name("冒烟", 1) == "冒烟-第1次"
+    assert _shot_dir_name("冒烟(a)", 2) == "冒烟(a)-第2次"
+    assert _shot_dir_name('清扫: 上午?', 3) == "清扫_ 上午_-第3次"
+    # bootstrap 侧的双后缀解析也顺手钉在这(同一个契约的两端)
+    from core.bootstrap import _shot_case_of
+    assert _shot_case_of("冒烟-第12次") == "冒烟"
+    assert _shot_case_of("冒烟-3") == "冒烟"          # 2.0.7 短暂生成过的形态
+    assert _shot_case_of("甲-1-第2次") == "甲-1"      # 用例名本身带连字符
+
+
+def test_same_name_cases_get_separate_sheets_and_dirs(qapp, monkeypatch, tmp_path):
+    """★ 同名用例消歧(审查 2026-10-12): 两个文件各有一个「冒烟」时, 报告表与截图
+    目录都不能并成一份 —— 表键原只由「用例名+轮次」组成, 两次执行并进同一张表。
+    """
+    from PySide6.QtWidgets import QApplication  # noqa: F401  确保 qapp 已建
+    from openpyxl import load_workbook
+
+    from gui import runner_thread as rt
+    f1 = _write_case(tmp_path, "组甲", "a.yaml", "冒烟")
+    f2 = _write_case(tmp_path, "组乙", "b.yaml", "冒烟")
+    done, _calls = _run_worker(qapp, monkeypatch, rt, tmp_path, [f1, f2], 1)
+    assert done and done[0][0] is True, done
+    wb = load_workbook(tmp_path / "rep.xlsx")
+    names = wb.sheetnames
+    assert "冒烟(a)-1" in names and "冒烟(b)-1" in names, \
+        f"同名用例必须各占一张表(带文件名后缀): {names}"

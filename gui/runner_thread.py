@@ -4,6 +4,7 @@
 """
 import logging
 import os
+import re
 
 import yaml
 from PySide6.QtCore import QThread, Signal
@@ -57,6 +58,15 @@ class _QtLogHandler(logging.Handler):
             pass
 
 
+def _shot_dir_name(case_key, run_no):
+    """截图子目录名: 「用例键-第N次」—— bootstrap 的封顶清理(trim/prune)按这个名解析。
+
+    ★ 以前直接用报告表名(「用例名-N」)当目录名, 与清理代码认的「用例名-第N次」
+      对不上, 逐用例封顶静默失效(审查 2026-10-12 抓到)。顺带洗掉文件系统非法字符。
+    """
+    return re.sub(r'[\\/:*?"<>|]+', "_", f"{case_key}-第{run_no}次")
+
+
 class RunWorker(QThread):
     step_done = Signal(dict)          # 一条步骤结果 {"desc","passed","error","screenshot"}
     #: 步骤**开始** → GUI 先插一行「执行中」, 跑完(step_done)再就地改成 PASS/FAIL
@@ -101,8 +111,10 @@ class RunWorker(QThread):
             p.setdefault("case", self._exec_label)
         self.step_done.emit(p)
 
-    def _emit_pre_result(self, d, sheet, report, r):
+    def _emit_pre_result(self, d, sheet, report, r, shot_dir=None):
         """单条前置结果 → 执行结果表 + 报告(带该项自己的耗时)。
+
+        shot_dir: 前置截图放的目录名(screenshots/ 下) —— 缺省退回表名(旧调用)。
 
         ★ 用户要求: 前置也要**一条一条**显示结果和耗时, 不要全部执行完再刷出来;
           充电/电量行附带机器当前电量。
@@ -121,7 +133,7 @@ class RunWorker(QThread):
         if not sub:
             # ★ 前置也默认截图(用户要求 2026-10-12), 放进报告 —— 只有自定义步骤型前置
             #   不带这里(它内部每一步自己有截图, 见下)
-            shot = self._pre_screenshot(d, sheet, desc)
+            shot = self._pre_screenshot(d, shot_dir or sheet, desc)
         # ★ 报告写入失败不能拖垮执行: 组名(module)里出现非法字符曾让 create_sheet
         #   抛错 → 冒到 run() 兜底 except → 整轮以"执行异常"中断
         try:
@@ -170,7 +182,10 @@ class RunWorker(QThread):
         #   见 core/idle.py)。begin/end 必须成对, 所以 end 放在 finally 里 ——
         #   少放一次, 清理就永久不做了。
         from core import idle
-        idle.begin_run()
+        # ★ 计数令牌(审查 2026-10-12): end_run 带上自己那次 begin 的令牌 —— 万一将来
+        #   出现"上一轮的收尾还没跑完、新一轮已经开始"的重叠, 迟到的 end 不会把
+        #   新一轮的计数清掉、误触封顶清理。
+        run_token = idle.begin_run()
         report = None
         report_saved = False
         try:
@@ -181,7 +196,9 @@ class RunWorker(QThread):
             d = u2.connect(self.device_id)
             d.implicitly_wait(10)
             if self._stop_requested:
-                self.finished_run.emit(False, "已停止")
+                # ★ 统一消息(审查 2026-10-12): 界面按"消息 == 已手动停止"识别中性停止,
+                #   两种写法会让其中一种被渲染成红色"未通过"
+                self.finished_run.emit(False, "已手动停止")
                 return
 
             # 展开任务队列: 文件 → 用例
@@ -196,6 +213,13 @@ class RunWorker(QThread):
                 self.finished_run.emit(False, "用例文件中没有 cases")
                 return
 
+            # ★ 同名用例消歧(审查 2026-10-12): 两个文件各有一个「冒烟」时, 报告表键
+            #   只由「用例名+轮次」组成 → 两次执行并进同一张表、共用同一批截图。
+            #   检测到重名就给表名/目录带上文件名后缀 —— 与遍历顺序无关, 任何一轮都稳定。
+            from collections import Counter
+            _dup_names = {n for n, c in Counter(
+                c.get("name", "未命名用例") for _m, c, _f in tasks).items() if c > 1}
+
             report = ExcelReport()
             all_passed = True
             total_rounds = self.repeat
@@ -204,13 +228,19 @@ class RunWorker(QThread):
                     if self._stop_requested:
                         break
                     case_name = case.get("name", "未命名用例")
+                    # ★ 重名用例带文件名后缀(见 _dup_names), 表键/截图目录/结果标签共用
+                    case_key = (f"{case_name}({os.path.splitext(os.path.basename(fp))[0]})"
+                                if case_name in _dup_names else case_name)
                     steps = case.get("steps") or []
                     # ★ 报告按「**一次执行**」分表(用户要求 2026-10-11): 同一用例跑 N 轮各占
                     #   一张表(用例名-1 / 用例名-2 …), 不再把几轮结果堆在同一张表里;
                     #   顺带也解决"同一个用例文件里有多个用例时共用一张表"。
-                    sheet = case_sheet_name(case_name, rnd + 1)
+                    sheet = case_sheet_name(case_key, rnd + 1)
+                    # ★ 截图目录与表键**解耦**(审查 2026-10-12): 目录必须是「用例名-第N次」,
+                    #   封顶清理才认得; 表名是给 openpyxl 的(它自己会洗非法字符/去重)
+                    run_dir = _shot_dir_name(case_key, rnd + 1)
                     # ★ 本次执行的标签: 结果表每行都带它, 一眼看出"现在跑的是第几轮"
-                    self._exec_label = f"{case_name}(第{rnd + 1}次)"
+                    self._exec_label = f"{case_key}(第{rnd + 1}次)"
                     # 用例所在 APP 组 = 用例文件所在目录名
                     group = os.path.basename(
                         os.path.dirname(os.path.abspath(fp)))
@@ -230,8 +260,11 @@ class RunWorker(QThread):
                         on_progress=self.status.emit,
                         should_cancel=lambda: self._stop_requested,
                         # ★ 每完成一条立刻落表(用户要求: 一条一条显示结果和耗时)
-                        on_item_done=lambda r, m=sheet:
-                        self._emit_pre_result(d, m, report, r))
+                        on_item_done=lambda r, m=sheet, sd=run_dir:
+                        self._emit_pre_result(d, m, report, r, shot_dir=sd),
+                        # ★ 前置的内部步骤截图也进本轮目录(审查 2026-10-12): 否则它退回
+                        #   用前置名当目录, 每轮写同一路径互相覆盖, 且封顶清理永远不收
+                        shot_subdir=run_dir)
                     # ★ 任一前置项未通过 → 阻断:本轮不再执行任何用例(用户要求)
                     failed = [r["desc"] for r in pre_results if not r["ok"]]
                     if failed:
@@ -272,7 +305,7 @@ class RunWorker(QThread):
                             p["case"] = self._exec_label
                         self.step_started.emit(p)
 
-                    runner.shot_subdir = sheet      # 截图进 screenshots/<用例名-第N次>/
+                    runner.shot_subdir = run_dir     # 截图进 screenshots/<用例名-第N次>/
                     runner.on_step_start = on_step_start
                     runner.on_result = on_result
                     self.runner = runner
@@ -307,14 +340,20 @@ class RunWorker(QThread):
                         self.status.emit(f"用例通过: {case_name}")
                         self.case_finished.emit(fp, case_name, True)   # 状态灯 → 绿
 
-            # ★ 每次执行结束后把该用例的旧截图目录循环掉(到上限就覆盖最旧的)
-            try:
-                from core import bootstrap as _bs, vision as _vs
-                _bs.trim_case_screenshots(
-                    os.path.join(BASE_DIR, "Test_cases", _vs.current_app_group() or "未分组",
-                                 "screenshots"), case_name=case_name)
-            except Exception:
-                pass
+                    # ★ 本用例截图封顶(审查 2026-10-12): 每个用例跑完就地收一次自己的
+                    #   旧截图目录。以前这调用在**轮次循环之后**、且传的是裸用例名 ——
+                    #   一旦首轮开始前就停止, case_name 未赋值直接 NameError(被吞);
+                    #   defer 按用例键去重(bootstrap 里同名只排一次)。
+                    try:
+                        from core import bootstrap as _bs, vision as _vs
+                        _bs.trim_case_screenshots(
+                            os.path.join(BASE_DIR, "Test_cases",
+                                         _vs.current_app_group() or "未分组",
+                                         "screenshots"),
+                            case_name=run_dir.rsplit("-第", 1)[0])
+                    except Exception:
+                        pass
+
             report.save()
             report_saved = True
             self.status.emit(f"报告已生成: {report.path}")
@@ -339,4 +378,4 @@ class RunWorker(QThread):
                     pass
             # ★ 收尾: 本轮结束 = 空闲了, 把运行期间推迟的封顶清理补做一遍(后台线程)。
             #   放在 finally 的最后 —— 报告都已落盘, 清理看到的是完整产物。
-            idle.end_run()
+            idle.end_run(run_token)

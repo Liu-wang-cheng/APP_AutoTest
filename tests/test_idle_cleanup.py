@@ -143,6 +143,23 @@ def test_begin_end_are_refcounted():
     assert idle.is_busy() is False
 
 
+def test_end_run_with_foreign_token_leaves_others_running():
+    """带令牌的 end_run(审查 2026-10-12): 迟到/重复的销账不动别人的计数
+
+    场景: 上一轮的收尾还没跑完、新一轮已经开始 —— 旧线程迟到的 end_run 若按
+    "减一"处理, 会把新一轮的计数清掉、误触封顶清理。
+    """
+    t1 = idle.begin_run()
+    t2 = idle.begin_run()
+    idle.end_run(t1)                      # 上一轮先结束
+    assert idle.is_busy() is True, "新一轮还在跑, 闸门不该开"
+    idle.end_run(t1)                      # 重复销账: 无操作
+    assert idle.is_busy() is True
+    idle.end_run(t2)
+    assert idle.is_busy() is False
+    idle.flush(background=False)          # 清掉上面触发的补做, 不影响下一条测试
+
+
 # ── 逐个清理函数: 执行期间不删、结束后补删 ──
 
 def test_prune_run_artifacts_deferred_while_running(tmp_path):
@@ -216,21 +233,26 @@ def test_trim_traces_deferred_while_running(tmp_path):
 
 
 def test_trim_case_screenshots_deferred_while_running(tmp_path):
-    """用例截图循环: 执行期间不删, 结束后只留最新 N 次"""
+    """用例截图循环: 执行期间不删, 结束后只留最新 N 次
+
+    ★ 目录名两种形态都收(审查 2026-10-12): 「用例名-第N次」(现行)与「用例名-N」
+      (2.0.7 短暂生成过的) —— 后者不认的话, 已装 2.0.7 的机器上那些目录永远没人清。
+    """
     shots = tmp_path / "screenshots"
-    for i in range(3):
-        d = shots / f"甲用例-第{i + 1}次"
+    for i, name in enumerate(["甲用例-9", "甲用例-第1次", "甲用例-第2次", "甲用例-第3次"]):
+        d = shots / name
         d.mkdir(parents=True)
-        os.utime(d, (3000 + i, 3000 + i))
+        os.utime(d, (3000 + i, 3000 + i))      # 甲用例-9 最旧
     idle.begin_run()
     try:
-        assert bootstrap.trim_case_screenshots(str(shots), case_name="甲用例", keep=1) == (0, 0)
-        assert len(list(shots.iterdir())) == 3
-        assert "截图循环" in idle.pending_names()
+        assert bootstrap.trim_case_screenshots(str(shots), case_name="甲用例", keep=2) == (0, 0)
+        assert len(list(shots.iterdir())) == 4
+        assert "截图循环(甲用例)" in idle.pending_names()
     finally:
         idle.end_run()
     idle.flush(background=False)
-    assert sorted(p.name for p in shots.iterdir()) == ["甲用例-第3次"]
+    assert sorted(p.name for p in shots.iterdir()) == ["甲用例-第2次", "甲用例-第3次"], \
+        sorted(p.name for p in shots.iterdir())
 
 
 def test_cleanup_update_leftovers_deferred_while_running(tmp_path):
@@ -292,8 +314,9 @@ def test_runworker_用空闲闸门包住整轮执行():
     from gui import runner_thread as rt
     src = inspect.getsource(rt.RunWorker.run)
     assert "idle.begin_run()" in src, "开始执行时没有关闸"
-    assert "idle.end_run()" in src, "结束执行时没有开闸(推迟的清理永远不会补做)"
-    assert src.index("idle.begin_run()") < src.index("idle.end_run()"), "顺序反了"
+    assert "idle.end_run(run_token)" in src, \
+        "结束执行时没有开闸(推迟的清理永远不会补做; 令牌形态见审查 2026-10-12)"
+    assert src.index("idle.begin_run()") < src.index("idle.end_run(run_token)"), "顺序反了"
 
 
 # ── 端到端: 真的跑一轮用例, 期间闸门是关的 ──
@@ -337,7 +360,8 @@ def test_执行用例期间闸门是关的_结束后自动开(qapp, monkeypatch,
         os.utime(d, (3000 + i, 3000 + i))
     seen = {}
 
-    def _prepare(d_, cfg_, items, on_progress=None, should_cancel=None, on_item_done=None):
+    def _prepare(d_, cfg_, items, on_progress=None, should_cancel=None, on_item_done=None,
+                 shot_subdir=None):
         seen["busy"] = idle.is_busy()
         bootstrap.trim_case_screenshots(str(shot_dir), case_name="冒烟", keep=1)
         seen["alive_while_running"] = len(list(shot_dir.iterdir()))

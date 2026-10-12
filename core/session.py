@@ -687,11 +687,13 @@ DEFAULT_PRECONDITIONS = [
 ]
 
 
-def _run_one(d, cfg, item, on_progress, should_cancel, collect=None):
+def _run_one(d, cfg, item, on_progress, should_cancel, collect=None,
+             shot_subdir=None):
     """执行单个前置项(按 type 分发);返回 True/False。
 
     collect: 传一个 list 进来时, 「自定义步骤」型前置会把**每一步的结果**(含截图)
     追加进去 —— GUI 好把前置内部的步骤也一条条落表/进报告(用户要求 2026-10-12)。
+    shot_subdir: 内部截图目录名, 原样透传给 ActionRunner(见 prepare_items)。
     """
     t = item.get("type")
     if t == "restart":
@@ -742,6 +744,8 @@ def _run_one(d, cfg, item, on_progress, should_cancel, collect=None):
                               # ★ 让"停止"能穿透到这串前置步骤(见 ActionRunner.stopped):
                               #   否则用户点停止后它会一路跑完
                               cancel_check=should_cancel)
+        if shot_subdir:
+            runner.shot_subdir = shot_subdir   # 截图进本轮的「用例名-第N次」目录(见上)
         ok = runner.run_steps(steps)
         if collect is not None:
             collect.extend(runner.results)      # 内部每一步的结果(含截图)
@@ -761,11 +765,14 @@ def _run_one(d, cfg, item, on_progress, should_cancel, collect=None):
 
 
 def prepare_items(d, cfg, items, on_progress=None, should_cancel=None,
-                  on_item_done=None):
+                  on_item_done=None, shot_subdir=None):
     """按前置项列表依次执行 → [{"key","desc","ok","elapsed"}]。
 
     key 供报告/结果去重(同类型多实例带序号), desc 是展示名(含参数摘要),
     elapsed 是该项自己的耗时(秒)。
+
+    shot_subdir: 「自定义步骤」型前置的内部截图目录名(screenshots/ 下) ——
+    不给则退回用前置名当目录(每轮同路径互相覆盖, 且封顶清理不认, 审查 2026-10-12)。
 
     ★ on_item_done(result): **每执行完一条立刻回调** —— GUI 用它把结果逐条落表,
       用户要求"一条一条显示结果和耗时, 而不是全部执行完再一次性刷出来"。
@@ -792,7 +799,8 @@ def prepare_items(d, cfg, items, on_progress=None, should_cancel=None,
             continue
         t0 = time.time()
         sub = []
-        ok = _run_one(d, cfg, item, on_progress, should_cancel, collect=sub)
+        ok = _run_one(d, cfg, item, on_progress, should_cancel, collect=sub,
+                      shot_subdir=shot_subdir)
         if ok is None:
             continue                    # 该项跳过(如未配置文本)
         _finish(i, desc, ok, time.time() - t0, sub=sub)

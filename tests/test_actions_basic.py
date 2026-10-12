@@ -430,6 +430,51 @@ def test_if_condition_checks_ten_times_by_default(runner):
     assert calls[0].get("rounds") == 30, calls
 
 
+def test_if_text_condition_really_polls_rounds_times(runner, monkeypatch):
+    """★ 回归(审查 2026-10-12): _text_present 的 rounds 模式必须**真查满 N 次**。
+
+    2.0.7 曾把"查够"的判断放在 end 之后, 而 rounds 模式 end=None —— 首次失败即
+    return, 文本条件实际只查 1 次(比 2.0.6 的 5 秒轮询还差), 上面那条只 mock 方法
+    断言 kwargs, 管不住真循环。这里不 mock _text_present, 直测它内部的循环。
+    """
+    import core.runner as cr
+    seq = {"n": 0}
+
+    def _poll(n):
+        seq.setdefault("sleeps", []).append(n)
+
+    monkeypatch.setattr(runner, "_poll_sleep", _poll)
+    # 第 10 次(最后一次)才出现 → 仍应判"成立", 且恰好查 10 次、只睡 9 次
+    monkeypatch.setattr(cr, "text_present",
+                        lambda d, texts, round_no=None:
+                        (seq.__setitem__("n", seq["n"] + 1), seq["n"] >= 10)[1])
+    assert runner._text_present("确认", rounds=10) is True
+    assert seq["n"] == 10, seq
+    assert len(seq["sleeps"]) == 9, seq          # 末次已定局, 不再白睡(审查 2026-10-12)
+
+    # 一直不出现 → 恰好 10 次, 不多不少; OCR 兜底轮次落在 5/10(round_no = 次数)
+    seq["n"] = 0
+    seq["sleeps"] = []
+    seen_rn = []
+    monkeypatch.setattr(cr, "text_present",
+                        lambda d, texts, round_no=None:
+                        (seq.__setitem__("n", seq["n"] + 1),
+                         seen_rn.append(round_no), False)[2])
+    assert runner._text_present("确认", rounds=10) is False
+    assert seq["n"] == 10 and len(seq["sleeps"]) == 9, seq
+    assert seen_rn == list(range(1, 11)), seen_rn
+
+
+def test_if_checks_capped_at_120(runner):
+    """timeout 重载成"次数"后大值要有上限(审查 2026-10-12):
+    timeout: 1800 → 1800 次 × 阶梯(1/2/5s) ≈ 2.5 小时, 整个队列像挂死"""
+    calls = []
+    runner._text_present = lambda *a, **k: (calls.append(k), False)[1]
+    runner._poll_sleep = lambda n: None
+    runner._execute({"if": "x", "timeout": 1800, "else": []})
+    assert calls[0].get("rounds") == 120, calls
+
+
 def test_if_template_condition_now_waits_instead_of_single_shot(runner, monkeypatch):
     """★ 模板条件原来**只查一次**(晚 1 秒出现就走进 else), 现在同样跑满节奏"""
     from core import vision

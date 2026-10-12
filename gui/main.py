@@ -115,8 +115,14 @@ def _install_crashlog():
     try:
         from core import crashlog
         crashlog.install()
-    except Exception:
-        pass
+    except Exception as e:
+        # ★ 别静默(审查 2026-10-12): 取证装不上 = 退回"闪退无迹可查", 至少留一行
+        try:
+            from core.logger import get_logger as _gl
+            _gl().warning(f"[取证] 崩溃取证安装失败(闪退将无迹可查): "
+                          f"{type(e).__name__}: {e}")
+        except Exception:
+            pass
 
 
 def main():
