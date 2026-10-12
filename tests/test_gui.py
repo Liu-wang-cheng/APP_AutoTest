@@ -2844,11 +2844,31 @@ def test_preconditions_save_and_stop_hints_go_to_run_log(qapp, monkeypatch, tmp_
 
         w.log_view.clear()
         w.worker = fake          # on_stop 需要 worker 才进入分支
-        w.on_stop()
+        # ★ 停止现在会先弹确认(防误点) —— 离屏下必须 mock, 否则模态框把测试挂死
+        import gui.main_window as _mw
+        asked = []
+
+        def _ask(*a, **k):
+            asked.append(a[2] if len(a) > 2 else "")
+            return _mw.QMessageBox.No if _ask.no else _mw.QMessageBox.Yes
+
+        _ask.no = False
+        monkeypatch.setattr(_mw.QMessageBox, "question", staticmethod(_ask))
+        w.on_stop()              # 选"是" → 真的停
         qapp.processEvents()
+        assert asked and "确定停止" in asked[0], f"该先确认一次: {asked}"
         assert w.status_label.text() == "停止中(当前步骤结束后退出)..."
         assert "停止中" in w.log_view.toPlainText(), "停止执行也要进运行日志"
         assert fake.stop_called, "停止请求要真的发给 worker"
+
+        # 选"否" → 什么都不该发生(防误点就是这个意思)
+        fake.stop_called = False
+        _ask.no = True
+        w._set_status("执行中", w.status_label)
+        w.on_stop()
+        qapp.processEvents()
+        assert not fake.stop_called, "选『否』不该停止"
+        assert w.status_label.text() == "执行中", "选『否』状态栏不该变"
     finally:
         w.worker = None          # 避免 closeEvent 弹模态框阻塞离屏测试
         w.close()
@@ -3692,3 +3712,56 @@ def test_separator_row_resets_the_running_row(win):
     assert rows == 3, rows
     assert win.result_table.item(2, 2).text() == "新用例的第一步", "结果应新起一行"
     assert win.result_table.item(1, 3).text() == "", "分隔行不该被写进结果"
+
+
+def test_manual_stop_shows_neutral_summary(win):
+    """★ 手动停止**不是失败**: 状态栏与总结行显示「⏹ 已停止」(灰蓝底), 不是红色的"未通过"。
+
+    用户 2026-10-12: "同时按你的建议修改手动停止的显示" —— 停止走的是 finished_run(False),
+    以前被渲染成红底"✘ 未通过", 让人以为这轮跑砸了。
+    """
+    win.result_table.setRowCount(0)
+    win.on_run_finished(False, "已手动停止")
+    row = win.result_table.rowCount() - 1
+    assert win.result_table.item(row, 3).text() == "⏹ 已停止", \
+        win.result_table.item(row, 3).text()
+    assert win.result_table.item(row, 3).background().color().name() == "#eef2f7"
+    assert win.status_label.text() == "⏹ 已手动停止"
+    # 真正的失败仍然是红的
+    win.on_run_finished(False, "存在失败步骤")
+    row = win.result_table.rowCount() - 1
+    assert win.result_table.item(row, 3).text() == "✘ 未通过"
+    assert win.result_table.item(row, 3).background().color().name() == "#fdeaea"
+
+
+def test_stop_asks_for_confirmation(win, monkeypatch):
+    """★ 停止前必须确认(防误点, 用户要求 2026-10-12): 选"是"才停, 选"否"什么都不做"""
+    import gui.main_window as mw
+
+    class _W:
+        def __init__(self):
+            self.stop_called = False
+
+        def request_stop(self):
+            self.stop_called = True
+
+    w = _W()
+    win.worker = w
+    try:
+        asked = []
+        monkeypatch.setattr(
+            mw.QMessageBox, "question",
+            staticmethod(lambda *a, **k: (asked.append(a[2] if len(a) > 2 else ""),
+                                          mw.QMessageBox.No)[1]))
+        win._set_status("执行中", win.status_label)
+        win.on_stop()
+        assert asked and "确定停止" in asked[0], f"该先确认: {asked}"
+        assert not w.stop_called and win.status_label.text() == "执行中", "选否不该停"
+
+        monkeypatch.setattr(mw.QMessageBox, "question",
+                            staticmethod(lambda *a, **k: mw.QMessageBox.Yes))
+        win.on_stop()
+        assert w.stop_called, "选是才真的停"
+        assert win.status_label.text().startswith("停止中")
+    finally:
+        win.worker = None

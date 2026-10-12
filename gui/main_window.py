@@ -3974,6 +3974,13 @@ class MainWindow(QMainWindow):
 
     def on_stop(self):
         if self.worker:
+            # ★ 防误点: 停止前先确认(用户要求 2026-10-12)。与"关窗"那条确认同一套写法,
+            #   说明里写清楚会发生什么 —— 停止不是失败, 已跑出的结果都会保留。
+            if QMessageBox.question(
+                    self, "停止执行",
+                    "确定停止本次执行吗?\n\n当前步骤跑完就停下, 已经跑出的结果会保留。",
+                    QMessageBox.Yes | QMessageBox.No, QMessageBox.No) != QMessageBox.Yes:
+                return
             self._set_status("停止中(当前步骤结束后退出)...", self.status_label)
             self.worker.request_stop()
 
@@ -4103,12 +4110,20 @@ class MainWindow(QMainWindow):
         显示逻辑一旦抛异常,界面会永久锁死、所有编辑入口被 worker 守卫拦住
         (用户实测:执行后无法编辑/展开步骤)"""
         try:
-            self.status_label.setText(("✔ " if passed else "✘ ") + message)
-            # ★ 最终结果写入执行结果表格(总结行,绿/红底粗体)——
-            #   只显示在右上角状态栏太不明显(用户反馈)
-            self._append_result_row(
-                "—", "✔ 全部通过" if passed else "✘ 未通过", message,
-                "#e6f7e9" if passed else "#fdeaea")
+            # ★ 手动停止**不是失败**(用户要求 2026-10-12: "同时按你的建议修改手动停止的显示"):
+            #   以前停止也走 passed=False 这条路 → 状态栏与总结行都渲染成红色"未通过",
+            #   容易让人以为这轮跑砸了。停止是中性结果, 单独给个"⏹ 已停止"(灰蓝底)。
+            stopped = "停止" in message
+            if stopped:
+                self.status_label.setText("⏹ " + message)
+                self._append_result_row("—", "⏹ 已停止", message, "#eef2f7")
+            else:
+                self.status_label.setText(("✔ " if passed else "✘ ") + message)
+                # ★ 最终结果写入执行结果表格(总结行,绿/红底粗体)——
+                #   只显示在右上角状态栏太不明显(用户反馈)
+                self._append_result_row(
+                    "—", "✔ 全部通过" if passed else "✘ 未通过", message,
+                    "#e6f7e9" if passed else "#fdeaea")
             self.log_view.appendPlainText(f"[结束] {message}")
         except Exception as e:
             self.log_view.appendPlainText(f"[内部] 结束处理异常: {e}")
