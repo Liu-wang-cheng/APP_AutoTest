@@ -265,6 +265,23 @@ def do_if_not(runner, step):
     do_if_impl(runner, step, negate=True)
 
 
+#: if 条件的检测节奏(用户 2026-10-12 定): **两轮 × 每轮五次 = 10 次检测**;
+#: 每轮**前四次普通检测、第五次上 OCR 兜底**(正好落在第 5、10 次)。
+#: ★ 原来是 timeout=5 秒兜底, 用户反馈"5s 容错太低" → 改成**按次数**跑满两轮, 不再被秒数支配;
+#:   步骤里显式写了 timeout 时按 max(10, timeout) 次(秒数≈每次间隔, 向后兼容)。
+IF_ROUNDS = 2
+IF_CHECKS_PER_ROUND = 5
+IF_TOTAL_CHECKS = IF_ROUNDS * IF_CHECKS_PER_ROUND
+
+
+def _if_checks(step):
+    """这一步的 if 条件要检测几次"""
+    try:
+        return max(IF_TOTAL_CHECKS, int(step.get("timeout", 0) or 0))
+    except (TypeError, ValueError):
+        return IF_TOTAL_CHECKS
+
+
 def do_if_impl(runner, step, negate):
     """条件分支(语义反直觉): 条件成立→直接跳过;条件不成立→执行 else 列表。
 
@@ -277,42 +294,61 @@ def do_if_impl(runner, step, negate):
     timeout = step.get("timeout", 5)
     passed = False
 
+    checks = _if_checks(step)
     for op, fn in runner._NUM_OPS.items():
         if op in condition:
             keyword, expected = condition.split(op, 1)
             from core.actions.data_ops import extract_value
-            val = extract_value(runner, runner._get_all_nodes(), keyword.strip())
-            if val:
+            for i in range(checks):          # ★ 数值也按节奏查(原来是"取一次快照")
                 try:
-                    passed = bool(fn(float(val), float(expected.strip())))
-                except (TypeError, ValueError):
-                    pass
+                    val = extract_value(runner, runner._get_all_nodes(), keyword.strip())
+                except ValueError:
+                    val = None
+                if val:
+                    try:
+                        passed = bool(fn(float(val), float(expected.strip())))
+                    except (TypeError, ValueError):
+                        passed = False
+                    if passed:
+                        break
+                runner._poll_sleep(i + 1)
             break
     else:
         if runner._is_image(condition):
             threshold = step.get("threshold")
             if threshold is not None:
                 from core.actions.asserts import compare_screen
-                try:
-                    compare_screen(runner, condition, float(threshold))
-                    passed = True
-                except AssertionError:
-                    passed = False
+                for i in range(checks):      # ★ 原来只比一次, 现在同样跑满节奏
+                    try:
+                        compare_screen(runner, condition, float(threshold))
+                        passed = True
+                        break
+                    except AssertionError:
+                        runner._poll_sleep(i + 1)
             else:
                 import cv2
                 from core import vision
-                screen = runner.d.screenshot(format="opencv")
-                passed = vision.find_in_gray(cv2.cvtColor(screen, cv2.COLOR_BGR2GRAY),
-                                             condition, min_matches=3) is not None
+                for i in range(checks):      # ★ 模板条件原来只查一次(晚一秒就判错), 现在会等
+                    screen = runner.d.screenshot(format="opencv")
+                    if vision.find_in_gray(cv2.cvtColor(screen, cv2.COLOR_BGR2GRAY),
+                                           condition, min_matches=3) is not None:
+                        passed = True
+                        break
+                    runner._poll_sleep(i + 1)
         elif ":id/" in condition:
-            passed = runner.d(resourceId=condition).exists(timeout=timeout)
+            for i in range(checks):          # ★ 同样统一节奏(原来是 u2 自己按秒轮询)
+                if runner.d(resourceId=condition).exists(timeout=0.2):
+                    passed = True
+                    break
+                runner._poll_sleep(i + 1)
         else:
             # 多值(逗号/顿号/分号/换行分隔): 任一命中即条件成立(与 assert 的多值语义一致)。
             # v1.4 的 TextViewContentChecker(driver, ["充电中","充电完成"], t) 就是这个语义,
             # 转换后的用例大量依赖它。
             # ★ 判断走 runner._text_present(原生优先 + OCR 兜底)
+            # ★ 文本: 按**次数**跑(两轮×五次); 第 5、10 次走 OCR 兜底(见 core/ocr.py)
             passed = runner._text_present(*(split_texts(condition) or [condition]),
-                                          timeout=timeout)
+                                          rounds=checks)
 
     if negate:
         passed = not passed

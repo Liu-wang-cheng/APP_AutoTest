@@ -292,7 +292,7 @@ class ActionRunner:
             return self.d(textContains=value if not value.startswith("=") else value[1:])[index]
         return el
 
-    def _text_present(self, *texts, timeout=None, round_no=None):
+    def _text_present(self, *texts, timeout=None, round_no=None, rounds=None):
         """判断类统一入口(转发 session.text_present): 原生优先 → 树稀疏时 OCR 兜底。
 
         ★ 插件页(WebView)切视图后主体不再提供可访问节点, 只读无障碍树的判断
@@ -300,6 +300,8 @@ class ActionRunner:
         timeout: 给了就轮询等待(等价原 `d(textContains=..).exists(timeout=..)`)
         round_no: 调用方自己的轮次计数(从 1 起); 不给就用本函数循环的计数。
                   OCR 兜底只在第 5/10/15… 轮触发(见 ocr.OCR_EVERY_N_ROUNDS)。
+        rounds: 给了就**按次数**轮询(查这么多次就收手, 不看时间) —— if 条件用它实现
+                "两轮 × 每轮五次"的固定节奏(用户 2026-10-12 定)。
         """
         wanted = [t for t in texts if t]
         if not wanted:
@@ -308,6 +310,8 @@ class ActionRunner:
         n = 0
         while True:
             n += 1
+            if rounds is not None and n > rounds:
+                return False                 # 按次数轮询: 查够了就收手
             # ★ 轮次要按场合给: 调用方给了就用它的(断言/等待各自计数); 自己在**轮询**时
             #   用自己的计数; **单次判断**(没给 timeout, 只查一次)不算轮询 —— 那种场合
             #   OCR 是唯一机会, 传 None 让它不受"5 轮一次"的限制(否则插件页永远用不上)

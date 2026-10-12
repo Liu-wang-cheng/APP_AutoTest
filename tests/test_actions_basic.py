@@ -405,3 +405,61 @@ def test_screenshots_are_split_per_execution(runner):
     assert first != second, f"两轮截图路径不能相同: {first}"
     assert f"screenshots/{runner.case_name}/" in first, first
     assert "screenshots/甲用例-第2次/" in second, second
+
+
+# ── if 条件的检测节奏: 两轮 × 每轮五次(= 10 次), 第 5/10 次走 OCR 兜底(用户 2026-10-12) ──
+
+def test_if_condition_checks_ten_times_by_default(runner):
+    """★ if 的四种条件都按"两轮 × 五次 = 10 次"检测, 不受 timeout=5 秒支配。
+
+    用户: "都要按两轮查询, 每轮五次, 前四次普通检测后1次上OCR兜底" + "5s 容错太低了"。
+    """
+    import core.actions.basic as basic
+    assert (basic.IF_ROUNDS, basic.IF_CHECKS_PER_ROUND, basic.IF_TOTAL_CHECKS) == (2, 5, 10)
+
+    calls = []
+    runner._text_present = lambda *a, **k: (calls.append(k), False)[1]
+    runner._poll_sleep = lambda n: None
+    runner._execute({"if": "永远不会出现的文本", "else": []})
+    assert calls and calls[0].get("rounds") == 10, calls     # 文本: 按 10 次轮询
+
+    # 显式写 timeout 时取更大值(向后兼容, 秒数≈每次间隔)
+    calls.clear()
+    runner._execute({"if": "永远不会出现的文本", "timeout": 30, "else": []})
+    assert calls[0].get("rounds") == 30, calls
+
+
+def test_if_template_condition_now_waits_instead_of_single_shot(runner, monkeypatch):
+    """★ 模板条件原来**只查一次**(晚 1 秒出现就走进 else), 现在同样跑满节奏"""
+    from core import vision
+    seq = {"n": 0}
+
+    def _find(screen, tpl, **kw):
+        seq["n"] += 1
+        return (300, 400) if seq["n"] >= 3 else None      # 第 3 次才出现
+    monkeypatch.setattr(vision, "find_in_gray", _find)
+    monkeypatch.setattr(vision, "resolve_template", lambda n: n)
+    runner._poll_sleep = lambda n: None
+    import numpy as np
+    shot = []
+    runner.d.screenshot = (lambda path=None, format=None:
+                           shot.append(1) or np.zeros((1920, 1080, 3), dtype=np.uint8))
+    ran = []
+    runner._execute({"if": "某按钮.png", "else": [{"desc": "不该走"}]})
+    assert seq["n"] == 3, f"应在第 3 次检测到(共查了 {seq['n']} 次)"
+    assert not runner._pending_sub_results, "条件成立就不该走 else"
+
+
+def test_if_numeric_condition_retries_until_it_holds(runner, monkeypatch):
+    """★ 数值条件也从"取一次快照"改成按节奏重试(电量刚充到门槛之上才成立)"""
+    import core.actions.data_ops as data_ops
+    seq = {"n": 0}
+
+    def _val(r, nodes, kw):
+        seq["n"] += 1
+        return "51" if seq["n"] >= 4 else "49"
+    monkeypatch.setattr(data_ops, "extract_value", _val)
+    runner._poll_sleep = lambda n: None
+    runner._execute({"if": "电量 > 50", "else": [{"desc": "不该走"}]})
+    assert seq["n"] == 4, seq
+    assert not runner._pending_sub_results
