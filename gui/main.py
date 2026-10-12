@@ -89,6 +89,19 @@ def _prune_debug_async():
     threading.Thread(target=_work, name="prune-debug", daemon=True).start()
 
 
+def _start_memlog():
+    """起"每 10 分钟记一次内存"的后台线程(用户要求 2026-10-12)。
+
+    长时间跑用例时, 日志里留下内存时间序列, 事后能看出有没有缓慢上涨; 不引第三方依赖
+    (见 core/memlog.py)。
+    """
+    try:
+        from core import memlog
+        memlog.start()
+    except Exception:
+        pass
+
+
 def main():
     _detach_console()
 
@@ -110,6 +123,7 @@ def main():
     _run_backup_async()
     _run_ocr_selfcheck_async()
     _prune_debug_async()
+    _start_memlog()
     app = QApplication(sys.argv)
     # 应用图标(任务栏/窗口):自绘 乐动品牌融合(O传感器+对勾);ico 含 16~256 多尺寸
     # ★ 不要在 main() 里再 `import os` —— 函数内 import 会把 os 变成**整个函数**
