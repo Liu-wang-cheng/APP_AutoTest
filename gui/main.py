@@ -76,6 +76,10 @@ def _prune_debug_async():
 
     用户要求(2026-10-11): "测试的调试图片也要限制一下"。测试期有 conftest 每轮清,
     打包版没有, 跑几个月能堆到几个 GB。策略见 core.bootstrap.prune_debug_artifacts。
+
+    ★ 它只在**没有执行用例**时真的动手(用户要求 2026-10-12: "清理产物封顶…需要在工具
+      没有执行用例时去做, 减少内存占用")。启动后台线程与"用户开机就点执行"很容易重叠,
+      闸门会把这一趟推迟到本轮跑完再做(见 core/idle.py), 这里不用额外判断。
     """
     import threading
 
@@ -131,6 +135,8 @@ def main():
     from gui.main_window import MainWindow
 
     ensure_data_dirs()      # 首次运行: 把 config/locators.yaml 等程序资源铺到数据目录
+    # ★ 更新残渣清理同样过"空闲闸门"(用户 2026-10-12): 这里在窗口出现前跑, 正常是空闲的;
+    #   万一有执行线程在跑, 它会把自己推迟到本轮结束(见 core/idle.py)。
     cleanup_update_leftovers(os.path.dirname(os.path.abspath(sys.argv[0])))
     setup_logger()
     _run_backup_async()

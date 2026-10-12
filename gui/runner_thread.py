@@ -165,6 +165,12 @@ class RunWorker(QThread):
     def run(self):
         # ★ 不再自己挂日志 handler —— MainWindow 已有全局转发(_attach_log_handler),
         #   两边都挂会让同一条日志在运行日志里显示两遍。log_line 信号保留兼容。
+        # ★ 「空闲闸门」: 从这里到 finally 之间算"正在执行用例" —— 封顶清理/更新残渣
+        #   清理会推迟到本轮结束再做(用户要求 2026-10-12: 减少执行期间的内存占用,
+        #   见 core/idle.py)。begin/end 必须成对, 所以 end 放在 finally 里 ——
+        #   少放一次, 清理就永久不做了。
+        from core import idle
+        idle.begin_run()
         report = None
         report_saved = False
         try:
@@ -331,3 +337,6 @@ class RunWorker(QThread):
                     self.status.emit(f"报告已生成(部分执行): {report.path}")
                 except Exception:
                     pass
+            # ★ 收尾: 本轮结束 = 空闲了, 把运行期间推迟的封顶清理补做一遍(后台线程)。
+            #   放在 finally 的最后 —— 报告都已落盘, 清理看到的是完整产物。
+            idle.end_run()

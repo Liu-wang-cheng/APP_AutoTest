@@ -13,6 +13,13 @@
 
 ★ 幂等
   已存在的一律不动(用户改过的配置不能被覆盖)。开发环境下源与目标同目录, 直接跳过。
+
+★ 清理类操作一律先过「空闲闸门」(core/idle.py, 用户要求 2026-10-12)
+  `cleanup_update_leftovers` / `cleanup_old_backup` / `prune_debug_artifacts` /
+  `prune_run_artifacts` / `trim_failures` / `trim_traces` / `trim_case_screenshots`
+  开头都有一行 `idle.is_busy()` —— 正在执行用例时**推迟**到本轮结束再做, 免得目录遍历
+  与跑用例的内存峰值撞在一起。**新增清理函数请照做**, 否则它就成了漏网的那个。
+  注意: 这里只做"推迟", 不做"跳过" —— 封顶最终一定会执行(见 end_run 的补做)。
 """
 import os
 import re
@@ -75,6 +82,10 @@ def cleanup_old_backup(app_dir=None):
     ★ 顺带收 `_update.bat`: 启动时它还在运行(不能删), 此刻必然已经跑完。
     """
     import glob as _glob
+    from core import idle
+    if idle.is_busy():                      # 正在跑用例 → 推迟(见 core/idle.py)
+        idle.defer("清理更新残渣", lambda: cleanup_old_backup(app_dir))
+        return []
     root = _app_root(app_dir)
     if not root:
         return []
@@ -128,6 +139,10 @@ def cleanup_update_leftovers(app_dir=None):
     """
     # ★ app_dir 必须单独判断 —— 写成 `app_dir or X if frozen else ""` 会被解析成
     #   `(app_dir or X) if frozen else ""`: 未打包时 app_dir 被整个丢掉, 清理落空
+    from core import idle
+    if idle.is_busy():                      # 正在跑用例 → 推迟(见 core/idle.py)
+        idle.defer("清理更新残留", lambda: cleanup_update_leftovers(app_dir))
+        return []
     root = _app_root(app_dir)
     if not root:
         return []
@@ -289,10 +304,18 @@ def prune_debug_artifacts(app_dir=None, keep_per_dir=DEBUG_KEEP_PER_DIR,
 
     返回 (删掉的文件数, 释放的字节数)。任何异常都吞掉 —— 清理绝不能影响启动。
 
+    ★ 正在执行用例时**推迟**(用户要求 2026-10-12, 见 core/idle.py): 这里要遍历并
+      stat 整个 Test_img/debug 树, 与跑用例的内存峰值撞在一起没必要。
+
     ★ 为什么要它: 模板点击标记(每次模板点击一张)、失败截图、失败前时序证据都落在
       Test_img/debug/ 下; 跑几个月能堆到几个 GB, 而它们只是**排查用**的中间产物。
       测试期有 conftest 每轮清, 打包版没有 —— 这里补上。
     """
+    from core import idle
+    if idle.is_busy():
+        idle.defer("调试产物封顶",
+                   lambda: prune_debug_artifacts(app_dir, keep_per_dir, max_total_mb))
+        return 0, 0
     root = _app_root(app_dir)
     if not root:
         return 0, 0
@@ -388,6 +411,14 @@ def prune_run_artifacts(app_dir=None, keep_runs=None, max_total_mb=None,
     fail_keep = REPORT_FAIL_SHOTS_KEEP if fail_keep is None else fail_keep
     root = _app_root(app_dir)
     if not root:
+        return 0, 0, 0
+    # ★ 正在执行用例 → 整个推迟(用户要求 2026-10-12, 见 core/idle.py): 这一趟要走遍
+    #   Test_cases 下所有组的 screenshots 树并逐个 stat, 是最重的一处清理。
+    from core import idle
+    if idle.is_busy():
+        idle.defer("运行产物封顶",
+                   lambda: prune_run_artifacts(app_dir, keep_runs, max_total_mb,
+                                               report_keep, fail_keep))
         return 0, 0, 0
     # ★ 顺带把 Test_img/debug(点击标记/失败截图/时序证据)也封顶 —— 同一个入口, 启动跑一次
     prune_debug_artifacts(app_dir)
@@ -490,9 +521,19 @@ def keep_newest(paths, keep):
 
 
 def trim_failures(failures_dir, keep=None):
-    """失败截图目录: 只留最新 N 张(写新图后立刻调用 → 循环覆盖)"""
+    """失败截图目录: 只留最新 N 张(写新图后立刻调用 → 循环覆盖)
+
+    ★ 正在执行用例时推迟(用户要求 2026-10-12): 它虽然只列一个目录, 但**目录常驻**
+      这份工作不紧急, 统一挪到本轮结束(见 core/idle.py)更省事。
+      安全性: 失败截图按用例名存(reports/failures/<用例名>.png), 同一个用例反复失败
+      只覆盖同一张 —— 推迟到本轮结束不会堆出多余文件。
+    """
     keep = REPORT_FAIL_SHOTS_KEEP if keep is None else keep
     if not failures_dir or not os.path.isdir(failures_dir):
+        return 0, 0
+    from core import idle
+    if idle.is_busy():
+        idle.defer("失败截图循环", lambda: trim_failures(failures_dir, keep))
         return 0, 0
     files = [os.path.join(failures_dir, f) for f in os.listdir(failures_dir)
              if os.path.isfile(os.path.join(failures_dir, f))]
@@ -507,9 +548,16 @@ def trim_traces(failures_dir, keep=None):
     各留最新 N 个, 写一次就回收一次 → 到上限循环覆盖。
 
     ★ 两类都放这里(一个目录一种用途), 所以一起管 —— 只限目录会漏掉那些单张 PNG。
+    ★ 正在执行用例时推迟(用户要求 2026-10-12)。安全性同上: 时序证据目录是
+      `<用例名>_trace`(每用例一个, 反复失败只覆盖自己), 逐步失败截图也带用例名前缀 ——
+      推迟到本轮结束不会无限堆。
     """
     keep = TRACE_KEEP if keep is None else keep
     if not failures_dir or not os.path.isdir(failures_dir):
+        return 0, 0
+    from core import idle
+    if idle.is_busy():
+        idle.defer("失败证据循环", lambda: trim_traces(failures_dir, keep))
         return 0, 0
     entries = [os.path.join(failures_dir, x) for x in os.listdir(failures_dir)]
     dirs = [p for p in entries if os.path.isdir(p)]
@@ -524,9 +572,18 @@ def trim_traces(failures_dir, keep=None):
 
 
 def trim_case_screenshots(shots_dir, case_name="", keep=None):
-    """某个用例的截图: 只留最新 N 次执行的目录(每次执行结束后调用 → 循环覆盖)"""
+    """某个用例的截图: 只留最新 N 次执行的目录(每次执行结束后调用 → 循环覆盖)
+
+    ★ 正在执行用例时推迟(用户要求 2026-10-12): 本来它就是"每次执行结束后"调的,
+      挪到本轮**真正结束**再统一做, 顺带把这一轮所有用例的截图一起收(见 core/idle.py)。
+    """
     keep = SCREENSHOT_KEEP_RUNS if keep is None else keep
     if not shots_dir or not os.path.isdir(shots_dir):
+        return 0, 0
+    from core import idle
+    if idle.is_busy():
+        idle.defer("截图循环",
+                   lambda: trim_case_screenshots(shots_dir, case_name, keep))
         return 0, 0
     dirs = []
     for name in os.listdir(shots_dir):

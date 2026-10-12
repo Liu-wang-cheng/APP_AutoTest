@@ -212,6 +212,22 @@ def _isolate_base_dir(monkeypatch, tmp_path):
     yield
 
 
+@pytest.fixture(autouse=True)
+def _reset_idle_gate():
+    """每个测试前后把「空闲闸门」清零(core/idle.py)。
+
+    ★ 为什么必须: 闸门是**模块级全局状态** —— 某条测试跑了 RunWorker(进入执行态)或
+      排队了一件推迟的清理, 若不清掉, 下一条测试的清理就会被莫名推迟/补做, 变成
+      难查的顺序依赖。
+    ★ 只丢弃排队项、**不执行**它们: 那些清理此刻指向的是上一条测试的临时目录, 补做
+      没有意义, 还可能在别的测试里凭空删文件。
+    """
+    from core import idle
+    idle.reset()
+    yield
+    idle.reset()
+
+
 @pytest.fixture(scope="session", autouse=True)
 def _isolate_log_file(tmp_path_factory):
     """测试期日志写到临时文件, 不污染用户的 reports/test.log。
