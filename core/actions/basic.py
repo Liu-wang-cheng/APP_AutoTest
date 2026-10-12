@@ -362,11 +362,18 @@ def do_if_impl(runner, step, negate):
     log.info(f"[if{'(not)' if negate else ''}] 条件{'成立' if passed else '不成立'}"
              f"({condition!r}) → {what}")
 
-    _run_branch(runner, then_branch if passed else else_branch)
+    if passed:
+        _run_branch(runner, then_branch, "条件成立")
+    else:
+        _run_branch(runner, else_branch, "条件不成立")
 
 
-def _run_branch(runner, steps):
+def _run_branch(runner, steps, label=""):
     """执行 if 的某个分支子步骤(条件成立→`then`, 不成立→`else`)。
+
+    label: 分支的中文名("条件成立"/"条件不成立") —— **会加在每条子步骤描述前面**。
+      ★ 用户 2026-10-12: "if 分支下 then/else 子分支执行的步骤没有在测试步骤中标注一下,
+        不好区分" —— 结果表/报告里子步骤原来和普通步骤长得一样, 看不出属于哪个分支。
 
     ★ 子结果进 `_pending_sub_results`, 由 `_execute` 追加到结果表; 子步骤失败直接抛,
       由主循环按重试/失败流程处理。
@@ -380,8 +387,9 @@ def _run_branch(runner, steps):
         runner._pending_sub_results = None
         return
     runner._pending_sub_results = []
+    prefix = f"[{label}] " if label else ""
     for s in steps:
-        desc = s.get("desc", runner._step_desc(s))
+        desc = prefix + str(s.get("desc", runner._step_desc(s)))
         ss = ""
         try:
             ss = runner._execute(s) or ""

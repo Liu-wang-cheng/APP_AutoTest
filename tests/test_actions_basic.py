@@ -153,7 +153,8 @@ def test_if_else_branch_runs_when_condition_absent(runner):
         "else": [{"desc": "else步骤1", "click": [10, 20]}],
     })
     assert runner.d.clicked_at == (10, 20)
-    assert runner._pending_sub_results[0]["desc"] == "else步骤1"
+    # 子步骤描述带分支标记(用户要求 2026-10-12: 结果表里要分得清属于哪个分支)
+    assert runner._pending_sub_results[0]["desc"] == "[条件不成立] else步骤1"
 
 
 def test_if_branch_skips_when_condition_present(runner):
@@ -239,7 +240,7 @@ def test_if_runs_then_branch_when_condition_holds(runner):
                      "then": [{"desc": "成立时做", "click": [10, 20]}],
                      "else": [{"desc": "不该走", "click": [99, 99]}]})
     assert runner.d.clicked_at == (10, 20), runner.d.clicked_at
-    assert [r["desc"] for r in runner._pending_sub_results] == ["成立时做"]
+    assert [r["desc"] for r in runner._pending_sub_results] == ["[条件成立] 成立时做"]
 
 
 def test_if_runs_else_branch_when_condition_fails(runner):
@@ -248,7 +249,7 @@ def test_if_runs_else_branch_when_condition_fails(runner):
                      "then": [{"desc": "不该走", "click": [10, 20]}],
                      "else": [{"desc": "不成立时做", "click": [77, 88]}]})
     assert runner.d.clicked_at == (77, 88), runner.d.clicked_at
-    assert [r["desc"] for r in runner._pending_sub_results] == ["不成立时做"]
+    assert [r["desc"] for r in runner._pending_sub_results] == ["[条件不成立] 不成立时做"]
 
 
 @pytest.mark.parametrize("key,cond", [("if", "确认"), ("if not", "不存在的文本")])
@@ -268,7 +269,7 @@ def test_if_not_then_branch_uses_negated_condition(runner):
     runner._execute({"if not": "不存在的文本",
                      "then": [{"desc": "取反后成立", "click": [33, 44]}]})
     assert runner.d.clicked_at == (33, 44), runner.d.clicked_at
-    assert [r["desc"] for r in runner._pending_sub_results] == ["取反后成立"]
+    assert [r["desc"] for r in runner._pending_sub_results] == ["[条件成立] 取反后成立"]
 
 
 def test_if_then_branch_failure_propagates(runner):
@@ -463,3 +464,32 @@ def test_if_numeric_condition_retries_until_it_holds(runner, monkeypatch):
     runner._execute({"if": "电量 > 50", "else": [{"desc": "不该走"}]})
     assert seq["n"] == 4, seq
     assert not runner._pending_sub_results
+
+
+def test_branch_substeps_are_labelled_in_results(runner):
+    """★ then/else 子步骤的结果描述要带**分支标记**, 否则结果表/报告里分不清归属。
+
+    用户 2026-10-12: "if 分支下 then/else 子分支执行的步骤没有在测试步骤中标注一下, 不好区分"。
+    期望: 成立时子步骤显示 `[条件成立] xxx`, 不成立时显示 `[条件不成立] xxx`。
+    """
+    # 条件成立 → then 分支(带标记)
+    runner._execute({"if": "确认",
+                     "then": [{"desc": "成立时点一下", "click": [10, 20]}],
+                     "else": [{"desc": "不该走", "click": [99, 99]}]})
+    assert [r["desc"] for r in runner._pending_sub_results] == ["[条件成立] 成立时点一下"], \
+        runner._pending_sub_results
+    assert runner.d.clicked_at == (10, 20)
+
+    # 条件不成立 → else 分支(带标记)
+    runner._execute({"if": "不存在的文本",
+                     "then": [{"desc": "不该走", "click": [10, 20]}],
+                     "else": [{"desc": "不成立时点一下", "click": [77, 88]}]})
+    assert [r["desc"] for r in runner._pending_sub_results] == ["[条件不成立] 不成立时点一下"], \
+        runner._pending_sub_results
+    assert runner.d.clicked_at == (77, 88)
+
+    # if not 同样按"取反后"的分支标注
+    runner._execute({"if not": "不存在的文本",
+                     "then": [{"desc": "取反后成立", "click": [33, 44]}]})
+    assert [r["desc"] for r in runner._pending_sub_results] == ["[条件成立] 取反后成立"], \
+        runner._pending_sub_results
