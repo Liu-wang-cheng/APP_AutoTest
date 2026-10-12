@@ -102,6 +102,19 @@ def _start_memlog():
         pass
 
 
+def _install_crashlog():
+    """装崩溃取证(原生崩溃栈 / 未捕获异常 / Qt 消息) —— 见 core/crashlog.py。
+
+    ★ 为什么: 用户跑到第 19 轮时进程静默消失, 日志里连一行报错都没有 —— 没有取证手段
+      就只能猜。装好之后三种"闪退"来源各自都会留痕。
+    """
+    try:
+        from core import crashlog
+        crashlog.install()
+    except Exception:
+        pass
+
+
 def main():
     _detach_console()
 
@@ -124,6 +137,7 @@ def main():
     _run_ocr_selfcheck_async()
     _prune_debug_async()
     _start_memlog()
+    _install_crashlog()
     app = QApplication(sys.argv)
     # 应用图标(任务栏/窗口):自绘 乐动品牌融合(O传感器+对勾);ico 含 16~256 多尺寸
     # ★ 不要在 main() 里再 `import os` —— 函数内 import 会把 os 变成**整个函数**
@@ -140,7 +154,12 @@ def main():
     win.show()
     win.raise_()
     win.activateWindow()
-    return app.exec()
+    rc = app.exec()
+    # ★ 留痕: 能走到这里 = **界面主循环正常结束**(正常退出)。排查"闪退"时, 没有这行
+    #   又没有"[退出] 收到关窗请求", 就说明进程是被硬结束的(见 core/crashlog.py)。
+    from core.logger import get_logger as _gl
+    _gl().info("[退出] 界面主循环结束, 进程正常退出")
+    return rc
 
 
 if __name__ == "__main__":

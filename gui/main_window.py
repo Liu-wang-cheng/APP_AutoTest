@@ -2224,6 +2224,9 @@ class MainWindow(QMainWindow):
             self._update_message("更新失败", "替换脚本不存在，请重新检查更新。",
                                  kind="error")
             return
+        # ★ 留痕: 这行之后本进程会 os._exit(0)(静默退出) —— 有这行才说明是**更新重启**,
+        #   而不是崩溃(见 core/crashlog.py)。
+        log.info("[退出] 应用更新: 已启动替换脚本, 本进程即将退出并自动重启")
         import subprocess
         subprocess.Popen(
             ["cmd", "/c", bat],
@@ -4134,6 +4137,9 @@ class MainWindow(QMainWindow):
             self.worker = None
 
     def closeEvent(self, event):
+        # ★ 留痕: 日志里出现这行 = **用户正常关窗**(不是崩溃/被杀)。下次排查"闪退"时,
+        #   没有这行又有其它退出迹象, 就说明进程是被硬结束的(见 core/crashlog.py)。
+        log.info("[退出] 收到关窗请求")
         self._save_expanded_groups()      # 关窗前记住组展开状态(下次打开还原)
         self._cleanup_update_backups()    # 正常关窗 = 本次更新确实可用, 可以扔掉旧版本
         if self.worker:
