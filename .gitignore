@@ -23,3 +23,6 @@ backups/
 # 构建/发版日志(偶发产物, 不进仓库)
 build*.log
 release*.log
+
+# Claude Code 配置目录(本机设置, 不入库)
+.claude/
