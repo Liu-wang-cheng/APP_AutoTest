@@ -278,6 +278,8 @@ class RunWorker(QThread):
                             os.makedirs(fail_dir, exist_ok=True)
                             try:
                                 d.screenshot(os.path.join(fail_dir, f"{case_name}.png"))
+                                from core import bootstrap as _bs
+                                _bs.trim_failures(fail_dir)      # 到上限就循环覆盖最旧的
                             except Exception:
                                 pass
                             self.status.emit(f"用例失败: {case_name}")
@@ -286,6 +288,14 @@ class RunWorker(QThread):
                         self.status.emit(f"用例通过: {case_name}")
                         self.case_finished.emit(fp, case_name, True)   # 状态灯 → 绿
 
+            # ★ 每次执行结束后把该用例的旧截图目录循环掉(到上限就覆盖最旧的)
+            try:
+                from core import bootstrap as _bs, vision as _vs
+                _bs.trim_case_screenshots(
+                    os.path.join(BASE_DIR, "Test_cases", _vs.current_app_group() or "未分组",
+                                 "screenshots"), case_name=case_name)
+            except Exception:
+                pass
             report.save()
             report_saved = True
             self.status.emit(f"报告已生成: {report.path}")

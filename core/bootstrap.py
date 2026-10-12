@@ -266,6 +266,7 @@ def _ensure_update_section(cfg_path):
 #: 长期跑下来会慢慢堆满盘(打包版没有测试期那套清理)。
 DEBUG_KEEP_PER_DIR = 200          # 每个子目录最多留最新的 200 个文件
 DEBUG_MAX_TOTAL_MB = 300          # 整个 debug 目录最多占 300MB(超了按最旧优先删)
+TRACE_KEEP = 50                   # 失败时序证据目录最多保留多少个(每个目录里还有 8 张 JPEG)
 
 
 def _debug_entries(debug_dir):
@@ -324,6 +325,18 @@ def prune_debug_artifacts(app_dir=None, keep_per_dir=DEBUG_KEEP_PER_DIR,
             if p in dead and _remove(p):
                 n += 1
                 freed += size
+        # ★ 失败时序证据目录(<用例>_trace/)也按**个数**保留 —— 只按"每个目录里的文件数"限,
+        #   目录本身会一直攒(用户 2026-10-12: "多了也无用")。
+        trace_root = os.path.join(debug_dir, "failures")
+        if os.path.isdir(trace_root):
+            traces = [os.path.join(trace_root, n) for n in os.listdir(trace_root)
+                      if os.path.isdir(os.path.join(trace_root, n))]
+            traces.sort(key=lambda x: os.path.getmtime(x), reverse=True)
+            for old_t in traces[TRACE_KEEP:]:
+                n2, b2 = _tree_size(old_t)
+                if _rm_tree(old_t):
+                    n += 1 + n2
+                    freed += b2
         # 顺手收掉空目录
         for root2, dirs, files in os.walk(debug_dir, topdown=False):
             if root2 != debug_dir and not os.listdir(root2):
@@ -343,7 +356,7 @@ def prune_debug_artifacts(app_dir=None, keep_per_dir=DEBUG_KEEP_PER_DIR,
 SCREENSHOT_KEEP_RUNS = 10         # 每个用例最多保留最近多少"次执行"的截图目录
 SCREENSHOT_MAX_TOTAL_MB = 1024    # 所有用例截图目录合计上限(超了按最旧优先删)
 REPORT_KEEP = 20                  # 最多保留多少份报告
-REPORT_FAIL_SHOTS_KEEP = 200      # 失败截图最多保留多少张
+REPORT_FAIL_SHOTS_KEEP = 50       # 失败截图最多保留多少张(用户 2026-10-12: 50)
 
 
 def _rm_tree(path):
@@ -354,10 +367,8 @@ def _rm_tree(path):
         return False
 
 
-def prune_run_artifacts(app_dir=None, keep_runs=SCREENSHOT_KEEP_RUNS,
-                        max_total_mb=SCREENSHOT_MAX_TOTAL_MB,
-                        report_keep=REPORT_KEEP,
-                        fail_keep=REPORT_FAIL_SHOTS_KEEP):
+def prune_run_artifacts(app_dir=None, keep_runs=None, max_total_mb=None,
+                        report_keep=None, fail_keep=None):
     """给"跑出来的产物"封顶: 用例截图按执行次数保留 + 报告/失败截图按份数保留。
 
     返回 (删掉的目录数, 删掉的文件数, 释放字节数)。任何异常都吞掉(绝不影响启动)。
@@ -369,6 +380,12 @@ def prune_run_artifacts(app_dir=None, keep_runs=SCREENSHOT_KEEP_RUNS,
           所有用例合计超过上限时, 按目录时间最旧优先整目录删。
         · reports/ 下: 报告文件保留最近 N 份; reports/failures/ 的失败截图保留最近 M 张。
     """
+    # ★ 阈值在**调用时**读取(不是写进默认参数): 默认参数在导入时就绑定了, 改不动,
+    #   测试/调优都没法覆盖。
+    keep_runs = SCREENSHOT_KEEP_RUNS if keep_runs is None else keep_runs
+    max_total_mb = SCREENSHOT_MAX_TOTAL_MB if max_total_mb is None else max_total_mb
+    report_keep = REPORT_KEEP if report_keep is None else report_keep
+    fail_keep = REPORT_FAIL_SHOTS_KEEP if fail_keep is None else fail_keep
     root = _app_root(app_dir)
     if not root:
         return 0, 0, 0
@@ -455,3 +472,69 @@ def _tree_size(path):
             n += 1
             size += _file_size(os.path.join(r, f))
     return n, size
+
+
+def keep_newest(paths, keep):
+    """只保留最新 keep 个(按 mtime), 其余删掉 —— 返回 (删了几个, 释放多少字节)。
+
+    ★ "到上限就循环覆盖"是**写的时候**做的(见下面三个 trim_*): 启动时那一次只是兜底 ——
+      否则一次长时间运行里连着失败几十次, 图片会先涨过上限、等到下次启动才被清掉。
+    """
+    removed = freed = 0
+    for p in sorted(paths, key=lambda x: os.path.getmtime(x), reverse=True)[keep:]:
+        size = _tree_size(p)[1] if os.path.isdir(p) else _file_size(p)
+        if _rm_tree(p) if os.path.isdir(p) else _remove(p):
+            removed += 1
+            freed += size
+    return removed, freed
+
+
+def trim_failures(failures_dir, keep=None):
+    """失败截图目录: 只留最新 N 张(写新图后立刻调用 → 循环覆盖)"""
+    keep = REPORT_FAIL_SHOTS_KEEP if keep is None else keep
+    if not failures_dir or not os.path.isdir(failures_dir):
+        return 0, 0
+    files = [os.path.join(failures_dir, f) for f in os.listdir(failures_dir)
+             if os.path.isfile(os.path.join(failures_dir, f))]
+    n, freed = keep_newest(files, keep)
+    if n:
+        log.info(f"[清理] 失败截图循环: 删最旧 {n} 张, 释放 {freed / 1048576:.1f}MB")
+    return n, freed
+
+
+def trim_traces(failures_dir, keep=None):
+    """失败证据目录(Test_img/debug/failures/): **子目录(时序证据)与文件(逐步失败截图)**
+    各留最新 N 个, 写一次就回收一次 → 到上限循环覆盖。
+
+    ★ 两类都放这里(一个目录一种用途), 所以一起管 —— 只限目录会漏掉那些单张 PNG。
+    """
+    keep = TRACE_KEEP if keep is None else keep
+    if not failures_dir or not os.path.isdir(failures_dir):
+        return 0, 0
+    entries = [os.path.join(failures_dir, x) for x in os.listdir(failures_dir)]
+    dirs = [p for p in entries if os.path.isdir(p)]
+    files = [p for p in entries if os.path.isfile(p)]
+    n1, f1 = keep_newest(dirs, keep)
+    n2, f2 = keep_newest(files, keep)
+    n, freed = n1 + n2, f1 + f2
+    if n:
+        log.info(f"[清理] 失败证据循环: 删最旧 {n} 项(目录 {n1} / 文件 {n2}), "
+                 f"释放 {freed / 1048576:.1f}MB")
+    return n, freed
+
+
+def trim_case_screenshots(shots_dir, case_name="", keep=None):
+    """某个用例的截图: 只留最新 N 次执行的目录(每次执行结束后调用 → 循环覆盖)"""
+    keep = SCREENSHOT_KEEP_RUNS if keep is None else keep
+    if not shots_dir or not os.path.isdir(shots_dir):
+        return 0, 0
+    dirs = []
+    for name in os.listdir(shots_dir):
+        p = os.path.join(shots_dir, name)
+        if os.path.isdir(p) and (not case_name or name.rsplit("-第", 1)[0] == case_name):
+            dirs.append(p)
+    n, freed = keep_newest(dirs, keep)
+    if n:
+        log.info(f"[清理] 截图循环: {case_name or '全部用例'} 删最旧 {n} 次, "
+                 f"释放 {freed / 1048576:.1f}MB")
+    return n, freed

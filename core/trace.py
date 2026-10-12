@@ -71,6 +71,13 @@ class TraceRecorder:
             with open(os.path.join(out_dir, "steps.txt"), "w", encoding="utf-8") as f:
                 f.write("\n".join(lines) + "\n")
             log.error(f"[诊断] 失败前 {len(lines)} 步的时序证据已保存: {out_dir}")
+            # ★ 写到上限就**循环覆盖**最旧的时序证据目录(用户要求 2026-10-12);
+            #   放在 return 之前 —— 放后面就成了不可达代码。
+            try:
+                from core import bootstrap as _bs
+                _bs.trim_traces(root)
+            except Exception:
+                pass
             return out_dir
         except Exception as e:
             log.warning(f"[trace] 落盘失败: {e}")

@@ -977,3 +977,101 @@ def test_prune_run_artifacts_caps_total_and_reports(tmp_path, monkeypatch):
     assert left == ["甲用例-第2次", "甲用例-第3次"], left      # 2KB 上限 → 只剩最新两个
     assert sorted(p.name for p in reps.glob("*.xlsx")) == ["report_3.xlsx", "report_4.xlsx"]
     assert sorted(p.name for p in (reps / "failures").iterdir()) == ["c3.png"]
+
+
+def test_failure_shots_and_trace_dirs_capped_at_twenty(tmp_path, monkeypatch):
+    """★ 失败截图与失败时序证据目录都只留 20 个(用户 2026-10-12: "失败截图改为20张, 多了也无用")
+
+    时序证据是**目录**(<用例>_trace/ 里面还有 8 张 JPEG), 只按"目录里的文件数"限会让
+    目录本身一直攒 —— 所以按**目录个数**也要封顶。
+    """
+    import os as _os
+    from core import bootstrap
+    monkeypatch.setattr(bootstrap, "_app_root", lambda app_dir=None: str(tmp_path))
+    monkeypatch.setattr(bootstrap, "TRACE_KEEP", 2)
+    monkeypatch.setattr(bootstrap, "REPORT_FAIL_SHOTS_KEEP", 2)
+
+    # ① reports/failures 下的失败截图
+    fdir = tmp_path / "reports" / "failures"
+    fdir.mkdir(parents=True)
+    for i in range(5):
+        f = fdir / f"用例{i}.png"
+        f.write_bytes(b"s")
+        _os.utime(f, (1000 + i, 1000 + i))
+    # ② 时序证据目录(Test_img/debug/failures)
+    tdir = tmp_path / "Test_img" / "debug" / "failures"
+    for i in range(5):
+        d = tdir / f"用例{i}_trace"
+        d.mkdir(parents=True)
+        (d / "step.jpg").write_bytes(b"j")
+        _os.utime(d, (2000 + i, 2000 + i))
+
+    bootstrap.prune_run_artifacts()          # 内部会连带跑 prune_debug_artifacts
+
+    assert sorted(p.name for p in fdir.iterdir()) == ["用例3.png", "用例4.png"], \
+        sorted(p.name for p in fdir.iterdir())
+    assert sorted(p.name for p in tdir.iterdir()) == ["用例3_trace", "用例4_trace"], \
+        sorted(p.name for p in tdir.iterdir())
+
+
+def test_caps_are_fifty_and_recycle_at_write_time(tmp_path, monkeypatch):
+    """★ 上限 50, 且"到上限就**循环覆盖**最旧的"是**写的时候**做的, 不是等下次启动。
+
+    用户 2026-10-12: "失败截图改为50张, 按上限循环存储" —— 一次长时间运行里连着失败几十次时,
+    图片必须先涨过上限、等到下次启动才被清掉是不行的。
+    """
+    import os as _os
+    from core import bootstrap
+    monkeypatch.setattr(bootstrap, "_app_root", lambda app_dir=None: str(tmp_path))
+    assert bootstrap.REPORT_FAIL_SHOTS_KEEP == 50, bootstrap.REPORT_FAIL_SHOTS_KEEP
+    assert bootstrap.TRACE_KEEP == 50, bootstrap.TRACE_KEEP
+
+    # ① 失败截图: 写第 51 张后调 trim → 只剩最新 50 张
+    fdir = tmp_path / "reports" / "failures"
+    fdir.mkdir(parents=True)
+    for i in range(51):
+        f = fdir / f"用例{i:02d}.png"
+        f.write_bytes(b"s")
+        _os.utime(f, (1000 + i, 1000 + i))
+    n, _freed = bootstrap.trim_failures(str(fdir))
+    left = sorted(p.name for p in fdir.iterdir())
+    assert n == 1 and len(left) == 50, (n, len(left))
+    assert "用例00.png" not in left and "用例50.png" in left, left
+
+    # ② 时序证据目录同理(每个目录里还有若干 JPEG)
+    tdir = tmp_path / "Test_img" / "debug" / "failures"
+    for i in range(51):
+        d = tdir / f"用例{i:02d}_trace"
+        d.mkdir(parents=True)
+        (d / "00_fail.jpg").write_bytes(b"j")
+        _os.utime(d, (2000 + i, 2000 + i))
+    # 同目录下还有**单张**失败截图(trace.failure_screenshot 写的), 也要一起循环
+    for i in range(51):
+        f = tdir / f"用例{i:02d}_step00_fail.png"
+        f.write_bytes(b"p")
+        _os.utime(f, (2500 + i, 2500 + i))
+    n2, _f = bootstrap.trim_traces(str(tdir))
+    left2 = sorted(p.name for p in tdir.iterdir())
+    assert n2 == 2, n2                      # 1 个旧目录 + 1 张旧截图
+    assert len(left2) == 100, len(left2)     # 50 目录 + 50 文件
+    assert "用例00_trace" not in left2 and "用例50_trace" in left2, left2
+    assert "用例00_step00_fail.png" not in left2, left2
+
+
+def test_case_screenshots_recycle_at_write_time(tmp_path, monkeypatch):
+    """用例截图: 每次执行结束后把该用例的旧执行目录循环掉(只留最新 10 次)"""
+    import os as _os
+    from core import bootstrap
+    monkeypatch.setattr(bootstrap, "_app_root", lambda app_dir=None: str(tmp_path))
+    shots = tmp_path / "Test_cases" / "组甲" / "screenshots"
+    for i in range(12):
+        d = shots / f"甲用例-第{i + 1}次"
+        d.mkdir(parents=True)
+        (d / "step01.png").write_bytes(b"x")
+        _os.utime(d, (3000 + i, 3000 + i))
+    (shots / "乙用例-第1次").mkdir()          # 别的用例: 不该被动
+    n, _freed = bootstrap.trim_case_screenshots(str(shots), case_name="甲用例")
+    left = sorted(p.name for p in shots.iterdir())
+    assert n == 2, n
+    assert "乙用例-第1次" in left and "甲用例-第1次" not in left, left
+    assert len([x for x in left if x.startswith("甲用例")]) == 10, left
