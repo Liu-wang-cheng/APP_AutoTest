@@ -164,14 +164,18 @@ ACTIONS = [
     {"key": "if", "label": "条件满足则跳过", "category": "流程控制", "fields": [
         {"key": "if", "label": "条件", "type": "text", "required": True,
          "hint": "文本(多个用逗号/顿号分隔, 中英文逗号均可) / 电量>50 / 图片名 / resource-id;条件成立跳过本步"},
-        {"key": "threshold", "label": "相似度阈值", "type": "float",
-         "hint": "条件为图片时,填写则用图像对比判断"},
+        # ★ 默认 1(用户要求 2026-10-12): 图片条件按"与基准图完全一致"判断。
+        #   只作用于**新建的**步骤 —— 老用例 YAML 里没写 threshold 的一律不动, 仍按原来的
+        #   "在页面里找这张模板图"判断(用户明确: "不用改 yaml 用例, 这个保持原状")。
+        {"key": "threshold", "label": "相似度阈值", "type": "float", "default": 1,
+         "hint": "条件为图片时用: 与基准图的相似度 ≥ 该值才算成立; 默认 1 = 完全一致"},
     ], "tip": "条件**成立**时执行 then 子步骤(没配 then 就跳过本步); **不成立**时执行 else "
             "子步骤。展开卡片后在下方分别添加/编辑"},
     {"key": "if not", "label": "条件不满足则跳过", "category": "流程控制", "fields": [
         {"key": "if not", "label": "条件", "type": "text", "required": True,
          "hint": "同「条件满足则跳过」,判断结果取反"},
-        {"key": "threshold", "label": "相似度阈值", "type": "float"},
+        {"key": "threshold", "label": "相似度阈值", "type": "float", "default": 1,
+         "hint": "同「条件满足则跳过」; 默认 1 = 完全一致"},
     ], "tip": "条件**取反后成立**时执行 then 子步骤(没配 then 就跳过本步); 不成立时执行 "
             "else 子步骤。展开卡片后在下方分别添加/编辑"},
 ]

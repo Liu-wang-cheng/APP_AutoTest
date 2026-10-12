@@ -165,6 +165,10 @@ QFrame#subStepCard { background: #f8fafc; border: 1px solid #e4e8ee; border-left
 QFrame#subStepCard:hover { border-color: #c6d2e6; }
 QFrame#subStepCardOpen { background: #f8fafc; border: 1px solid #2563eb; border-left: 3px solid #2563eb; border-radius: 6px; }
 QLabel#numLabel { color: #b0b9c6; font-weight: bold; font-size: 13px; }
+/* ★ if 子步骤卡片上的分支徽标(用户要求 2026-10-12): 展开后 then/else 的子卡片连排,
+   卡片头部原先看不出属于哪一支, 只能靠"往上找分组标题 + 顺序"推断。 */
+QLabel#branchBadge { color: #1d4ed8; background: #e0ebff; border-radius: 3px;
+                     padding: 1px 5px; font-size: 11px; }
 QLabel#chip { color: white; border-radius: 9px; padding: 2px 9px; font-size: 11px; }
 QLabel#summary { color: #1e293b; font-weight: bold; }
 QLabel#fieldLabel { color: #64748b; }
@@ -719,6 +723,16 @@ class StepCard(QFrame):
         num.setObjectName("numLabel")
         num.setAlignment(Qt.AlignCenter)
         head.addWidget(num)
+
+        # ★ if 子步骤标出所属分支(用户 2026-10-12: "if 分支的子步骤在测试步骤详情里也做了
+        #   区分吗")。then 全在前、else 全在后地缩进连排, 光看序号分不清第几张是 else 的第一
+        #   步; 这里补一个徽标, 与执行结果里的 `[条件成立]`/`[条件不成立]` 前缀对得上。
+        if self.is_sub:
+            badge = QLabel("▸then" if self.branch == "then" else "▸else")
+            badge.setObjectName("branchBadge")
+            badge.setToolTip("条件成立时执行的子步骤" if self.branch == "then"
+                             else "条件不成立时执行的子步骤")
+            head.addWidget(badge)
 
         action = self.main._find_action(self.step)
         color = CATEGORY_COLORS.get(action["category"], "#64748b") if action else "#94a3b8"
