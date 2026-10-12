@@ -81,8 +81,8 @@ def _prune_debug_async():
 
     def _work():
         try:
-            from core.bootstrap import prune_debug_artifacts
-            prune_debug_artifacts()
+            from core.bootstrap import prune_run_artifacts
+            prune_run_artifacts()          # 用例截图按次数 / 报告与失败截图按份数封顶
         except Exception:
             pass
 

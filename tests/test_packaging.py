@@ -914,3 +914,66 @@ def test_prune_debug_artifacts_is_safe_when_missing(tmp_path, monkeypatch):
     assert bootstrap.prune_debug_artifacts() == (0, 0)
     monkeypatch.setattr(bootstrap, "_app_root", lambda app_dir=None: "")
     assert bootstrap.prune_debug_artifacts() == (0, 0)
+
+
+# ── 运行产物封顶(用户 2026-10-12: "如何确保不会越来越大") ──
+
+def _mk_run(d, name, n_files=2, size=1024, mtime=None):
+    import os as _os
+    p = d / name
+    p.mkdir(parents=True, exist_ok=True)
+    for i in range(n_files):
+        f = p / f"step{i:02d}.png"
+        f.write_bytes(b"x" * size)
+        if mtime:
+            _os.utime(f, (mtime, mtime))
+    if mtime:
+        _os.utime(p, (mtime, mtime))
+    return p
+
+
+def test_prune_run_artifacts_keeps_recent_runs_per_case(tmp_path, monkeypatch):
+    """★ 每个用例只保留最近 N 次执行的截图目录, 更旧的整目录删; 不碰用例/模板"""
+    from core import bootstrap
+    monkeypatch.setattr(bootstrap, "_app_root", lambda app_dir=None: str(tmp_path))
+    shots = tmp_path / "Test_cases" / "组甲" / "screenshots"
+    for i in range(5):                       # 用例甲跑了 5 次
+        _mk_run(shots, f"甲用例-第{i + 1}次", mtime=1000 + i)
+    _mk_run(shots, "乙用例-第1次", mtime=1000)      # 另一个用例, 只跑过 1 次 → 不该被删
+    keep = tmp_path / "Test_cases" / "组甲" / "templates" / "按钮.png"
+    keep.parent.mkdir(parents=True)
+    keep.write_bytes(b"TPL")
+
+    dirs, files, freed = bootstrap.prune_run_artifacts(keep_runs=2)
+    left = sorted(p.name for p in shots.iterdir())
+    assert dirs == 3 and left == ["乙用例-第1次", "甲用例-第4次", "甲用例-第5次"], left
+    assert freed == 6 * 1024, freed
+    assert keep.exists(), "用例/模板被误删了"
+
+
+def test_prune_run_artifacts_caps_total_and_reports(tmp_path, monkeypatch):
+    """总体积超上限按最旧优先删; reports 按份数、失败截图按张数封顶"""
+    from core import bootstrap
+    monkeypatch.setattr(bootstrap, "_app_root", lambda app_dir=None: str(tmp_path))
+    shots = tmp_path / "Test_cases" / "组甲" / "screenshots"
+    for i in range(3):
+        _mk_run(shots, f"甲用例-第{i + 1}次", n_files=1, size=1024, mtime=2000 + i)
+    reps = tmp_path / "reports"
+    (reps / "failures").mkdir(parents=True)
+    for i in range(5):
+        f = reps / f"report_{i}.xlsx"
+        f.write_bytes(b"r")
+        import os as _os
+        _os.utime(f, (3000 + i, 3000 + i))
+    for i in range(4):
+        f = reps / "failures" / f"c{i}.png"
+        f.write_bytes(b"p")
+        import os as _os
+        _os.utime(f, (4000 + i, 4000 + i))
+
+    dirs, files, _freed = bootstrap.prune_run_artifacts(
+        keep_runs=9, max_total_mb=2 / 1024, report_keep=2, fail_keep=1)
+    left = sorted(p.name for p in shots.iterdir())
+    assert left == ["甲用例-第2次", "甲用例-第3次"], left      # 2KB 上限 → 只剩最新两个
+    assert sorted(p.name for p in reps.glob("*.xlsx")) == ["report_3.xlsx", "report_4.xlsx"]
+    assert sorted(p.name for p in (reps / "failures").iterdir()) == ["c3.png"]

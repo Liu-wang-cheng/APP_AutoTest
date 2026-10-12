@@ -337,3 +337,121 @@ def prune_debug_artifacts(app_dir=None, keep_per_dir=DEBUG_KEEP_PER_DIR,
     except Exception as e:          # 清理失败绝不能影响启动
         log.debug(f"[初始化] 调试产物清理跳过: {e}")
         return 0, 0
+
+
+#: 「跑出来的产物」封顶策略(用户要求 2026-10-12: "如何确保不会越来越大")
+SCREENSHOT_KEEP_RUNS = 10         # 每个用例最多保留最近多少"次执行"的截图目录
+SCREENSHOT_MAX_TOTAL_MB = 1024    # 所有用例截图目录合计上限(超了按最旧优先删)
+REPORT_KEEP = 20                  # 最多保留多少份报告
+REPORT_FAIL_SHOTS_KEEP = 200      # 失败截图最多保留多少张
+
+
+def _rm_tree(path):
+    try:
+        shutil.rmtree(path, ignore_errors=True)
+        return not os.path.exists(path)
+    except Exception:
+        return False
+
+
+def prune_run_artifacts(app_dir=None, keep_runs=SCREENSHOT_KEEP_RUNS,
+                        max_total_mb=SCREENSHOT_MAX_TOTAL_MB,
+                        report_keep=REPORT_KEEP,
+                        fail_keep=REPORT_FAIL_SHOTS_KEEP):
+    """给"跑出来的产物"封顶: 用例截图按执行次数保留 + 报告/失败截图按份数保留。
+
+    返回 (删掉的目录数, 删掉的文件数, 释放字节数)。任何异常都吞掉(绝不影响启动)。
+
+    ★ 为什么需要(2026-10-12 用户问"如何确保不会越来越大"): 每次点击都会留一张带标记的
+      截图(1080x1920 PNG ≈ 340KB), 一个用例一轮十几张 —— 不封顶的话一个月能堆几十 GB。
+      策略(只删**可以重跑出来的**东西, 绝不碰用例/模板/配置/备份):
+        · Test_cases/<组>/screenshots/<每次执行一个目录> → 每个用例保留最近 N 次;
+          所有用例合计超过上限时, 按目录时间最旧优先整目录删。
+        · reports/ 下: 报告文件保留最近 N 份; reports/failures/ 的失败截图保留最近 M 张。
+    """
+    root = _app_root(app_dir)
+    if not root:
+        return 0, 0, 0
+    # ★ 顺带把 Test_img/debug(点击标记/失败截图/时序证据)也封顶 —— 同一个入口, 启动跑一次
+    prune_debug_artifacts(app_dir)
+    dirs_removed = files_removed = freed = 0
+    try:
+        # ── ① 用例截图: 每次执行一个目录(可能叫 "用例名-第N次", 也可能是老版的 "用例名") ──
+        shot_dirs = []
+        cases_root = os.path.join(root, "Test_cases")
+        for group in (os.listdir(cases_root) if os.path.isdir(cases_root) else []):
+            gdir = os.path.join(cases_root, group, "screenshots")
+            if not os.path.isdir(gdir):
+                continue
+            # 目录名形如 "<用例名>-第N次"(2.0.6 起); 老版只有 "<用例名>" → 两者都按用例分组
+            by_case = {}
+            for name in os.listdir(gdir):
+                p = os.path.join(gdir, name)
+                if os.path.isdir(p):
+                    case = name.rsplit("-第", 1)[0]
+                    by_case.setdefault(case, []).append(p)
+            for plist in by_case.values():
+                plist.sort(key=os.path.getmtime, reverse=True)     # 新 → 旧
+                for old_run in plist[keep_runs:]:                  # 每个用例只留最近 N 次
+                    n, b = _tree_size(old_run)
+                    if _rm_tree(old_run):
+                        dirs_removed += 1
+                        files_removed += n
+                        freed += b
+                shot_dirs.extend(p for p in plist[:keep_runs] if os.path.isdir(p))
+        # ② 总容量兜底: 超上限 → 按目录时间最旧优先整目录删
+        total = sum(_tree_size(p)[1] for p in shot_dirs)
+        if total > max_total_mb * 1024 * 1024:
+            for p in sorted(shot_dirs, key=lambda x: os.path.getmtime(x)):   # 旧→新
+                if total <= max_total_mb * 1024 * 1024:
+                    break
+                n, b = _tree_size(p)
+                if _rm_tree(p):
+                    dirs_removed += 1
+                    files_removed += n
+                    freed += b
+                    total -= b
+        # ── ③ 报告文件: 保留最近 N 份 ──
+        rep_dir = os.path.join(root, "reports")
+        if os.path.isdir(rep_dir):
+            reports = [os.path.join(rep_dir, f) for f in os.listdir(rep_dir)
+                       if f.lower().endswith((".xlsx", ".xls"))]
+            reports.sort(key=lambda x: os.path.getmtime(x), reverse=True)
+            for old in reports[report_keep:]:
+                if _remove(old):
+                    files_removed += 1
+                    freed += _file_size(old)
+            # ── ④ 失败截图: 保留最近 M 张 ──
+            fdir = os.path.join(rep_dir, "failures")
+            if os.path.isdir(fdir):
+                shots = [os.path.join(fdir, f) for f in os.listdir(fdir)
+                         if os.path.isfile(os.path.join(fdir, f))]
+                shots.sort(key=lambda x: os.path.getmtime(x), reverse=True)
+                for old in shots[fail_keep:]:
+                    if _remove(old):
+                        files_removed += 1
+                        freed += _file_size(old)
+        if files_removed or dirs_removed:
+            log.info(f"[清理] 运行产物封顶: 删 {dirs_removed} 个旧截图目录 / {files_removed} 个文件, "
+                     f"释放 {freed / 1048576:.0f}MB")
+        return dirs_removed, files_removed, freed
+    except Exception as e:          # 清理失败绝不能影响启动
+        log.debug(f"[清理] 运行产物封顶跳过: {e}")
+        return dirs_removed, files_removed, freed
+
+
+def _file_size(p):
+    try:
+        return os.path.getsize(p)
+    except OSError:
+        return 0
+
+
+def _tree_size(path):
+    """(文件数, 总字节)"""
+    n = size = 0
+    for r, _d, files in os.walk(path):
+        for f in files:
+            n += 1
+            size += _file_size(os.path.join(r, f))
+    return n, size
