@@ -357,3 +357,30 @@ def test_preconditions_also_force_click_screenshots():
     src = open(_os.path.join(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))),
                              "core", "session.py"), encoding="utf-8").read()
     assert "click_shots=False" not in src, "前置又把它关掉了(用户要求前置也截图)"
+
+
+def test_step_start_event_fires_once_per_attempt(runner, monkeypatch):
+    """★ 步骤开始事件**一步一次**(重试则每轮各一次), 执行过程中**不再发**。
+
+    界面靠它插一行「执行中」, 跑完就地改成 PASS/FAIL(用户 2026-10-12 提的需求)。
+    ★ 如果哪天有人让它在执行期间周期性地发, 结果表就会一直重绘 → 用户看到的"闪动"
+      (用户当场就问过"执行中时会一直刷新吗, 是不是会闪动")。这条守住这个性质。
+    """
+    from core import registry as reg
+    starts = []
+    runner.on_step_start = lambda desc, attempt=1: starts.append((desc, attempt))
+    assert runner.run_steps([{"desc": "点一下", "click": "确认"}]) is True
+    assert starts == [("点一下", 1)], f"正常一步只该发一次开始事件: {starts}"
+
+    # 重试: 前两次失败、第三次成功 → 3 次开始事件(界面复用同一行显示"执行中(第N次)")
+    calls = {"n": 0}
+
+    def _flaky(r, s):
+        calls["n"] += 1
+        if calls["n"] < 3:
+            raise AssertionError("先失败")
+
+    monkeypatch.setattr(reg.ACTIONS["click"], "fn", _flaky)
+    starts.clear()
+    assert runner.run_steps([{"desc": "重试步骤", "click": "确认", "retry": 2}]) is True
+    assert starts == [("重试步骤", 1), ("重试步骤", 2), ("重试步骤", 3)], starts
