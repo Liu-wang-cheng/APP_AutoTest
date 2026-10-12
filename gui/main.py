@@ -165,7 +165,17 @@ def main():
     #   又没有"[退出] 收到关窗请求", 就说明进程是被硬结束的(见 core/crashlog.py)。
     from core.logger import get_logger as _gl
     _gl().info("[退出] 界面主循环结束, 进程正常退出")
-    return rc
+    # ★ 硬退出, 跳过解释器/C++ 析构(用户 2026-10-12 排查闪退时定位的第二类竞态):
+    #   正常退出时 MainWindow 被回收 → Qt 析构它的 children —— 设备扫描/更新检查/
+    #   更新下载这些 QThread 都挂在窗口下, **还在跑就被析构** = 和 RunWorker 同一个
+    #   qFatal("QThread: Destroyed while thread is still running") → 表现为"关窗闪退"
+    #   (下载更新要几分钟, 期间关窗必中)。无 parent 的 RunWorker 退出时同理。
+    #   os._exit 让"析构运行中的线程"这个前提不复存在; 日志每条 emit 即刻 flush,
+    #   关窗留痕在 closeEvent 里已落盘, 这里不丢东西。下载中断的半截文件由下次启动
+    #   的 cleanup_update_leftovers 接住(设计如此)。
+    import logging as _logging
+    _logging.shutdown()
+    os._exit(rc if isinstance(rc, int) else 0)
 
 
 if __name__ == "__main__":

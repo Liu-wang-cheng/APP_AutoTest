@@ -3742,6 +3742,9 @@ def test_on_run_finished_不在线程活着时丢worker引用(win, qapp):
     Qt 直接 qFatal("QThread: Destroyed while thread is still running") → 整个进程闪退
     (用户实测 2026-10-12: 2.0.7 点「停止」必闪退; 2.0.6 的尾巴短, 竞态几乎不输)。
 
+    ★ 手动停止与**自动跑完**走同一条路(emit 点在 run() 里的 4 处: 停止/全部通过/
+      存在失败/执行异常), 所以两种消息都钉 —— 用户追问过"自动结束会不会也闪退"。
+
     ★ 测试持有额外引用(ref)保进程不死 —— 否则真踩中这个 bug 时红的是整个 pytest
       而不是这一条断言。这里只验证引用的生命周期: 结束信号到达时挪进"退休区",
       QThread.finished(run() 真正返回)之后再放掉。
@@ -3753,35 +3756,41 @@ def test_on_run_finished_不在线程活着时丢worker引用(win, qapp):
     class _W(QThread):
         finished_run = QSignal(bool, str)
 
+        def __init__(self, message):
+            super().__init__()
+            self._message = message
+
         def run(self):
-            self.finished_run.emit(False, "已手动停止")
+            self.finished_run.emit(False, self._message)
             _time.sleep(1.5)           # 模拟 run() 在 emit 之后的收尾尾巴 —— 要比主线程
                                        # 槽函数的最坏延迟长(全量跑时有后台线程抢事件循环),
                                        # 否则断言"槽跑完时线程还在尾巴里"会变成调度竞态
 
-    w = _W()
-    ref = w                            # 保命引用: 实现有 bug 也不许析构运行中的线程
-    win.worker = w
-    w.finished_run.connect(win.on_run_finished)
-    w.start()
-    try:
-        deadline = _time.time() + 10
-        while win.worker is not None and _time.time() < deadline:
-            qapp.processEvents()
-            _time.sleep(0.01)
-        assert win.worker is None, "on_run_finished 没清 self.worker(解锁逻辑坏了)"
-        assert win._retired_worker is w, \
-            "worker 引用必须保到 QThread.finished(run() 真正返回)为止"
-        assert w.isRunning(), "此刻 run() 的收尾尾巴应该还在跑(模拟 1.5s)"
-        # 线程真正返回后, 退休引用必须放掉 —— 不许每轮漏一个 wrapper
-        deadline = _time.time() + 10
-        while win._retired_worker is not None and _time.time() < deadline:
-            qapp.processEvents()
-            _time.sleep(0.01)
-        assert win._retired_worker is None
-        assert not w.isRunning()
-    finally:
-        w.wait(3000)
+    for message in ("已手动停止",              # 手动停止路径
+                    "全部通过(1 轮 × 1 个用例)"):   # 自动跑完路径 —— 同一条 on_run_finished
+        w = _W(message)
+        ref = w                        # 保命引用: 实现有 bug 也不许析构运行中的线程
+        win.worker = w
+        w.finished_run.connect(win.on_run_finished)
+        w.start()
+        try:
+            deadline = _time.time() + 10
+            while win.worker is not None and _time.time() < deadline:
+                qapp.processEvents()
+                _time.sleep(0.01)
+            assert win.worker is None, "on_run_finished 没清 self.worker(解锁逻辑坏了)"
+            assert win._retired_worker is w, \
+                "worker 引用必须保到 QThread.finished(run() 真正返回)为止"
+            assert w.isRunning(), "此刻 run() 的收尾尾巴应该还在跑(模拟 1.5s)"
+            # 线程真正返回后, 退休引用必须放掉 —— 不许每轮漏一个 wrapper
+            deadline = _time.time() + 10
+            while win._retired_worker is not None and _time.time() < deadline:
+                qapp.processEvents()
+                _time.sleep(0.01)
+            assert win._retired_worker is None
+            assert not w.isRunning()
+        finally:
+            w.wait(3000)
 
 
 def test_stop_asks_for_confirmation(win, monkeypatch):
