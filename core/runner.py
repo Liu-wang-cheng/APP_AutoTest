@@ -110,6 +110,9 @@ class ActionRunner:
         #   0.5s 请求停止后仍跑满 4.0s)。用回调把取消意图穿透进来。
         self._cancel_check = cancel_check
         self.on_result = None    # 结果回调(GUI 实时推送用),签名 fn(result_dict)
+        #: 步骤**开始**回调: fn(desc, attempt) —— GUI 靠它先插一行「执行中」,
+        #  跑完再由 on_result 就地改成 PASS/FAIL(用户要求 2026-10-12)
+        self.on_step_start = None
         self.trace = TraceRecorder(case_name, config.get("trace_limit", 8))
         self.router = VisionRouter(config)
         self._locators = self._load_locators()
@@ -611,6 +614,11 @@ class ActionRunner:
                 if self.stopped:
                     break
                 self._ensure_device()
+                if self.on_step_start:
+                    try:
+                        self.on_step_start(desc, attempt + 1)
+                    except Exception as e:      # 回调异常不能影响执行
+                        log.debug(f"[on_step_start] 回调异常: {e}")
                 try:
                     screenshot = self._execute(step) or ""
                     if getattr(self, "_last_compare_msg", None):

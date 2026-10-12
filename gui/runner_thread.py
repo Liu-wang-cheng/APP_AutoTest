@@ -59,6 +59,8 @@ class _QtLogHandler(logging.Handler):
 
 class RunWorker(QThread):
     step_done = Signal(dict)          # 一条步骤结果 {"desc","passed","error","screenshot"}
+    #: 步骤**开始** → GUI 先插一行「执行中」, 跑完(step_done)再就地改成 PASS/FAIL
+    step_started = Signal(dict)
     log_line = Signal(str)
     status = Signal(str)              # 阶段状态(连接设备/前置准备/执行用例...)
     finished_run = Signal(bool, str)  # 结束(是否全部通过, 摘要消息)
@@ -254,7 +256,18 @@ class RunWorker(QThread):
                         last_ts["t"] = now
                         self._emit_step(r2)
 
+                    def on_step_start(desc, attempt=1):
+                        # ★ 步骤**开始**就通知界面(先插一行「执行中」), 跑完再由 on_result
+                        #   就地改成 PASS/FAIL —— 以前要等整步跑完才看得到任何东西,
+                        #   长步骤(如 60s 断言)期间界面像卡住(用户要求 2026-10-12)。
+                        last_ts["t"] = _time.time()      # 耗时从"本步开始"算
+                        p = {"desc": desc, "attempt": attempt}
+                        if self._exec_label:
+                            p["case"] = self._exec_label
+                        self.step_started.emit(p)
+
                     runner.shot_subdir = sheet      # 截图进 screenshots/<用例名-第N次>/
+                    runner.on_step_start = on_step_start
                     runner.on_result = on_result
                     self.runner = runner
                     passed = runner.run_steps(steps)

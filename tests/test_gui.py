@@ -3644,3 +3644,51 @@ def test_result_and_elapsed_columns_are_centered(win):
     row = win.result_table.rowCount() - 1
     assert win.result_table.item(row, 3).textAlignment() == Qt.AlignCenter, "结果列要居中"
     assert win.result_table.item(row, 4).textAlignment() == Qt.AlignCenter, "耗时列要居中"
+
+
+def test_step_shows_running_then_updates_in_place(win):
+    """★ 步骤开始时先出现「执行中」行, 跑完**就地**改成 PASS/FAIL(用户要求 2026-10-12)。
+
+    以前是整步跑完才插行 —— 几十秒的断言期间结果表一片空白, 看不出正在跑哪一步。
+    """
+    win.result_table.setRowCount(0)
+    # ① 开始: 出现一行「执行中」(橙色), 带上用例与轮次
+    win.on_step_started({"case": "甲用例(第1次)", "desc": "判断是否清扫完成", "attempt": 1})
+    assert win.result_table.rowCount() == 1, "步骤开始时该先插一行"
+    assert win.result_table.item(0, 1).text() == "甲用例(第1次)"
+    assert win.result_table.item(0, 2).text() == "判断是否清扫完成"
+    assert win.result_table.item(0, 3).text() == "执行中"
+    assert win.result_table.item(0, 3).foreground().color().name() == "#d97706", "执行中应橙色"
+    # ② 重试: 同一行显示"执行中(第2次)", 不该再插一行
+    win.on_step_started({"case": "甲用例(第1次)", "desc": "判断是否清扫完成", "attempt": 2})
+    assert win.result_table.rowCount() == 1, "重试不该插新行"
+    assert win.result_table.item(0, 3).text() == "执行中(第2次)"
+    win.on_step_done({"case": "甲用例(第1次)", "desc": "判断是否清扫完成",
+                      "passed": True, "elapsed": 12.3, "error": ""})
+    # ③ 结束: **还是那一行**, 结果变成 PASS 且带耗时
+    assert win.result_table.rowCount() == 1, "跑完应就地更新, 不是再插一行"
+    assert win.result_table.item(0, 3).text() == "PASS"
+    assert win.result_table.item(0, 3).foreground().color().name() == "#16a34a"
+    assert win.result_table.item(0, 4).text() == "12.3s"
+    # ④ 没有"开始"事件的步骤(如前置项)仍然直接追加一行
+    win.on_step_done({"desc": "前置-等待充电", "passed": True, "elapsed": 1.0, "error": ""})
+    assert win.result_table.rowCount() == 2
+    assert win.result_table.item(1, 3).text() == "PASS"
+    # ⑤ 失败也照样就地变红
+    win.on_step_started({"desc": "点一下", "attempt": 1})
+    win.on_step_done({"desc": "点一下", "passed": False, "error": "没找到"})
+    assert win.result_table.rowCount() == 3
+    assert win.result_table.item(2, 3).text() == "FAIL"
+    assert win.result_table.item(2, 3).foreground().color().name() == "#dc2626"
+
+
+def test_separator_row_resets_the_running_row(win):
+    """★ 用例分隔行/总结行之后, 后续结果不该写进那条"执行中"的旧行"""
+    win.result_table.setRowCount(0)
+    win.on_step_started({"desc": "正在跑", "attempt": 1})
+    win._append_result_row("—", "", "▶ 执行用例: 下一个", "#f0f4fa")   # 分隔行
+    win.on_step_done({"desc": "新用例的第一步", "passed": True, "error": ""})
+    rows = win.result_table.rowCount()
+    assert rows == 3, rows
+    assert win.result_table.item(2, 2).text() == "新用例的第一步", "结果应新起一行"
+    assert win.result_table.item(1, 3).text() == "", "分隔行不该被写进结果"

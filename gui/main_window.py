@@ -3939,11 +3939,14 @@ class MainWindow(QMainWindow):
         pre_by_group = self._pre_items_by_group(case_files)   # ★ 每个 APP 组各自的前置
         repeat = self.repeat_spin.value()
         self.result_table.setRowCount(0)
+        self._running_row = None
         self._set_preview_placeholder("单击结果行显示对应截图\n点击图片可放大查看")
 
         self.worker = RunWorker(device_id, case_files, pre_items, repeat,
                                 pre_by_group=pre_by_group)
         self.worker.step_done.connect(self.on_step_done)
+        # ★ 步骤开始就插一行「执行中」, 跑完再就地改成通过/失败(用户要求 2026-10-12)
+        self.worker.step_started.connect(self.on_step_started)
         # 注: 不再连接 log_line → 运行日志(执行期间的 core 日志已由全局
         #     handler 转发, 再连一次会每条显示两遍)
         self.worker.status.connect(self.on_worker_status)
@@ -3974,26 +3977,60 @@ class MainWindow(QMainWindow):
             self._set_status("停止中(当前步骤结束后退出)...", self.status_label)
             self.worker.request_stop()
 
+    def on_step_started(self, result):
+        """步骤开始 → 先插一行「执行中」, 跑完由 on_step_done 就地改成通过/失败。
+
+        用户要求(2026-10-12): "要把当前执行的步骤也写出来, 执行时显示为执行中, 执行结束
+        再显示通过还是失败" —— 以前整步跑完才出现一行, 长步骤(几十秒的断言)期间界面
+        像卡住, 不知道在跑什么。
+        """
+        prev = getattr(self, "_running_row", None)
+        same = (prev is not None and prev < self.result_table.rowCount()
+                and self.result_table.item(prev, 2) is not None
+                and self.result_table.item(prev, 2).text() == result.get("desc", ""))
+        if same:
+            row = prev                     # ★ 重试: 复用同一行(显示"执行中(第N次)")
+        else:
+            row = self.result_table.rowCount()
+            self.result_table.insertRow(row)
+        self._fill_result_row(row, result, running=True)
+        self._running_row = row
+        self.result_table.scrollToBottom()
+        self.tabs.setCurrentIndex(0)
+
     def on_step_done(self, result):
-        row = self.result_table.rowCount()
-        self.result_table.insertRow(row)
+        row = getattr(self, "_running_row", None)
+        if row is None or row >= self.result_table.rowCount():
+            row = self.result_table.rowCount()   # 没有对应的"开始"事件(如前置项) → 直接追加
+            self.result_table.insertRow(row)
+        self._fill_result_row(row, result)       # ★ 有"执行中"行时就地改成 PASS/FAIL
+        self._running_row = None
+        self.result_table.scrollToBottom()
+
+    def _fill_result_row(self, row, result, running=False):
+        """写一行结果(执行中 / PASS / FAIL 共用)"""
         passed = result.get("passed")
         elapsed = result.get("elapsed")
-        values = [str(row + 1), result.get("case", ""), result.get("desc", ""),
-                  "PASS" if passed else "FAIL",
+        attempt = result.get("attempt", 1) or 1
+        if running:
+            state = "执行中" if attempt <= 1 else f"执行中(第{attempt}次)"
+            color = QColor("#d97706")            # 执行中: 橙色
+        else:
+            state = "PASS" if passed else "FAIL"
+            color = QColor("#16a34a") if passed else QColor("#dc2626")
+        values = [str(row + 1), result.get("case", ""), result.get("desc", ""), state,
                   f"{elapsed:.1f}s" if isinstance(elapsed, (int, float)) else "",
                   result.get("error", "")]
         for col, val in enumerate(values):
             item = QTableWidgetItem(val)
             if col == 3:
-                item.setForeground(QColor("#16a34a") if passed else QColor("#dc2626"))
-            if col in (3, 4):           # ★ 结果 / 耗时 居中显示(用户要求 2026-10-12)
+                item.setForeground(color)
+            if col in (3, 4):        # ★ 结果 / 耗时 居中显示(用户要求 2026-10-12)
                 item.setTextAlignment(Qt.AlignCenter)
             item.setData(Qt.UserRole, result.get("screenshot", ""))
             if val:
-                item.setToolTip(val)   # 长文本(步骤/错误信息)悬停看全文
+                item.setToolTip(val)  # 长文本(步骤/错误信息)悬停看全文
             self.result_table.setItem(row, col, item)
-        self.result_table.scrollToBottom()
         shot = result.get("screenshot", "")
         if shot and os.path.exists(shot):
             self._show_screenshot(shot)
@@ -4057,6 +4094,7 @@ class MainWindow(QMainWindow):
             if col in (0, 3, 4):        # 序号/结果/耗时居中(与数据行对齐)
                 it.setTextAlignment(Qt.AlignCenter)
             self.result_table.setItem(row, col, it)
+        self._running_row = None        # 分隔/总结行之后不该再往旧行里写
         self.result_table.scrollToBottom()
         self.tabs.setCurrentIndex(0)
 
