@@ -127,7 +127,7 @@ class RunWorker(QThread):
                 batt = -1
             if batt >= 0:
                 desc += f"(当前电量 {batt}%)"
-        err = "" if r["ok"] else "前置未通过(超时或失败)"
+        err = "" if r["ok"] else (r.get("reason") or "前置未通过(超时或失败)")
         sub = r.get("sub") or []
         shot = ""
         if not sub:
@@ -262,11 +262,19 @@ class RunWorker(QThread):
                         # ★ 每完成一条立刻落表(用户要求: 一条一条显示结果和耗时)
                         on_item_done=lambda r, m=sheet, sd=run_dir:
                         self._emit_pre_result(d, m, report, r, shot_dir=sd),
+                        # ★ 前置子步骤的"执行中"行(2026-10-13): 与用例路径同体验 ——
+                        #   步骤开始就插一行, 跑完由 step_done 就地改成 PASS/FAIL
+                        on_step_start=lambda desc, attempt=1:
+                        self.step_started.emit(
+                            {"desc": f"前置-{desc}", "attempt": attempt,
+                             "case": self._exec_label}),
                         # ★ 前置的内部步骤截图也进本轮目录(审查 2026-10-12): 否则它退回
                         #   用前置名当目录, 每轮写同一路径互相覆盖, 且封顶清理永远不收
                         shot_subdir=run_dir)
                     # ★ 任一前置项未通过 → 阻断:本轮不再执行任何用例(用户要求)
-                    failed = [r["desc"] for r in pre_results if not r["ok"]]
+                    #   带失败原因(如故障整段原文, 2026-10-13), 不再只有项名
+                    failed = [(f"{r['desc']}({r['reason']})" if r.get("reason")
+                               else r["desc"]) for r in pre_results if not r["ok"]]
                     if failed:
                         detail = "、".join(failed)
                         self.log_line.emit(f"[前置] 未通过,阻断本轮执行: {detail}")

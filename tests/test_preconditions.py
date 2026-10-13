@@ -260,8 +260,19 @@ def test_text_check_passes_when_text_absent(monkeypatch):
 
 
 def test_text_check_fault_state_fails_fast(monkeypatch):
-    """★ 故障哨兵(用户 2026-10-13): 前置等待期间设备报故障 → **立即**失败
-    (日志带整段原文), 不等满 timeout; 走前置失败 → 阻断 → 报告里可见。"""
+    """★ 故障哨兵(用户 2026-10-13): 前置等待期间设备报故障 → FaultStateError 直接
+    抛出(**带整段原文**), 不等满 timeout —— 由 prepare_items 接住记成失败原因。"""
+    monkeypatch.setattr(session.time, "sleep", lambda s: None)
+    dev = FakeDev(present=("风机故障, 请重启设备",))
+    with pytest.raises(session.FaultStateError) as ei:
+        session.ensure_text_check(dev, wait_text="首页", timeout=3600)
+    assert "风机故障, 请重启设备" in str(ei.value), str(ei.value)
+
+
+def test_prepare_items_reports_fault_reason(monkeypatch):
+    """★ 前置失败原因进结果(2026-10-13): 撞故障词的前置项带**整段原文**,
+    供结果表/报告/阻断详情显示 —— 不再只有干巴巴的"超时或失败"。且立即失败
+    (dump 次数是个位), 不轮询到超时。"""
     monkeypatch.setattr(session.time, "sleep", lambda s: None)
 
     class _CountDev(FakeDev):
@@ -273,9 +284,25 @@ def test_text_check_fault_state_fails_fast(monkeypatch):
 
     _CountDev.dumps = 0
     dev = _CountDev(present=("风机故障, 请重启设备",))
-    assert session.ensure_text_check(dev, wait_text="首页", timeout=3600) is False
+    res = session.prepare_items(
+        dev, {}, [{"type": "text_check", "name": "首页就绪",
+                   "wait_text": "首页", "enabled": True, "timeout": 3600}])
+    assert res[0]["ok"] is False
+    assert "风机故障, 请重启设备" in res[0].get("reason", ""), res[0]
     assert _CountDev.dumps <= 3, \
-        f"检测到故障应立即失败, 而不是轮询到超时(dump 了 {_CountDev.dumps} 次)"
+        f"检测到故障应立即失败(dump 了 {_CountDev.dumps} 次)"
+
+
+def test_prepare_items_step_start_callback():
+    """★ 前置子步骤的"执行中"行(2026-10-13): 每步开始回调 desc 带**前置项名前缀**
+    —— 与完成行的 desc(`前置-项名: 步骤名`)对得上, 界面才能就地改成 PASS/FAIL。"""
+    seen = []
+    items = [{"type": "steps", "name": "自定义步骤", "enabled": True,
+              "steps": [{"desc": "等一下", "wait": 0.05}]}]
+    session.prepare_items(FakeDev(), {"runner": {"step_interval": 0}}, items,
+                          on_step_start=lambda desc, attempt=1:
+                          seen.append((desc, attempt)))
+    assert seen and seen[0][0] == "自定义步骤: 等一下" and seen[0][1] == 1, seen
 
 
 def test_text_check_timeout_runs_configured_action(monkeypatch):

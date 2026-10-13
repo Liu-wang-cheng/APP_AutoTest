@@ -890,3 +890,68 @@ def test_check_for_update_reports_error_when_source_is_down():
     """更新源连不上 -> error(界面不打扰用户, 但要记日志), 绝不能抛异常崩掉检查"""
     res = updater.check_for_update(_local_cfg(1), current="1.7")   # 1 端口没人听
     assert res.status == "error", res.message
+
+
+# ── 并发分块下载(2026-10-13): 加速镜像按单连接限速, 多连接 Range 并行翻倍 ──
+
+class _RangeServer:
+    """内存里的"Range 服务器": 按请求的 Range 切片返回 206; 也可强制忽略 Range"""
+
+    def __init__(self, payload, support_range=True, fail_first_for=None):
+        self.payload = payload
+        self.support_range = support_range
+        self.fail_first_for = fail_first_for or set()   # 连接序号(0 起): 首次抛错
+        self.requests = []                              # 记录 (method, Range)
+
+    def __call__(self, url, method="GET", timeout=0, extra_headers=None):
+        rng = (extra_headers or {}).get("Range", "")
+        self.requests.append((method, rng))
+        if self.fail_first_for:
+            idx = int(rng.split("-")[0][6:]) // (len(self.payload) // 3 + 1)
+            if idx in self.fail_first_for:
+                self.fail_first_for.discard(idx)
+                raise OSError("模拟该连接首次失败")
+        if rng.startswith("bytes=") and self.support_range:
+            start_s, _, end_s = rng[6:].partition("-")
+            start = int(start_s or 0)
+            end = int(end_s) if end_s else len(self.payload) - 1
+            body = self.payload[start:end + 1]
+            return _Resp(body, 206, {"content-range":
+                                     f"bytes {start}-{end}/{len(self.payload)}"})
+        return _Resp(self.payload, 200, {"content-length": str(len(self.payload))})
+
+
+def test_download_parallel_splits_and_concatenates(monkeypatch, tmp_path):
+    """分块并发: 各连接拿**互不重叠**的 Range, 拼回的文件与原包逐字节一致, 进度到 100%"""
+    payload = bytes(range(256)) * ((12 << 20) // 256)   # 12MB(> 8MB 并发门槛), 非 3 的倍数 → 边界有零头
+    srv = _RangeServer(payload)
+    monkeypatch.setattr(updater, "_request", srv)
+    dest = tmp_path / "pkg.zip"
+    seen = []
+    updater.download("http://s/pkg", str(dest), connections=3,
+                     progress_cb=lambda d, t, s: seen.append((d, t)))
+    assert dest.read_bytes() == payload, "拼接结果必须逐字节一致"
+    ranged = [r for _m, r in srv.requests if r.startswith("bytes=")]
+    assert len(ranged) == 4, f"探针 1 次 + 3 个分块: {ranged}"   # 0-0 探针 + 3 块
+    assert seen and seen[-1] == (len(payload), len(payload)), seen[-1:]
+
+
+def test_download_falls_back_when_server_ignores_range(monkeypatch, tmp_path):
+    """服务器不支持 Range(返回 200) → 回退单流, 结果照旧正确"""
+    payload = b"PKG" * 1000
+    srv = _RangeServer(payload, support_range=False)
+    monkeypatch.setattr(updater, "_request", srv)
+    dest = tmp_path / "pkg.zip"
+    updater.download("http://s/pkg", str(dest), connections=4)
+    assert dest.read_bytes() == payload
+
+
+def test_download_parallel_retries_failed_chunk(monkeypatch, tmp_path):
+    """某连接首次失败 → 从断点重试(最多 3 次), 整体仍成功 —— 单块抖动不拖垮整包"""
+    payload = bytes(100) * 1024                     # 100KB(<8MB 也会并发: 直接调私有)
+    srv = _RangeServer(payload, fail_first_for={1})
+    monkeypatch.setattr(updater, "_request", srv)
+    dest = tmp_path / "pkg.zip"
+    updater._download_parallel("http://s/pkg", str(dest), len(payload), 3,
+                               None, 30)
+    assert dest.read_bytes() == payload

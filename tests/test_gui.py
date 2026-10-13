@@ -1033,7 +1033,7 @@ def _fake_prepare_items(results):
     否则 RunWorker 收不到任何前置行。
     """
     def _f(d_, cfg_, items, on_progress=None, should_cancel=None, on_item_done=None,
-           shot_subdir=None):
+           shot_subdir=None, on_step_start=None):
         out = []
         for r in results:
             r = dict(r)
@@ -1047,7 +1047,7 @@ def _fake_prepare_items(results):
 def _record_precondition_calls(monkeypatch, rt, calls):
     """把"全量前置"与"只重启 APP"换成记录器, 用来实证两者的实际调用序列"""
     def _prepare(d_, cfg_, items, on_progress=None, should_cancel=None, on_item_done=None,
-                 shot_subdir=None):
+                 shot_subdir=None, on_step_start=None):
         calls.append("prepare")
         return [{"key": "restart", "desc": "重启 APP", "ok": True, "elapsed": 0.1}]
 

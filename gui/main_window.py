@@ -1059,8 +1059,12 @@ class UpdateDownloadThread(QThread):
                 self.done.emit("", "版本清单里没有 download_url")
                 return
             # 目录模式: 下载的是分发包 zip(内含 AutoTest.exe + _internal\)
+            # ★ 分块并发下载(2026-10-13): 连接数由 config update.download_connections
+            #   控制(默认 4) —— 加速镜像按单连接限速, 多连接常能翻几倍
             pkg = os.path.join(DATA_DIR, "_update_download.zip")
             updater.download(url, pkg,
+                             connections=updater.download_connections_from_cfg(
+                                 (self._cfg or {}).get("update")),
                              progress_cb=lambda d, t, s: self.progress.emit(d, t, s))
             if not updater.verify_sha256(pkg, self._info.sha256):
                 try:

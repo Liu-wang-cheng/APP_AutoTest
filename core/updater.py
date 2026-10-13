@@ -387,11 +387,67 @@ def fetch_version_info(sorted_mirrors, version_file):
     return None
 
 
-def download(url, dest_path, progress_cb=None, timeout=DOWNLOAD_TIMEOUT):
-    """流式下载到 dest_path; 失败抛异常并清掉半截文件。
+#: 并发分块下载(2026-10-13): 部分加速镜像按**单连接**限速, 多连接 Range 并行有收益;
+#: 但 **gh-proxy 实测是按客户端/IP 限总带宽** —— 4 连接并发与单流同速(均 ~1.2MB/s,
+#: 线上真包 463s 端到端验证)。默认仍开 4 连接: 对按连接限速的镜像有益, 对 gh-proxy
+#: 无害(回退路径可靠); 换更快的镜像时不需要改这里。
+#: 连接数可配: config update 段 download_connections(默认 4; 1 = 老的单流)。
+DEFAULT_DOWNLOAD_CONNECTIONS = 4
+_CHUNK_READ = 65536
 
+
+def _probe_total_size(url, timeout=DOWNLOAD_TIMEOUT):
+    """Range 取首字节, 从 Content-Range 里拿总大小; 不支持 Range 返回 (0, False)"""
+    try:
+        with _request(url, timeout=timeout,
+                      extra_headers={"Range": "bytes=0-0"}) as resp:
+            if getattr(resp, "status", 200) != 206:
+                return 0, False
+            cr = resp.headers.get("content-range") or ""   # bytes 0-0/225709275
+            if "/" not in cr:
+                return 0, False
+            total = int(cr.rsplit("/", 1)[1] or 0)
+            return total, total > 0
+    except Exception:
+        return 0, False
+
+
+def download_connections_from_cfg(cfg):
+    """config update 段 → 并发连接数(默认 4, 上限 16, 非法值回默认)"""
+    try:
+        n = int((cfg or {}).get("download_connections")
+                or DEFAULT_DOWNLOAD_CONNECTIONS)
+    except (TypeError, ValueError):
+        n = DEFAULT_DOWNLOAD_CONNECTIONS
+    return max(1, min(n, 16))
+
+
+def download(url, dest_path, progress_cb=None, timeout=DOWNLOAD_TIMEOUT,
+             connections=None):
+    """下载到 dest_path。
+
+    ★ 服务器支持 Range 且连接数 >1 时**分块并发**(每连接一个 .partN, 完成后按序
+      拼接 → 原子落地); 不支持/小包/并发失败 → 回退单流(老行为), 可靠性优先。
     progress_cb(downloaded, total, speed_text) —— total 未知时传 0。
     """
+    if connections is None:
+        connections = DEFAULT_DOWNLOAD_CONNECTIONS
+    if connections > 1:
+        total, ranged = _probe_total_size(url, timeout=timeout)
+        # 小包不值得并发(探针 + 起线程的开销占比高)
+        if ranged and total > 8 << 20:
+            try:
+                return _download_parallel(url, dest_path, total, connections,
+                                          progress_cb, timeout)
+            except Exception:
+                # ★ 并发失败回退单连接整包重下 —— 可靠性优先, 速度第二
+                log.warning("[更新] 并发分块下载失败, 回退单连接整包重试",
+                            exc_info=True)
+    return _download_single(url, dest_path, progress_cb, timeout)
+
+
+def _download_single(url, dest_path, progress_cb=None, timeout=DOWNLOAD_TIMEOUT):
+    """单流下载(原实现): 流式写 .part, 成功后原子改名。"""
     tmp = dest_path + ".part"
     try:
         with _request(url, timeout=timeout) as resp, open(tmp, "wb") as f:
@@ -440,6 +496,113 @@ def download(url, dest_path, progress_cb=None, timeout=DOWNLOAD_TIMEOUT):
             except OSError:
                 pass
         raise
+
+
+def _download_parallel(url, dest_path, total, connections, progress_cb, timeout):
+    """Range 分块并发下载: 每连接一个 .partN(各自断点重试 3 次), 完成后按序拼接。
+
+    ★ 拼接后再核对**总字节数**与 Content-Range 报告的一致 —— 镜像若对 Range 撒谎
+      (比如返回整包), 字节数对不上就直接判失败, 交回单流重下。
+    ★ 进度: 各线程把"自己已下字节"写进共享槽, 汇总后走与单流同一套节流回调。
+    """
+    import threading
+    bounds = []
+    step = (total + connections - 1) // connections
+    for i in range(connections):
+        start = i * step
+        end = min(total - 1, start + step - 1)
+        if start > end:
+            break
+        bounds.append((i, start, end))
+    parts = [f"{dest_path}.part{i}" for i, _s, _e in bounds]
+    got = [0] * len(bounds)             # 各连接已下字节(共享槽, 汇总即总进度)
+    errors = []
+    lock = threading.Lock()
+    t0 = time.monotonic()
+    last_cb = [None]
+
+    def _report(force=False):
+        now = time.monotonic()
+        if not progress_cb:
+            return
+        if force or last_cb[0] is None or now - last_cb[0] >= PROGRESS_MIN_INTERVAL:
+            last_cb[0] = now
+            done = sum(got)
+            el = max(now - t0, 1e-6)
+            progress_cb(done, total, f"{done / el / 1048576:.1f} MB/s")
+
+    def _worker(idx, start, end):
+        part = parts[idx]
+        local = 0
+        for attempt in range(3):        # 断点续传: 从"自己已下到的位置"续 Range
+            try:
+                headers = {"Range": f"bytes={start + local}-{end}"}
+                with _request(url, timeout=timeout, extra_headers=headers) as resp, \
+                        open(part, "ab" if local else "wb") as f:
+                    status = getattr(resp, "status", 200)
+                    if status != 206:
+                        raise OSError(f"分块下载失败: HTTP {status} "
+                                      f"(连接 {idx + 1}/{len(bounds)})")
+                    while True:
+                        chunk = resp.read(_CHUNK_READ)
+                        if not chunk:
+                            break
+                        f.write(chunk)
+                        local += len(chunk)
+                        with lock:
+                            got[idx] = local
+                            _report()
+                if start + local > end:
+                    break               # 本块完成(可能多 1 字节边界由拼接核对兜底)
+                break                   # 服务器提前收流 → 字节数核对会兜住
+            except Exception as e:      # 单块失败: 稍候从断点重试(最多 3 次)
+                if attempt == 2:
+                    with lock:
+                        errors.append(e)
+                else:
+                    time.sleep(1.0 + attempt)
+
+    threads = []
+    for (i, s, e) in bounds:
+        th = threading.Thread(target=_worker, args=(i, s, e),
+                              name=f"dl-{i + 1}/{len(bounds)}", daemon=True)
+        threads.append(th)
+        th.start()
+    for th in threads:
+        th.join()
+    if errors:
+        for p in parts:
+            try:
+                os.remove(p)
+            except OSError:
+                pass
+        raise errors[0]
+    # 拼接(.part 总文件) + 总字节数核对
+    tmp = dest_path + ".part"
+    written = 0
+    with open(tmp, "wb") as out:
+        for part in parts:
+            with open(part, "rb") as f:
+                while True:
+                    chunk = f.read(1 << 20)
+                    if not chunk:
+                        break
+                    out.write(chunk)
+                    written += len(chunk)
+    for p in parts:
+        try:
+            os.remove(p)
+        except OSError:
+            pass
+    if written != total:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        raise OSError(f"分块下载字节数不符: 应 {total}, 实得 {written}")
+    _report(force=True)                 # 收尾: 进度必须能走到 100%
+    os.replace(tmp, dest_path)          # 原子落地
+    return True
 
 
 def verify_sha256(file_path, expected):

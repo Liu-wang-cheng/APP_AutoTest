@@ -754,7 +754,7 @@ def test_download_worker_emits_bat(monkeypatch, tmp_path):
 
     monkeypatch.setattr(updater, "apply_download_prefix",
                         lambda u, p: u or "https://e/AutoTest.exe")
-    monkeypatch.setattr(updater, "download", lambda url, dest, progress_cb=None: None)
+    monkeypatch.setattr(updater, "download", lambda url, dest, progress_cb=None, connections=None: None)
     monkeypatch.setattr(updater, "verify_sha256", lambda f, s: True)
     # ★ 目录模式的接线: 校验 zip -> 解压 -> 生成替换脚本。三个都要打桩并留下痕迹,
     #   否则"更新包根本没校验/没解压"这种事测试也发现不了。
@@ -797,7 +797,7 @@ def test_download_worker_reports_sha_mismatch(monkeypatch, tmp_path):
     monkeypatch.setattr(updater, "apply_download_prefix",
                         lambda u, p: u or "https://e/pkg.zip")
 
-    def fake_download(url, dest, progress_cb=None):
+    def fake_download(url, dest, progress_cb=None, connections=None):
         open(dest, "wb").close()
 
     monkeypatch.setattr(updater, "download", fake_download)

@@ -349,7 +349,7 @@ def test_执行用例期间闸门是关的_结束后自动开(qapp, monkeypatch,
     seen = {}
 
     def _prepare(d_, cfg_, items, on_progress=None, should_cancel=None, on_item_done=None,
-                 shot_subdir=None):
+                 shot_subdir=None, on_step_start=None):
         seen["busy"] = idle.is_busy()
         bootstrap.trim_case_screenshots(str(shot_dir), case_name="冒烟", keep=1)
         seen["alive_while_running"] = len(list(shot_dir.iterdir()))

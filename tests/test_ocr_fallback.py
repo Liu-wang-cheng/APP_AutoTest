@@ -95,8 +95,8 @@ def test_any_present_prefers_native_and_skips_ocr(monkeypatch):
     from core import session
     called = []
     monkeypatch.setattr(session.ocr, "available", lambda: True)
-    monkeypatch.setattr(session.ocr, "find_detail",
-                        lambda d, t: called.append(1) or ("x", "x 已完成", (1, 2)))
+    monkeypatch.setattr(session.ocr, "screen_texts",
+                        lambda d, **k: pytest.fail("原生命中不该调 OCR"))
     monkeypatch.setattr(session, "warm_webview",
                         lambda d: '<node text="正在吸尘 5分钟"/><node text="电池 93%%"/>')
 
@@ -115,8 +115,8 @@ def test_any_present_falls_back_to_ocr_when_tree_sparse(monkeypatch):
     """★ 原生读不到 + 页面主体没暴露 → OCR 兜底命中"""
     from core import session
     monkeypatch.setattr(session.ocr, "available", lambda: True)
-    monkeypatch.setattr(session.ocr, "find_detail",
-                        lambda d, texts: (texts[0], texts[0] + " 已完成", (10, 20)))
+    monkeypatch.setattr(session.ocr, "screen_texts",
+                        lambda d, **k: [("正在吸尘 已完成", (10, 20))])
     assert session._any_present(_EmptyDev(), ["正在吸尘", "回充中"]) is True
 
 
@@ -124,8 +124,8 @@ def test_any_present_no_ocr_when_not_installed(monkeypatch):
     """没装 RapidOCR → 行为与从前完全一致(不崩、不误判)"""
     from core import session
     monkeypatch.setattr(session.ocr, "available", lambda: False)
-    monkeypatch.setattr(session.ocr, "find_detail",
-                        lambda d, t: pytest.fail("不该调用 OCR"))
+    monkeypatch.setattr(session.ocr, "screen_texts",
+                        lambda d, **k: pytest.fail("不该调用 OCR"))
     assert session._any_present(_EmptyDev(), ["正在吸尘"]) is False
 
 
@@ -170,7 +170,7 @@ def test_text_present_native_hit(monkeypatch):
     d = _Runner(xml='<node text="正在吸尘 5分钟"/><node text="房间 7"/><node text="电池 93%%"/>')
     r = _make_runner(d)
     monkeypatch.setattr(ocr, "available", lambda: True)
-    monkeypatch.setattr(ocr, "find_detail", lambda dev, t: pytest.fail("原生命中不该调 OCR"))
+    monkeypatch.setattr(ocr, "screen_texts", lambda d, **k: pytest.fail("原生命中不该调 OCR"))
     assert r._text_present("正在吸尘") is True
 
 
@@ -186,14 +186,13 @@ def test_text_present_falls_back_to_ocr(monkeypatch):
     monkeypatch.setattr(ocr, "available", lambda: True)
     calls = []
 
-    def _find(dev, texts):
-        calls.append(texts[0])
-        return ((texts[0], "屏幕上读到 " + texts[0], (1, 2))
-                if "吸尘" in texts[0] else (None, "", None))
+    def _lines(dev, **k):
+        calls.append(1)
+        return [("屏幕上读到 正在吸尘", (1, 2))]
 
-    monkeypatch.setattr(ocr, "find_detail", _find)
+    monkeypatch.setattr(ocr, "screen_texts", _lines)
     assert r._text_present("正在吸尘") is True
-    assert calls == ["正在吸尘"], f"应在第 5 轮做**一次** OCR 就命中: {calls}"
+    assert calls == [1], f"应在第 5 轮做**一次** OCR 就命中: {calls}"
     calls.clear()
     assert r._text_present("回充中") is False          # 一直读不到 → 超时才返回
     assert calls, f"持续读不到时也该按 5 轮周期做 OCR: {calls}"
@@ -210,8 +209,8 @@ def test_normal_page_does_ocr_on_every_fifth_round(monkeypatch):
     monkeypatch.setattr(ocr, "available", lambda: True)
     monkeypatch.setattr(ocr, "sparse", lambda x, **k: False)        # 正常页面
     calls = []
-    monkeypatch.setattr(ocr, "find_detail",
-                        lambda d, texts: (calls.append(1), (None, "", None))[1])
+    monkeypatch.setattr(ocr, "screen_texts",
+                        lambda d, **k: (calls.append(1), [])[1])
 
     for round_no in (1, 2, 3, 4, 6, 7, 8, 9, 11):
         session.text_present_detail(None, ["不会命中"], xml=xml, round_no=round_no)
@@ -233,8 +232,8 @@ def test_sparse_page_does_ocr_every_round(monkeypatch):
     monkeypatch.setattr(ocr, "available", lambda: True)
     monkeypatch.setattr(ocr, "sparse", lambda x, **k: True)
     calls = []
-    monkeypatch.setattr(ocr, "find_detail",
-                        lambda d, texts: (calls.append(1), (None, "", None))[1])
+    monkeypatch.setattr(ocr, "screen_texts",
+                        lambda d, **k: (calls.append(1), [])[1])
     for round_no in (1, 2, 3, 4, 5):
         session.text_present_detail(None, ["不会命中"], xml=xml, round_no=round_no)
     assert len(calls) == 5, f"稀疏页面每轮都该做 OCR: {len(calls)} 次"
@@ -246,7 +245,7 @@ def test_text_present_empty_and_no_ocr(monkeypatch):
     r = _make_runner(d)
     assert r._text_present() is False
     monkeypatch.setattr(ocr, "available", lambda: False)
-    monkeypatch.setattr(ocr, "find_detail", lambda dev, t: pytest.fail("没装 OCR 不该调用"))
+    monkeypatch.setattr(ocr, "screen_texts", lambda d, **k: pytest.fail("没装 OCR 不该调用"))
     assert r._text_present("正在吸尘") is False
 
 
@@ -260,13 +259,13 @@ def test_wait_loading_uses_ocr_fallback(monkeypatch):
     d = _Runner(xml='<node text="扫地机器人0087"/>')      # 稀疏, 树里没有加载提示
     r = _make_runner(d)
     monkeypatch.setattr(ocr, "available", lambda: True)
-    monkeypatch.setattr(ocr, "find_detail",
-                        lambda dev, texts: ("正在加载", "正在加载中…", (1, 2)))
+    monkeypatch.setattr(ocr, "screen_texts",
+                        lambda d, **k: [("正在加载中…", (1, 2))])
     monkeypatch.setattr(r, "_sleep", lambda s: None)
     do_wait_loading(r, {"timeout": 0})                     # 超时窗口内一直"在加载"
     # 命中加载提示 → 不应提前 return(走到超时分支打 warning); 用日志不好断言,
     # 这里断言 OCR 确实被问过(说明判断走了兜底)
-    assert ocr.find(d, ("加载中", "正在加载")) == "正在加载"
+    assert ocr.find(d, ("正在加载", "加载中")) == "正在加载"
 
 
 def test_if_condition_uses_ocr_fallback(monkeypatch):
@@ -276,8 +275,8 @@ def test_if_condition_uses_ocr_fallback(monkeypatch):
     d = _Runner(xml='<node text="扫地机器人0087"/>')
     r = _make_runner(d)
     monkeypatch.setattr(ocr, "available", lambda: True)
-    monkeypatch.setattr(ocr, "find_detail",
-                        lambda dev, texts: (texts[0], texts[0], (1, 2)))
+    monkeypatch.setattr(ocr, "screen_texts",
+                        lambda d, **k: [("正在吸尘", (1, 2))])
     ran_else = []
     do_if_impl(r, {"if": "正在吸尘", "else": []}, negate=False)
     assert ran_else == []          # 条件成立(OCR 命中) → 跳过, 不执行 else
@@ -297,8 +296,8 @@ def test_wait_texts_uses_any_present_with_ocr(monkeypatch):
     from core import ocr, session
     monkeypatch.setattr(session.time, "sleep", lambda s: None)
     monkeypatch.setattr(ocr, "available", lambda: True)
-    monkeypatch.setattr(ocr, "find_detail",
-                        lambda dev, texts: (texts[0], texts[0], (1, 2)))
+    monkeypatch.setattr(ocr, "screen_texts",
+                        lambda d, **k: [("设备控制", (1, 2))])
     d = _Runner(xml='<node text="扫地机器人0087"/>')
     assert session._wait_texts(d, ["设备控制"], timeout=1) == "设备控制"
 
@@ -324,8 +323,8 @@ def test_ocr_fallback_logs_the_line_it_actually_read(monkeypatch, caplog):
     lg.setLevel(logging.INFO)
     try:
         monkeypatch.setattr(session.ocr, "available", lambda: True)
-        monkeypatch.setattr(session.ocr, "find_detail",
-                            lambda d, texts: ("已完成", "清洗拖布 已完成", (120, 456)))
+        monkeypatch.setattr(session.ocr, "screen_texts",
+                            lambda d, **k: [("清洗拖布 已完成", (120, 456))])
         assert session.text_present(_EmptyDev(), ["干燥拖布", "已完成"]) is True
     finally:
         lg.removeHandler(lg.handlers[-1])

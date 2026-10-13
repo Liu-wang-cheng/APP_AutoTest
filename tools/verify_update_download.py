@@ -53,6 +53,10 @@ def main(argv=None):
     ranked = updater.race_mirrors(mirrors, conf["version_file"])
     print("镜像测速:", ", ".join(
         f"{m.name}{'%.0fms' % m.latency_ms if m.success else '不可达'}" for m in ranked))
+    # ★ 下载吞吐探针(2026-10-13): 与真实客户端 check_for_update 同一条路 ——
+    #   各源 Range 拉真实资产前 1MB, 谁快用谁(不再按固定顺序)
+    if info.download_url:
+        ranked = updater.probe_download_mirrors(ranked, info.download_url)
     dm = updater.pick_download_mirror(ranked)
     prefix = dm.download_prefix if dm else ""
     url = updater.apply_download_prefix(info.download_url, prefix)

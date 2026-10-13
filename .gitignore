@@ -26,3 +26,6 @@ release*.log
 
 # Claude Code 配置目录(本机设置, 不入库)
 .claude/
+
+# OTA 验证/彩排日志(偶发产物, 不进仓库)
+ota_*.log

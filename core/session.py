@@ -468,17 +468,20 @@ def _word_in(text, words):
     return None, False
 
 
-def scan_status_words(xml):
+def scan_status_words(xml=None, nodes=None):
     """扫**可见节点**里的故障/空闲词 → (kind, 词, 整段原文) / (None, None, None)。
 
     ★ 返回**整段原文**(用户 2026-10-13: 日志与报错要把带故障词的整段话打出来,
       如「滚刷被困, 请清理后重试」, 只打一个"被困"字没法定位)。
     ★ 故障优先: 先全树扫故障词, 再扫空闲词 —— 两个信号同时在屏时故障说了算。
     ★ 只扫可见节点(text/desc), 与 text_present_detail 同一可见性规则。
+    nodes: 调用方已解析的可见节点(text_present_detail 传进来复用, 免得每轮把
+    XML 解析两遍 —— 2026-10-13 优化)。
     """
-    if not xml:
-        return None, None, None
-    nodes = visible_nodes(xml)
+    if nodes is None:
+        if not xml:
+            return None, None, None
+        nodes = visible_nodes(xml)
     for kind in ("fault", "idle"):
         for node in nodes:
             for raw in (node[0], node[1]):
@@ -511,7 +514,7 @@ def text_present_detail(d, texts, xml=None, round_no=None):
     if xml is None:
         xml = warm_webview(d)
     nodes = visible_nodes(xml)
-    kind, word, full = scan_status_words(xml)
+    kind, word, full = scan_status_words(nodes=nodes)   # 复用同一次解析(2026-10-13)
     if kind == "fault":
         raise FaultStateError(f"检测到故障状态: 「{word}」← {full!r}")
     if kind == "idle":
@@ -534,14 +537,19 @@ def text_present_detail(d, texts, xml=None, round_no=None):
     #      只读树会一直判不到。代价是每 5 轮多约 1 秒。
     #   ★ 单次判断(round_no=None, 没给 timeout 的"只查一次")不受轮次限制 —— 那是唯一机会。
     if ocr.available() and (ocr.sparse(xml) or ocr.round_allows_ocr(round_no)):
-        hit, line, pos = ocr.find_detail(d, wanted)
-        if hit:
+        # ★ 全文哨兵(2026-10-13): 识别一次(帧缓存), **所有行**都过故障词 —— 故障弹窗
+        #   画在屏上但不进无障碍树时, 只有 OCR 这条路能抓到; 哪怕等待目标没命中也要扫。
+        lines = list(ocr.screen_texts(d))          # [(行文本, 坐标)]
+        for line, _pos in lines:
             fw, fword = _word_in(line, _status_words["fault"])
-            if fw:      # 故障弹窗有时画在屏上但不进无障碍树 —— OCR 兜底轮同样要哨兵
+            if fw:
                 raise FaultStateError(f"检测到故障状态: 「{fword}」← OCR 读到 {line!r}")
-            log.info(f"[OCR兜底] 无障碍树里没有, 截图识别命中「{hit}」"
-                     f"← OCR 读到的是 {line!r}" + (f" @ {pos}" if pos else ""))
-            return hit, "ocr", line, pos
+        for t in wanted:
+            for line, pos in lines:
+                if t in line:
+                    log.info(f"[OCR兜底] 无障碍树里没有, 截图识别命中「{t}」"
+                             f"← OCR 读到的是 {line!r}" + (f" @ {pos}" if pos else ""))
+                    return t, "ocr", line, pos
     return None, "", "", None
 
 
@@ -640,15 +648,11 @@ def ensure_text_check(d, wait_text="", absent_text="", timeout=60,
     while time.time() < end:
         # ★ 预热一次供两个判断复用(原本最多 dump 3 次)
         xml = warm_webview(d)
-        try:
-            if _ok(xml):
-                log.info(f"[前置] {label}: 条件已满足")
-                return True
-        except FaultStateError as e:
-            # ★ 故障哨兵(用户 2026-10-13): 设备报故障 → 前置立即失败(原因进日志),
-            #   不等满 timeout; 由阻断机制把"前置未通过: …"带进报告
-            log.warning(f"[前置] {label}: {e}")
-            return False
+        # ★ 故障哨兵命中会从这里抛 FaultStateError —— 由 prepare_items 接住,
+        #   把**整段故障原文**记成该前置项的失败原因(进结果表与报告)
+        if _ok(xml):
+            log.info(f"[前置] {label}: 条件已满足")
+            return True
         if should_cancel and should_cancel():
             log.info(f"[前置] {label}: 收到停止请求")
             return False
@@ -760,12 +764,13 @@ DEFAULT_PRECONDITIONS = [
 
 
 def _run_one(d, cfg, item, on_progress, should_cancel, collect=None,
-             shot_subdir=None):
+             shot_subdir=None, on_step_start=None):
     """执行单个前置项(按 type 分发);返回 True/False。
 
     collect: 传一个 list 进来时, 「自定义步骤」型前置会把**每一步的结果**(含截图)
     追加进去 —— GUI 好把前置内部的步骤也一条条落表/进报告(用户要求 2026-10-12)。
     shot_subdir: 内部截图目录名, 原样透传给 ActionRunner(见 prepare_items)。
+    on_step_start(desc, attempt): 内部每步开始时回调(desc 带**前置项名前缀**)。
     """
     t = item.get("type")
     if t == "restart":
@@ -830,6 +835,11 @@ def _run_one(d, cfg, item, on_progress, should_cancel, collect=None,
 
         def _on_step_start(desc, attempt=1):
             last_ts["t"] = time.time()          # 耗时从"本步开始"算(与用例路径同语义)
+            if on_step_start:
+                try:
+                    on_step_start(f"{item.get('name') or '前置步骤'}: {desc}", attempt)
+                except Exception as e:          # 界面回调异常不影响前置执行
+                    log.debug(f"[前置] 步骤开始回调异常(忽略): {e}")
 
         def _on_result(r):
             now = time.time()
@@ -856,23 +866,28 @@ def _run_one(d, cfg, item, on_progress, should_cancel, collect=None,
 
 
 def prepare_items(d, cfg, items, on_progress=None, should_cancel=None,
-                  on_item_done=None, shot_subdir=None):
-    """按前置项列表依次执行 → [{"key","desc","ok","elapsed"}]。
+                  on_item_done=None, shot_subdir=None, on_step_start=None):
+    """按前置项列表依次执行 → [{"key","desc","ok","elapsed"(,"reason")}]
 
     key 供报告/结果去重(同类型多实例带序号), desc 是展示名(含参数摘要),
-    elapsed 是该项自己的耗时(秒)。
+    elapsed 是该项自己的耗时(秒); reason 是失败原因(如故障整段原文, 2026-10-13)。
 
     shot_subdir: 「自定义步骤」型前置的内部截图目录名(screenshots/ 下) ——
     不给则退回用前置名当目录(每轮同路径互相覆盖, 且封顶清理不认, 审查 2026-10-12)。
+
+    on_step_start(desc, attempt): 「自定义步骤」型前置的**每一步开始**时回调
+    (desc 已带前置项名前缀) —— GUI 用它插"执行中"行(2026-10-13, 与用例同体验)。
 
     ★ on_item_done(result): **每执行完一条立刻回调** —— GUI 用它把结果逐条落表,
       用户要求"一条一条显示结果和耗时, 而不是全部执行完再一次性刷出来"。
     """
     results = []
 
-    def _finish(idx, desc, ok, elapsed=0.0, sub=None):
+    def _finish(idx, desc, ok, elapsed=0.0, sub=None, reason=None):
         r = {"key": f"pre{idx}", "desc": desc, "ok": bool(ok), "elapsed": elapsed,
              "sub": list(sub or [])}
+        if reason:
+            r["reason"] = reason     # 失败原因(如故障原文) → 结果表/报告/阻断详情可见
         results.append(r)
         if on_item_done:
             try:
@@ -890,8 +905,15 @@ def prepare_items(d, cfg, items, on_progress=None, should_cancel=None,
             continue
         t0 = time.time()
         sub = []
-        ok = _run_one(d, cfg, item, on_progress, should_cancel, collect=sub,
-                      shot_subdir=shot_subdir)
+        try:
+            ok = _run_one(d, cfg, item, on_progress, should_cancel, collect=sub,
+                          shot_subdir=shot_subdir, on_step_start=on_step_start)
+        except FaultStateError as e:
+            # ★ 故障哨兵(2026-10-13): 设备报故障 → 该前置项立即失败, **原因(整段
+            #   原文)进结果与报告**, 不再只有干巴巴的"超时或失败"
+            log.warning(f"[前置] {desc}: {e}")
+            _finish(i, desc, False, time.time() - t0, sub=sub, reason=str(e))
+            continue
         if ok is None:
             continue                    # 该项跳过(如未配置文本)
         _finish(i, desc, ok, time.time() - t0, sub=sub)

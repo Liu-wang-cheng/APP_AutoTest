@@ -76,6 +76,9 @@ python tools/verify_release.py --version 1.4      # 等 1~2 分钟让 CDN 生效
 (总耗时约 6 秒), 谁快用谁, 不再按固定顺序。镜像调研(2026-10-13, 实测 12 个公开
 加速源): 只有 gh-proxy(553KB/s)与 ghfast(139KB/s)可用, 其余全灭 —— 新镜像出现时
 在 `config.yaml` 的 `update.mirrors` 里加一条(带 `download_prefix`)即可参与竞选。
+★ 2.0.13 起支持**分块并发下载**(连接数 `update.download_connections`, 默认 4,
+不支持 Range 自动回退单流)。实测注意: gh-proxy 按客户端/IP 限**总带宽**, 并发
+在它身上无收益(4 连接与单流同速); 对按连接限速的镜像才有收益。
 
 ★ **形态切换只发生过一次**(v1.6 单文件 -> v1.7 目录): 那次的更新说明里必须写清
   "已装旧版请手动下载 zip 换一次", 否则用户的「立即更新」会报"不是 Windows

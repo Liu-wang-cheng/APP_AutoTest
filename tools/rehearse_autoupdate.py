@@ -113,13 +113,45 @@ def main(argv=None):
         "release_notes": "彩排用清单", "min_version": "1.0"}, ensure_ascii=False).encode()
 
     class H(http.server.BaseHTTPRequestHandler):
-        def _send(self, body, ctype):
-            self.send_response(200)
+        def _send(self, body, ctype, status=200, extra=None):
+            self.send_response(status)
             self.send_header("Content-Type", ctype)
             self.send_header("Content-Length", str(len(body)))
+            for k, v in (extra or {}).items():
+                self.send_header(k, v)
             self.end_headers()
             if self.command != "HEAD":
                 self.wfile.write(body)
+
+        def _send_zip(self):
+            """分发包; **支持 Range**(2026-10-13): 正式镜像都支持, 彩排也要走
+            同一条路 —— 否则并发分块下载在彩排里永远走不到。流式发, 不整包进内存。"""
+            size = os.path.getsize(new_zip)
+            rng = self.headers.get("Range")
+            if rng and rng.startswith("bytes="):
+                start_s, _, end_s = rng[6:].partition("-")
+                start = int(start_s or 0)
+                end = min(int(end_s) if end_s else size - 1, size - 1)
+                length = end - start + 1
+                self.send_response(206)
+                self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
+            else:
+                start, length = 0, size
+                self.send_response(200)
+            self.send_header("Content-Type", "application/octet-stream")
+            self.send_header("Content-Length", str(length))
+            self.end_headers()
+            if self.command == "HEAD":
+                return
+            with open(new_zip, "rb") as f:
+                f.seek(start)
+                remaining = length
+                while remaining > 0:
+                    chunk = f.read(min(1 << 20, remaining))
+                    if not chunk:
+                        break
+                    self.wfile.write(chunk)
+                    remaining -= len(chunk)
 
         def do_GET(self):
             port = self.server.server_address[1]
@@ -129,7 +161,7 @@ def main(argv=None):
                     f"http://127.0.0.1:{port}/dl/{os.path.basename(new_zip)}").encode()
                 self._send(body, "application/json")
             elif self.path.rstrip("/").endswith(os.path.basename(new_zip)):
-                self._send(open(new_zip, "rb").read(), "application/octet-stream")
+                self._send_zip()
             else:
                 self.send_response(404)
                 self.end_headers()
