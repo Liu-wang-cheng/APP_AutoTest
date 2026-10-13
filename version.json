@@ -1,8 +1,8 @@
 {
-  "version": "2.0.10",
-  "sha256": "4acc024a9248c9b950ffe175e63d6ab02d4cdfa90f3124bd46c4bae4a4884c78",
-  "download_url": "https://github.com/Liu-wang-cheng/APP_AutoTest/releases/download/v2.0.10/AutoTest_v2.0.10.zip",
+  "version": "2.0.11",
+  "sha256": "4c1ea3c64d37c40fcc6e47d99c5800583cccfcf34a291d6b84f3a6167b0325e6",
+  "download_url": "https://github.com/Liu-wang-cheng/APP_AutoTest/releases/download/v2.0.11/AutoTest_v2.0.11.zip",
   "release_date": "2026-10-13",
-  "release_notes": "### 改进\n\n- **下载源按实测速度自动选**: 检查到新版本时, 各镜像源会并发实测一把\"拉真实更新包\n  的吞吐\"(各取前 1MB、总耗时约 6 秒), **谁快用谁** —— 不再按写死的顺序。测速日志\n  现在分两行: 延迟(可达性)一行、下载吞吐一行。\n- **镜像清单经过实测筛选**(2026-10-13, 拿真实更新包测了 12 个公开加速源):\n  只有 gh-proxy(553KB/s)与 ghfast(139KB/s)可用, 其余全灭, 没有收进清单;\n  以后有新镜像, 在 `config.yaml` 的 `update.mirrors` 加一条(带 `download_prefix`)\n  即可自动参与测速竞选。",
+  "release_notes": "### 修复\n\n- **前置子步骤的耗时不再空白**: 前置「自定义步骤」里每一步(if 子步骤也一样)的耗时\n  以前没有统计 —— 耗时只在正式用例的执行路径里计算, 前置的执行线程没有这段逻辑。\n  现在同样\"从本步开始算、跑完即记\", 结果表与报告里每条前置子步骤都带耗时。\n- **前置的自定义步骤每步都截图**: 以前只有点击类或显式要求截图的步骤才截,\n  等待/断言/if 这类子步骤什么都没有 —— 与\"前置也默认截图\"的初衷(2.0.6)相悖。\n  现在前置的每一步都留截图, 进当轮的「用例名-第N次」截图目录(随封顶一起回收)。",
   "min_version": "1.0"
 }
