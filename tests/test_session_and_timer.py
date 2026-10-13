@@ -102,6 +102,46 @@ def test_battery_missing_returns_minus_one():
     assert session.get_battery_level(FakeDevice(xml='<node text="充电中"/>')) == -1
 
 
+# ── 故障/空闲哨兵(用户 2026-10-13) ──
+
+def test_scan_status_words_returns_full_sentence():
+    """命中哨兵词要返回**整段原文**(报错/日志要能定位, 只给一个字没用)"""
+    xml = '<node text="正在清洁"/><node text="风机故障, 请重启设备后重试"/>'
+    assert session.scan_status_words(xml) == ("fault", "故障",
+                                              "风机故障, 请重启设备后重试")
+    xml2 = '<node text="设备等待中"/><node text="确认"/>'
+    assert session.scan_status_words(xml2) == ("idle", "等待", "设备等待中")
+    # 故障与空闲同屏 → 故障优先(更严重的信号说了算)
+    kind, word, _full = session.scan_status_words('<node text="待机中"/><node text="滚刷被困"/>')
+    assert (kind, word) == ("fault", "被困")
+
+
+def test_text_present_detail_fault_raises_with_full_text():
+    """等待/断言轮询撞上故障词 → FaultStateError, 报错带整段原文"""
+    xml = '<node text="卡住在障碍物旁边"/>'
+    with pytest.raises(session.FaultStateError) as ei:
+        session.text_present_detail(FakeDevice(xml=xml), ("充电中",))
+    assert "卡住在障碍物旁边" in str(ei.value), "报错要带整段原文"
+
+
+def test_text_present_detail_idle_returns_false_immediately():
+    """空闲词(待机/空闲/等待)在屏 → 立即判不成立, 不进 OCR/继续轮询"""
+    hit, _src, _raw, _pos = session.text_present_detail(
+        FakeDevice(xml='<node text="待机中"/>'), ("充电中",))
+    assert hit is None
+
+
+def test_set_status_words_override_from_config():
+    """config runner 段的 fault_texts / idle_texts 覆盖内置词表; 空串=保留现值"""
+    session.set_status_words("缺纸", "")
+    assert session.scan_status_words('<node text="缺纸"/>')[0] == "fault"
+    assert session.scan_status_words('<node text="滚刷被困"/>')[0] is None, \
+        "覆盖后内置词表应被替换"
+    session.set_status_words("", "缓冲中")
+    assert session.scan_status_words('<node text="缓冲中"/>')[0] == "idle"
+    session.set_status_words("", "")          # 还原默认, 别污染别的测试
+
+
 def test_is_charging_checks_text():
     assert session.is_charging(FakeDevice(present=("充电中",))) is True
     assert session.is_charging(FakeDevice(present=("清扫中",))) is False

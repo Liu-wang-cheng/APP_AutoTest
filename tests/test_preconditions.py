@@ -259,6 +259,25 @@ def test_text_check_passes_when_text_absent(monkeypatch):
     assert session.ensure_text_check(dev, absent_text="加载中", timeout=10) is True
 
 
+def test_text_check_fault_state_fails_fast(monkeypatch):
+    """★ 故障哨兵(用户 2026-10-13): 前置等待期间设备报故障 → **立即**失败
+    (日志带整段原文), 不等满 timeout; 走前置失败 → 阻断 → 报告里可见。"""
+    monkeypatch.setattr(session.time, "sleep", lambda s: None)
+
+    class _CountDev(FakeDev):
+        dumps = 0
+
+        def dump_hierarchy(self):
+            _CountDev.dumps += 1
+            return super().dump_hierarchy()
+
+    _CountDev.dumps = 0
+    dev = _CountDev(present=("风机故障, 请重启设备",))
+    assert session.ensure_text_check(dev, wait_text="首页", timeout=3600) is False
+    assert _CountDev.dumps <= 3, \
+        f"检测到故障应立即失败, 而不是轮询到超时(dump 了 {_CountDev.dumps} 次)"
+
+
 def test_text_check_timeout_runs_configured_action(monkeypatch):
     """超时后按配置执行操作: back=按返回键 / click:文本=点击该文本"""
     monkeypatch.setattr(session.time, "sleep", lambda s: None)

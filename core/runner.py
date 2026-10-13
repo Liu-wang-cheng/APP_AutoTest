@@ -13,7 +13,8 @@ import yaml
 from core import registry as reg
 import core.actions  # noqa: F401  导入即注册全部动作(见 core/actions/__init__.py)
 from core.driver import BASE_DIR, split_texts
-from core.session import text_present, text_present_detail, warm_webview  # noqa: E501  判断统一入口 + WebView 预热
+from core.session import (text_present, text_present_detail, warm_webview,  # noqa: E501  判断统一入口 + WebView 预热
+                          scan_status_words, set_status_words, FaultStateError)
 from core.logger import get_logger
 from core.trace import TraceRecorder
 from vlm.backend import VisionRouter
@@ -90,6 +91,9 @@ class ActionRunner:
         self.d = device
         self._device_id = getattr(device, "serial", None)
         self.case_name = case_name
+        # ★ 故障/空闲哨兵词表: 用 config runner 段的 fault_texts / idle_texts 覆盖
+        #   (不配则用内置默认, 见 core/session.py)
+        set_status_words(config.get("fault_texts"), config.get("idle_texts"))
         #: 点击类动作是否**强制截图**(把点击位置标在图上、写进报告)。
         #  ★ 只对**用例步骤**开(用户要求 2026-10-11: "测试步骤的点击操作才需要截图");
         #    前置条件里的自定义步骤属于准备动作, 不在这里留证据。
@@ -599,6 +603,16 @@ class ActionRunner:
             # ★ WebView 内容预热: 插件页的文本要完整层级 dump 才会进无障碍树,
             #   轻量 exists() 不触发 —— 不预热会一直读到空页(真机实测 30s 白等)
             xml = warm_webview(self.d)
+            # ★ 故障/空闲哨兵(用户 2026-10-13): 页面报故障 → 直接报错(带整段原文);
+            #   设备待机/空闲 → 目标不可能出现, 立即失败不再傻等。与统一判断入口
+            #   (text_present_detail)里的哨兵同一套词表, 这里补原生路径这一份。
+            kind, word, full = scan_status_words(xml)
+            if kind == "fault":
+                raise FaultStateError(f"检测到故障状态: 「{word}」← {full!r}"
+                                      f"(等待目标「{value}」不可能出现)")
+            if kind == "idle":
+                raise AssertionError(f"设备处于空闲状态: 「{word}」← {full!r}"
+                                     f"(等待目标「{value}」不会再出现)")
             for v in values:
                 el = self._find_element(v)
                 if el.exists(timeout=1):

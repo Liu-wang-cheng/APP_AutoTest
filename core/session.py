@@ -437,6 +437,59 @@ def visible_nodes(xml):
     return out
 
 
+class FaultStateError(AssertionError):
+    """设备进入故障态(故障哨兵词命中) —— 等待/断言立即失败, 报错带**整段**故障原文。
+
+    继承 AssertionError: 各处"断言失败"的处理路径(步骤失败/重试/报告)原样生效。
+    """
+
+
+#: 故障/空闲哨兵(用户 2026-10-13 定稿): 等待与断言的轮询里, 页面出现故障词 → 直接
+#: 报错(带整段原文); 出现空闲词 → 立即判不成立(不再傻等)。可在 config.yaml 的
+#: runner 段用 fault_texts / idle_texts 覆盖(逗号/顿号分隔)。
+DEFAULT_FAULT_WORDS = ("故障", "错误", "卡住", "被困", "问题", "检查", "失败", "异常")
+DEFAULT_IDLE_WORDS = ("待机", "空闲", "等待")
+_status_words = {"fault": DEFAULT_FAULT_WORDS, "idle": DEFAULT_IDLE_WORDS}
+
+
+def set_status_words(fault_texts="", idle_texts=""):
+    """用配置覆盖哨兵词表(传空串=保留现值; ActionRunner 初始化时调)"""
+    if str(fault_texts or "").strip():
+        _status_words["fault"] = tuple(_split_texts(fault_texts))
+    if str(idle_texts or "").strip():
+        _status_words["idle"] = tuple(_split_texts(idle_texts))
+
+
+def _word_in(text, words):
+    """text 里命中哪个词 → (词, True); 没命中 → (None, False)"""
+    for w in words:
+        if w and w in text:
+            return w, True
+    return None, False
+
+
+def scan_status_words(xml):
+    """扫**可见节点**里的故障/空闲词 → (kind, 词, 整段原文) / (None, None, None)。
+
+    ★ 返回**整段原文**(用户 2026-10-13: 日志与报错要把带故障词的整段话打出来,
+      如「滚刷被困, 请清理后重试」, 只打一个"被困"字没法定位)。
+    ★ 故障优先: 先全树扫故障词, 再扫空闲词 —— 两个信号同时在屏时故障说了算。
+    ★ 只扫可见节点(text/desc), 与 text_present_detail 同一可见性规则。
+    """
+    if not xml:
+        return None, None, None
+    nodes = visible_nodes(xml)
+    for kind in ("fault", "idle"):
+        for node in nodes:
+            for raw in (node[0], node[1]):
+                if not raw:
+                    continue
+                w, hit = _word_in(raw, _status_words[kind])
+                if hit:
+                    return kind, w, raw
+    return None, None, None
+
+
 def text_present_detail(d, texts, xml=None, round_no=None):
     """判断类的**详情版**: 返回 (命中的候选, 命中来源, 命中的原文, 坐标|None)。
 
@@ -448,6 +501,9 @@ def text_present_detail(d, texts, xml=None, round_no=None):
       本函数同时扫 text 与 content-desc, 而 u2 那边 `textContains` 只看文本、
       `description` 是**精确**匹配 —— 于是会出现"u2 查不到、这里查得到", 命中的可能是
       某个控件的**无障碍描述**里的子串。不写清来源, 人只能看到"命中了", 无法判断是谁顶的。
+    ★ 故障/空闲哨兵(用户 2026-10-13): 页面出现故障词 → 直接 FaultStateError(带整段
+      原文); 出现空闲词 → 立即判不成立(不再轮询/OCR)。等待的文本不可能在故障/待机
+      状态下出现, 傻等满轮次只会把"设备故障"掩盖成"超时"。
     """
     wanted = [t for t in (texts or []) if t]
     if not wanted:
@@ -455,6 +511,13 @@ def text_present_detail(d, texts, xml=None, round_no=None):
     if xml is None:
         xml = warm_webview(d)
     nodes = visible_nodes(xml)
+    kind, word, full = scan_status_words(xml)
+    if kind == "fault":
+        raise FaultStateError(f"检测到故障状态: 「{word}」← {full!r}")
+    if kind == "idle":
+        log.info(f"[状态哨兵] 设备空闲({word}), 等待目标 {wanted} 不可能出现 → 判不成立"
+                 f" ← {full!r}")
+        return None, "", "", None
     for idx, attr in ((0, "text"), (1, "desc")):        # 文本优先, 描述其次
         for node in nodes:
             raw = node[idx]
@@ -473,6 +536,9 @@ def text_present_detail(d, texts, xml=None, round_no=None):
     if ocr.available() and (ocr.sparse(xml) or ocr.round_allows_ocr(round_no)):
         hit, line, pos = ocr.find_detail(d, wanted)
         if hit:
+            fw, fword = _word_in(line, _status_words["fault"])
+            if fw:      # 故障弹窗有时画在屏上但不进无障碍树 —— OCR 兜底轮同样要哨兵
+                raise FaultStateError(f"检测到故障状态: 「{fword}」← OCR 读到 {line!r}")
             log.info(f"[OCR兜底] 无障碍树里没有, 截图识别命中「{hit}」"
                      f"← OCR 读到的是 {line!r}" + (f" @ {pos}" if pos else ""))
             return hit, "ocr", line, pos
@@ -574,9 +640,15 @@ def ensure_text_check(d, wait_text="", absent_text="", timeout=60,
     while time.time() < end:
         # ★ 预热一次供两个判断复用(原本最多 dump 3 次)
         xml = warm_webview(d)
-        if _ok(xml):
-            log.info(f"[前置] {label}: 条件已满足")
-            return True
+        try:
+            if _ok(xml):
+                log.info(f"[前置] {label}: 条件已满足")
+                return True
+        except FaultStateError as e:
+            # ★ 故障哨兵(用户 2026-10-13): 设备报故障 → 前置立即失败(原因进日志),
+            #   不等满 timeout; 由阻断机制把"前置未通过: …"带进报告
+            log.warning(f"[前置] {label}: {e}")
+            return False
         if should_cancel and should_cancel():
             log.info(f"[前置] {label}: 收到停止请求")
             return False

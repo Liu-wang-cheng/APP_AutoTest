@@ -82,6 +82,27 @@ def runner():
                                        "click_timeout": 1}, case_name="t")
 
 
+# ── 故障/空闲哨兵(用户 2026-10-13): 断言轮询的原生路径 ──
+
+def test_assert_text_fault_state_fails_fast(runner):
+    """断言撞上故障词 → 直接 FaultStateError 带**整段原文**, 不等满超时"""
+    from core import session as _session
+    runner.d = FakeDevice(present=("滚刷被困, 请清理后重试",))
+    with pytest.raises(_session.FaultStateError) as ei:
+        runner._assert_locator("充电中", timeout=5)
+    assert "滚刷被困, 请清理后重试" in str(ei.value), str(ei.value)
+
+
+def test_assert_text_idle_state_fails_fast(runner):
+    """设备待机/空闲/等待中 → 立即断言失败(目标不会再出现), 不傻等"""
+    from core import session as _session
+    runner.d = FakeDevice(present=("设备等待中",))
+    with pytest.raises(AssertionError) as ei:
+        runner._assert_locator("充电中", timeout=5)
+    msg = str(ei.value)
+    assert "空闲" in msg and "设备等待中" in msg, msg
+
+
 def test_click_coordinates(runner):
     runner._execute({"click": [531, 1900]})
     assert runner.d.clicked_at == (531, 1900)
