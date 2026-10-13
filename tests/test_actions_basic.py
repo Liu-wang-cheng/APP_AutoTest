@@ -103,6 +103,40 @@ def test_assert_text_idle_state_fails_fast(runner):
     assert "空闲" in msg and "设备等待中" in msg, msg
 
 
+class _SeqDev(FakeDevice):
+    """记录操作顺序的桩: 验证"点击证据要在点击前拍"(用户 2026-10-13)"""
+
+    def __init__(self, *a, **k):
+        super().__init__(*a, **k)
+        self.ops = []
+
+    def click(self, x, y):
+        self.ops.append(("click", x, y))
+
+    def screenshot(self, path=None, format=None):
+        self.ops.append(("shot", path))
+        from pathlib import Path as _P
+        p = _P(path)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(b"png")
+
+
+def test_click_screenshots_before_clicking(runner):
+    """★ 点击证据要**点击前**拍: 点完再截页面已变, 标注的坐标对不上那一刻的界面。"""
+    runner.d = _SeqDev()
+    res = runner._execute({"desc": "点一下", "click": [10, 20]})
+    assert runner.d.ops[0][0] == "shot", runner.d.ops
+    assert runner.d.ops[1] == ("click", 10, 20), runner.d.ops
+    assert res == runner.d.ops[0][1], "点击前那张就是本步的证据截图"
+
+
+def test_click_explicit_screenshot_stays_after_click(runner):
+    """显式 `screenshot:` 键 = 用户要点击后的状态 → 仍是点击后拍(老语义不变)"""
+    runner.d = _SeqDev()
+    runner._execute({"desc": "点完留证", "click": [10, 20], "screenshot": True})
+    assert [o[0] for o in runner.d.ops] == ["click", "shot"], runner.d.ops
+
+
 def test_click_coordinates(runner):
     runner._execute({"click": [531, 1900]})
     assert runner.d.clicked_at == (531, 1900)

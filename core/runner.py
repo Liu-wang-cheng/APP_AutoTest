@@ -11,6 +11,7 @@ import time
 import yaml
 
 from core import registry as reg
+from core import ocr
 import core.actions  # noqa: F401  导入即注册全部动作(见 core/actions/__init__.py)
 from core.driver import BASE_DIR, split_texts
 from core.session import (text_present, text_present_detail, warm_webview,  # noqa: E501  判断统一入口 + WebView 预热
@@ -93,7 +94,9 @@ class ActionRunner:
         self.case_name = case_name
         # ★ 故障/空闲哨兵词表: 用 config runner 段的 fault_texts / idle_texts 覆盖
         #   (不配则用内置默认, 见 core/session.py)
-        set_status_words(config.get("fault_texts"), config.get("idle_texts"))
+        set_status_words(config.get("fault_texts"), config.get("idle_texts"),
+                         fault_streak=config.get("fault_streak"),
+                         idle_streak=config.get("idle_streak"))
         #: 点击类动作是否**强制截图**(把点击位置标在图上、写进报告)。
         #  ★ 只对**用例步骤**开(用户要求 2026-10-11: "测试步骤的点击操作才需要截图");
         #    前置条件里的自定义步骤属于准备动作, 不在这里留证据。
@@ -101,6 +104,11 @@ class ActionRunner:
         # ★ True = 每一步都留截图(前置的自定义步骤用): 以前只有点击类/显式 screenshot
         #   才截, wait/assert/if 这类子步骤在"前置也默认截图"里缺席(用户 2026-10-13)
         self.always_screenshot = False
+        # ★ 点击前证据截图(用户 2026-10-13): mark_click 拍好并存路径,
+        #   _execute 的后置截图块见到它就让路(每步最多一张, 见 mark_click)
+        self._pre_click_shot = None
+        self._cur_step = None          # 当前步骤(点击前截图判断"显式 screenshot"用)
+        self._cur_step_desc = ""
         # 设备页名称(配置里的 target_device): 插件页整页文本读不出来时, 用它重进设备页
         self.device_name = device_name
         # 用例级 wait 优先,否则用全局 step_interval
@@ -366,10 +374,15 @@ class ActionRunner:
            而且元素可能延迟出现 —— 必须每次重新找。
         2. **不可点击元素回退到整行**: 涂鸦是 React Native,列表项的文字节点
            本身 clickable=false,点它没反应,得点它所属的 `*_Row`。
+        3. **OCR 兜底点击坐标(用户 2026-10-13)**: 插件页切视图时无障碍树暂态空
+           (实测 _find_element 一直 exists=False 直到 10s 超时), 原生找不到 ——
+           切到 OCR 找文本行坐标直接 click。timeout 内每隔 2s 尝试一次, 命中即点,
+           点不到再说。
         """
         timeout = timeout if timeout is not None else self.click_timeout
         end_time = time.time() + timeout if timeout > 0 else None
         check_count = 0
+        ocr_last = 0.0
         while True:
             if end_time and time.time() >= end_time:
                 raise AssertionError(f"超时({timeout}s)未找到可点击元素: {value}")
@@ -390,14 +403,32 @@ class ActionRunner:
                             return
                 except Exception as e:
                     log.debug(f"[click] 行点击回退异常: {e}")
+                self.mark_click(self._center_xy(el, value))   # ★ 点击前截图标注
                 el.click()
-                self.last_click = self._center_xy(el, value)   # ★ 供截图标注"点在哪"
                 # ★ 点击必须留痕(写清点了谁、落在哪): 真机排查"点不动/点错地方"时,
                 #   这是唯一能拿到的第一手信息(模板点击一直有, 文本/坐标以前是空白)
                 log.info(f"[点击] 文本「{value}」 @ {self._center_of(el)}")
                 return
+            # ★ 原生找不到, 每 2s 试一次 OCR 兜底(2026-10-13): 插件页切视图
+            #   树暂态空, OCR 此时能拿到目标文本的真实坐标 → 直接 d.click(x, y)
+            if ocr.available() and time.time() - ocr_last >= 2.0:
+                ocr_last = time.time()
+                hit, pos = self._ocr_find_xy(value)
+                if hit and pos:
+                    self.mark_click((pos[0], pos[1]), f"OCR: {value}")
+                    self.d.click(pos[0], pos[1])
+                    log.info(f"[点击] OCR 兜底命中「{value}」 @ ({pos[0]},{pos[1]})")
+                    return
             check_count += 1
             self._poll_sleep(check_count)
+
+    def _ocr_find_xy(self, value):
+        """OCR 全文扫描, 找含 value 的那行, 返回 (value, (x, y)) / (None, None)。"""
+        from core import ocr as _ocr
+        for line, pos in _ocr.screen_texts(self.d):
+            if value and value in line:
+                return value, pos
+        return None, None
 
     @staticmethod
     def _element_visible(el):
@@ -465,13 +496,13 @@ class ActionRunner:
             row_end = xml.find('content-desc="', rm.end())
             subtree = xml[rm.start():row_end if row_end > 0 else len(xml)]
             if value in subtree or (text_val and text_val in subtree):
+                center = ((int(rm.group(2)) + int(rm.group(4))) // 2,
+                          (int(rm.group(3)) + int(rm.group(5))) // 2)
+                self.mark_click(center, value)   # ★ 点击前截图标注(2026-10-13)
                 if self.d(description=rm.group(1)).exists(timeout=1):
                     self.d(description=rm.group(1)).click()
                 else:
-                    self.d.click((int(rm.group(2)) + int(rm.group(4))) // 2,
-                                 (int(rm.group(3)) + int(rm.group(5))) // 2)
-                self.last_click = ((int(rm.group(2)) + int(rm.group(4))) // 2,
-                                   (int(rm.group(3)) + int(rm.group(5))) // 2, value)
+                    self.d.click(*center)
                 log.info(f"[点击] 文本「{value}」点不动 → 点它所在的整行({rm.group(1)})")
                 return True
         return False
@@ -502,9 +533,9 @@ class ActionRunner:
             pos = vision.find_in_gray(cv2.cvtColor(screen, cv2.COLOR_BGR2GRAY),
                                       vision.resolve_template(name))
             if pos:
+                self.mark_click(pos, name)      # ★ 点击前截图标注(2026-10-13)
                 self.d.click(*pos)
                 log.info("[模板点击] %s @ (%d, %d)", name, pos[0], pos[1])
-                self.last_click = (pos[0], pos[1], name)
                 self._save_click_marker(screen, pos, name)
                 return pos
             self._sleep(2)
@@ -565,6 +596,56 @@ class ActionRunner:
         except Exception:
             pass                      # 标记只是附加证据,绝不能影响执行
 
+    def _step_shot_path(self, step_desc=""):
+        """步骤截图的标准路径: Test_cases/<组>/screenshots/<shot_subdir>/stepNN_<desc>.png"""
+        from core import vision as _vision
+        safe_desc = re.sub(r'[\\/:*?"<>|\s]+', "_", str(step_desc))[:30]
+        idx = len(self.results) + 1
+        # ★ 目录名要能区分**第几次执行**: 用 shot_subdir(worker 传的"用例名-第N次"),
+        #   否则同一个用例跑多轮时, 每轮的 step01_xxx.png 是**同一个路径** ——
+        #   后一轮把前一轮覆盖掉(用户 2026-10-12 实测报的正是这个)。
+        #   没给(单元测试/旧调用)时退回用例名。
+        sub = getattr(self, "shot_subdir", "") or self.case_name or "case"
+        path = (f"Test_cases/{_vision.current_app_group() or '未分组'}/"
+                f"screenshots/{sub}/"
+                f"step{idx:02d}_{safe_desc}.png")
+        # screenshots/ 开头的路径补全 Test_img/ 前缀(reports/ 等其他路径原样)
+        if path.startswith("screenshots/"):
+            path = os.path.join(BASE_DIR, "Test_img", path)
+        elif not os.path.isabs(path):
+            path = os.path.join(BASE_DIR, path)
+        return path
+
+    def mark_click(self, pos, label=None):
+        """点击**前**截图并标注位置(用户 2026-10-13): 点完再截, 页面已经变了 ——
+        标注的坐标对不上点击那一刻的界面, 证据就失去意义。
+
+        所有点击类动作在拿到坐标后、真正点击前调用本方法; 截图进本步结果的
+        screenshot 字段(_execute 的后置截图块见到它就让路)。
+        ★ 每步最多一张(重复调用直接返回 —— 一步里先点 A 再点 B, 证据取第一击);
+        ★ 显式 `screenshot:` 键的步骤不在此拍 —— 用户要的是点击后的状态, 仍点击后拍;
+        ★ pos: (x, y) / (x, y, label) / None(取不到中心 —— 不标注不截图, 只置标记)。
+        """
+        if getattr(self, "_pre_click_shot", None):
+            return
+        if pos:
+            self.last_click = (pos[0], pos[1],
+                               label or (pos[2] if len(pos) > 2 else ""))
+        if not pos or not (self.click_shots or self.always_screenshot):
+            return
+        if "screenshot" in (self._cur_step or {}):
+            return
+        try:
+            path = self._step_shot_path(self._cur_step_desc)
+            os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+            self.d.screenshot(path)     # 点击前: 界面还是"要点"的样子, 立即截不安定等
+            self._mark_last_click_on(path)
+            self._pre_click_shot = path
+        except Exception as e:
+            # 证据截图尽力而为: 失败了 last_click 还在, 后置截图块兜底补拍并标注
+            log.warning(f"[截图] 点击前截图失败(点击照常, 由后置截图兜底): "
+                        f"{type(e).__name__}: {e}")
+
     def _mark_last_click_on(self, path):
         """本步骤若发生过点击,把位置标记到步骤截图上(标记一次即消费)"""
         lc = getattr(self, "last_click", None)
@@ -606,13 +687,26 @@ class ActionRunner:
             # ★ 故障/空闲哨兵(用户 2026-10-13): 页面报故障 → 直接报错(带整段原文);
             #   设备待机/空闲 → 目标不可能出现, 立即失败不再傻等。与统一判断入口
             #   (text_present_detail)里的哨兵同一套词表, 这里补原生路径这一份。
+            #   误触防护(2026-10-13): 必须连续 N 轮才触发(默认 3, set_status_words 配)
             kind, word, full = scan_status_words(xml)
-            if kind == "fault":
-                raise FaultStateError(f"检测到故障状态: 「{word}」← {full!r}"
-                                      f"(等待目标「{value}」不可能出现)")
-            if kind == "idle":
-                raise AssertionError(f"设备处于空闲状态: 「{word}」← {full!r}"
-                                     f"(等待目标「{value}」不会再出现)")
+            from core.session import (fingerprint_xml, streak_status_word,
+                                     _status_words as _sw)
+            if kind in ("fault", "idle"):
+                fp = fingerprint_xml(xml)
+                n = streak_status_word(kind, True, fp)
+                need = _sw.get(f"{kind}_streak", 3)
+                if n >= need:
+                    if kind == "fault":
+                        raise FaultStateError(
+                            f"检测到故障状态(连续{n}次): 「{word}」← {full!r}"
+                            f"(等待目标「{value}」不可能出现)")
+                    raise AssertionError(
+                        f"设备处于空闲状态(连续{n}次): 「{word}」← {full!r}"
+                        f"(等待目标「{value}」不会再出现)")
+            else:
+                fp = fingerprint_xml(xml)
+                streak_status_word("fault", False, fp)
+                streak_status_word("idle", False, fp)
             for v in values:
                 el = self._find_element(v)
                 if el.exists(timeout=1):
@@ -657,6 +751,9 @@ class ActionRunner:
             last_err = None
             screenshot = ""
             self.last_click = None   # 标记只属于发生点击的当前步
+            self._pre_click_shot = None
+            self._cur_step = step
+            self._cur_step_desc = desc
             for attempt in range(max_attempts):
                 if self.stopped:
                     break
@@ -694,8 +791,22 @@ class ActionRunner:
                         try:
                             xml = self.d.dump_hierarchy()
                             texts = [t for t in re.findall(r'text="([^"]+)"', xml) if t.strip()]
+                            # ★ 树稀疏/空时 OCR 兜底(2026-10-13): 用户贴的真机日志
+                            #   看到 ['16:41','扫地机器人 0050'] —— 目标元素压根不在树里,
+                            #   没 OCR 兜底, 失败原因只能盲猜。顺手加一行 OCR 文本。
+                            ocr_texts = []
+                            try:
+                                from core import ocr as _ocr
+                                if _ocr.available():
+                                    ocr_texts = [line for line, _p in
+                                                 _ocr.screen_texts(self.d)]
+                            except Exception:
+                                pass
                             log.error(f"[FAIL诊断] 步骤「{desc}」失败: {e}")
-                            log.error(f"[FAIL诊断] 当前页面文本(前30): {texts[:30]}")
+                            log.error(f"[FAIL诊断] 当前页面文本(树, 前30): {texts[:30]}")
+                            if ocr_texts:
+                                log.error(f"[FAIL诊断] 当前页面文本(OCR, 前20): "
+                                          f"{ocr_texts[:20]}")
                             log.error(f"[FAIL诊断] 截图: {screenshot}")
                         except Exception:
                             pass
@@ -739,6 +850,7 @@ class ActionRunner:
 
     def _execute(self, step: dict):
         """动作分发入口: 主表按 priority 找第一个命中键;grab/match/screenshot 单独处理"""
+        self._cur_step = step   # 直调 _execute 的场合(单元测试)也要能判断显式截图键
         screenshot = ""
         executed_key = None
         # 1. 主操作:按优先级找第一个命中的动作键执行
@@ -787,24 +899,18 @@ class ActionRunner:
         #   步骤里写 screenshot: false 也照样截; 写了路径就用那个路径。
         click_step = (self.click_shots
                       and reg.is_click_action(reg.primary_action_key(step)))
-        if "screenshot" in step or click_step or self.always_screenshot:
+        pre_shot = getattr(self, "_pre_click_shot", None)
+        if pre_shot and "screenshot" not in step:
+            # ★ 点击证据已在**点击前**拍好并标注(2026-10-13) —— 直接采用,
+            #   不再点击后再拍一张(那时页面已经变了)
+            screenshot = pre_shot
+        elif "screenshot" in step or click_step or self.always_screenshot:
             sv = step.get("screenshot")
             if isinstance(sv, str) and sv.strip():
                 path = sv                       # 旧用例的手动路径, 兼容保留
             else:
                 # ★ 开关模式(True): 截图进 APP 组目录(用户要求: 和用例/模板放一起)
-                from core import vision as _vision
-                safe_desc = re.sub(r'[\\/:*?"<>|\s]+', "_",
-                                   str(step.get("desc") or ""))[:30]
-                idx = len(self.results) + 1
-                # ★ 目录名要能区分**第几次执行**: 用 shot_subdir(worker 传的"用例名-第N次"),
-                #   否则同一个用例跑多轮时, 每轮的 step01_xxx.png 是**同一个路径** ——
-                #   后一轮把前一轮覆盖掉, 报告里(图片是嵌进去的)每轮看着就是同一张图
-                #   (用户 2026-10-12 实测报的正是这个)。没给(单元测试/旧调用)时退回用例名。
-                sub = getattr(self, "shot_subdir", "") or self.case_name or "case"
-                path = (f"Test_cases/{_vision.current_app_group() or '未分组'}/"
-                        f"screenshots/{sub}/"
-                        f"step{idx:02d}_{safe_desc}.png")
+                path = self._step_shot_path(step.get("desc") or "")
             # screenshots/ 开头的路径补全 Test_img/ 前缀(reports/ 等其他路径原样)
             if path.startswith("screenshots/"):
                 path = os.path.join(BASE_DIR, "Test_img", path)

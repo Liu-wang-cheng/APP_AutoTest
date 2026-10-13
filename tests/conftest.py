@@ -250,6 +250,18 @@ def _reset_idle_gate():
     idle.reset()
 
 
+@pytest.fixture(autouse=True)
+def _reset_status_words():
+    """★ 状态词/streak 在每个测试前后还原默认(用户 2026-10-13):
+    set_status_words() 改的是模块级全局, 不清掉会泄漏给下一个测试 ——
+    表现为"全量跑失败、单跑通过"的诡异现象(fault_texts 被前一条改成"缺纸"等)。
+    """
+    from core import session
+    session.reset_status_words()
+    yield
+    session.reset_status_words()
+
+
 @pytest.fixture(scope="session", autouse=True)
 def _isolate_log_file(tmp_path_factory):
     """测试期日志写到临时文件, 不污染用户的 reports/test.log。

@@ -564,6 +564,24 @@ def test_wait_for_warms_webview(make_runner, monkeypatch):
     assert calls["n"] >= 1, "wait_for 没有预热 dump"
 
 
+def test_click_by_locator_falls_back_to_ocr_when_tree_empty(make_runner, monkeypatch):
+    """★ 点击超时路径加 OCR 兜底(用户 2026-10-13): 插件页切视图时无障碍树暂态空,
+    原生 d(textContains=...) 一直 exists=False 直到 10s 超时 —— OCR 此时能拿到
+    目标文本的真实坐标, 直接 d.click(x, y) 即可。"""
+    from core import ocr
+    d = FakeDevice(present=())            # 原生一直找不到
+    r = make_runner(d)
+    monkeypatch.setattr(r, "_poll_sleep", lambda n: None)
+    monkeypatch.setattr(ocr, "available", lambda: True)
+    monkeypatch.setattr(ocr, "screen_texts",
+                        lambda d, **k: [("清扫中", (123, 456))])
+    monkeypatch.setattr(r, "mark_click", lambda *a, **k: None)
+    clicks = []
+    monkeypatch.setattr(d, "click", lambda x, y: clicks.append((x, y)))
+    r._click_by_locator("清扫中", timeout=0.5)
+    assert clicks == [(123, 456)], f"OCR 兜底应直接用其坐标点击, 实际 {clicks}"
+
+
 def test_assert_locator_falls_back_to_ocr(make_runner, monkeypatch):
     """★ 断言也要"原生优先, OCR 兜底": 页面主体没暴露时截图识别命中即通过。
 

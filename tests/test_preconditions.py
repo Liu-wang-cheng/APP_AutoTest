@@ -245,6 +245,32 @@ def test_item_label_distinguishes_instances():
 
 # ── 通用文本检查(用户新增的自定义前置项) ──
 
+def test_ensure_map_loaded_logs_hit_text(monkeypatch, caplog):
+    """★ 地图加载成功日志要带**命中的就绪文本**(用户 2026-10-13): 配了多个就绪词时,
+    只写"已加载"看不出是按哪个判的 —— 与断言的命中留痕同一思路。"""
+    import logging
+    dev = FakeDev(present=("地图编辑", "正在清扫"))
+    lg = session.log
+    recs = []
+
+    class _H(logging.Handler):
+        def emit(self, record):
+            recs.append(record.getMessage())
+
+    h = _H(level=logging.INFO)
+    lg.addHandler(h)
+    old = lg.level
+    lg.setLevel(logging.INFO)
+    try:
+        assert session.ensure_map_loaded(dev, timeout=1, rounds=1) is True
+    finally:
+        lg.removeHandler(h)
+        lg.setLevel(old)
+    hit = [m for m in recs if "地图已加载" in m]
+    assert hit, recs
+    assert "命中「地图编辑」" in hit[0], hit[0]
+
+
 def test_text_check_passes_when_text_appears(monkeypatch):
     """等待文本出现 → 已出现即通过"""
     monkeypatch.setattr(session.time, "sleep", lambda s: None)
@@ -260,20 +286,24 @@ def test_text_check_passes_when_text_absent(monkeypatch):
 
 
 def test_text_check_fault_state_fails_fast(monkeypatch):
-    """★ 故障哨兵(用户 2026-10-13): 前置等待期间设备报故障 → FaultStateError 直接
-    抛出(**带整段原文**), 不等满 timeout —— 由 prepare_items 接住记成失败原因。"""
+    """★ 故障哨兵(用户 2026-10-13): 故障词 + 连续 N 次(默认 3, 误触防护)→ 抛
+    FaultStateError 带整段原文, 不等满 timeout。本测试把 streak 设成 1 验证
+    "立即抛"路径; 默认 3 的多次累计见下一条。"""
     monkeypatch.setattr(session.time, "sleep", lambda s: None)
+    session.set_status_words("风机故障", "", fault_streak=1, idle_streak=1)
     dev = FakeDev(present=("风机故障, 请重启设备",))
     with pytest.raises(session.FaultStateError) as ei:
         session.ensure_text_check(dev, wait_text="首页", timeout=3600)
     assert "风机故障, 请重启设备" in str(ei.value), str(ei.value)
+    session.set_status_words("", "", fault_streak=3, idle_streak=3)  # 还原默认
 
 
 def test_prepare_items_reports_fault_reason(monkeypatch):
-    """★ 前置失败原因进结果(2026-10-13): 撞故障词的前置项带**整段原文**,
-    供结果表/报告/阻断详情显示 —— 不再只有干巴巴的"超时或失败"。且立即失败
-    (dump 次数是个位), 不轮询到超时。"""
+    """★ 前置失败原因进结果(2026-10-13): 撞故障词的前置项带**整段原文**, 进结果表
+    /报告/阻断详情 —— 不再只有干巴巴的"超时或失败"。streak=1 时立即失败, dump
+    次数是个位, 不轮询到超时。"""
     monkeypatch.setattr(session.time, "sleep", lambda s: None)
+    session.set_status_words("风机故障", "", fault_streak=1, idle_streak=1)
 
     class _CountDev(FakeDev):
         dumps = 0
@@ -291,6 +321,45 @@ def test_prepare_items_reports_fault_reason(monkeypatch):
     assert "风机故障, 请重启设备" in res[0].get("reason", ""), res[0]
     assert _CountDev.dumps <= 3, \
         f"检测到故障应立即失败(dump 了 {_CountDev.dumps} 次)"
+    session.set_status_words("", "", fault_streak=3, idle_streak=3)
+
+
+def test_streak_protection_requires_3_hits(monkeypatch):
+    """★ 误触防护(用户 2026-10-13): 单帧命中不算故障(防止半秒消失的 toast /
+    状态栏瞬闪的"等待"字样被误判), 必须连续 3 帧才触发 → 可避免误判; 同时
+    验证: 1 次命中不抛, 2 次命中不抛, 第 3 次才抛 FaultStateError。"""
+    from core.session import set_status_words, scan_status_words, _status_words
+    # 用 set_status_words 后立即清掉 streak 计数, 干净起步
+    set_status_words("MyFault", "", fault_streak=3, idle_streak=3)
+    from core import session
+    session._streak_counters.clear()
+    xml = '<node text="MyFault 出现"/>'
+    # 1 次 + 2 次: 不抛
+    for i in range(2):
+        kind, word, full = scan_status_words(xml=xml)
+        assert kind == "fault"      # 词表命中, 但累计不到 3 也不该抛
+        # text_present_detail 内部的 streak 防护: 累计到 2 也不抛
+        from core.session import text_present_detail
+        try:
+            text_present_detail(_EmptyDev(), ["x"], xml=xml)
+        except session.FaultStateError:
+            pytest.fail(f"第 {i+1} 次就抛了, 应等 3 次")
+    # 第 3 次: 抛
+    with pytest.raises(session.FaultStateError) as ei:
+        text_present_detail(_EmptyDev(), ["x"], xml=xml)
+    assert "MyFault" in str(ei.value)
+    # 中间隔一帧不命中 → 累计清零
+    session._streak_counters.clear()
+    xml2 = '<node text="干净页面"/>'
+    from core.session import scan_status_words as _ss
+    kind2, _, _ = _ss(xml=xml2)
+    assert kind2 is None
+
+
+class _EmptyDev:
+    """最小设备桩: 满足 text_present_detail 的接口(不调用 d,xml 是显式传入)"""
+    def dump_hierarchy(self):
+        return ""
 
 
 def test_prepare_items_step_start_callback():
@@ -302,7 +371,7 @@ def test_prepare_items_step_start_callback():
     session.prepare_items(FakeDev(), {"runner": {"step_interval": 0}}, items,
                           on_step_start=lambda desc, attempt=1:
                           seen.append((desc, attempt)))
-    assert seen and seen[0][0] == "自定义步骤: 等一下" and seen[0][1] == 1, seen
+    assert seen and seen[0][0] == "自定义步骤(1步): 等一下" and seen[0][1] == 1, seen
 
 
 def test_text_check_timeout_runs_configured_action(monkeypatch):

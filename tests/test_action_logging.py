@@ -53,6 +53,13 @@ class Device:
         self.texts = set(texts)
         self.calls = []
 
+    @property
+    def info(self):
+        # ★ runner._ensure_device 轻量调 self.d.info 检测掉线: 没这个属性会 AttributeError
+        #   → 走 3 次重连 + 每次 sleep(3) + u2.connect 失败 = 39s 慢(2026-10-13 排查)。
+        #   测试桩没有真实设备, 直接假装在线。
+        return {"displayWidth": 1080, "displayHeight": 1920, "serial": self.serial}
+
     def dump_hierarchy(self):
         rows = [f'<node text="{t}" bounds="[100,{300 + i * 40}][400,{340 + i * 40}]"/>'
                 for i, t in enumerate(sorted(self.texts))]

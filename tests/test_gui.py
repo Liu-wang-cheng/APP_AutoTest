@@ -36,7 +36,70 @@ def win(qapp, monkeypatch, tmp_path):
     w.close()
 
 
+def test_fault_button_sits_left_of_precondition_button(win):
+    """★ 「故障检测」按钮加在「前置条件」左边(用户 2026-10-13)—— 工具栏顺序,
+    排查故障词/空闲词是更频繁的微调, 放在更顺手的位置。"""
+    # 前置按钮的父 = 它本身(pre_btn.setMenu 让菜单挂按钮上, 父布局在祖父层)
+    # 用 pre_btn.parentWidget() 拿到工具栏 widget, 从其 layout 算 indexOf
+    pre_btn = win.pre_menu.parent()                    # QMenu.parent() → QPushButton
+    bar_widget = pre_btn.parentWidget()
+    lay = bar_widget.layout()
+    assert lay is not None, "工具栏应是 QHBoxLayout"
+    # 前置按钮在 layout 里有占位; 故障按钮索引要小
+    # 注: lay.indexOf(pre_btn) 可能返回 -1(因为是 menu 的父, 而非 menu 本身)
+    # 走 widget 顺序: collect children 在工具栏 layout 中的插入顺序
+    kids = []
+    for i in range(lay.count()):
+        it = lay.itemAt(i)
+        if it is None:
+            continue
+        w = it.widget()
+        if w is not None:
+            kids.append(w)
+    assert win.fault_btn in kids and pre_btn in kids, kids
+    assert kids.index(win.fault_btn) < kids.index(pre_btn), (
+        f"故障检测按钮应在前置条件左边: fault@{kids.index(win.fault_btn)} "
+        f"pre@{kids.index(pre_btn)}")
+
+
+def test_status_words_dialog_saves_to_config_and_runtime(win, monkeypatch, tmp_path):
+    """★ 在线改词表 → 写 config.yaml + 同步 core.session 全局 → 当轮后续步骤
+    立即用新词(2026-10-13, 不重启)"""
+    from gui import main_window as mw
+    from core import session, driver
+    cfg_path = tmp_path / "config.yaml"
+    cfg_path.write_text("runner:\n  default_timeout: 30\n",
+                         encoding="utf-8", newline="")
+    monkeypatch.setattr(driver, "CONFIG_PATH", str(cfg_path))
+    dlg = mw.StatusWordsDialog("OLD_FAULT", "OLD_IDLE", parent=win)
+    dlg.fault_edit.setPlainText("new_fault")
+    dlg.idle_edit.setPlainText("new_idle")
+    dlg._save()
+    text = cfg_path.read_text(encoding="utf-8")
+    assert "new_fault" in text and "new_idle" in text, text
+    assert "new_fault" in session._status_words["fault"], session._status_words
+    assert "new_idle" in session._status_words["idle"], session._status_words
+
+
+def test_status_words_dialog_saves_to_config_and_runtime(win, monkeypatch, tmp_path):
+    """★ 在线改词表 → 写 config.yaml + 同步 core.session 全局(用户 2026-10-13)"""
+    from gui import main_window as mw
+    from core import session, driver
+    cfg_path = tmp_path / "config.yaml"
+    cfg_path.write_text("runner:\n  default_timeout: 30\n",
+                         encoding="utf-8", newline="")
+    monkeypatch.setattr(driver, "CONFIG_PATH", str(cfg_path))
+    dlg = mw.StatusWordsDialog("OLD_FAULT", "OLD_IDLE", parent=win)
+    dlg.fault_edit.setPlainText("new_fault")
+    dlg.idle_edit.setPlainText("new_idle")
+    dlg._save()
+    text = cfg_path.read_text(encoding="utf-8")
+    assert "new_fault" in text and "new_idle" in text, text
+    assert "new_fault" in session._status_words["fault"]
+    assert "new_idle" in session._status_words["idle"]
+
 def test_window_built(win):
+
     assert win.device_combo is not None
     assert win.result_table is not None
     assert win.step_count_label.text().startswith("共")
@@ -3741,6 +3804,71 @@ def test_manual_stop_shows_neutral_summary(win):
     assert win.result_table.item(row, 3).text() == "✘ 未通过", \
         win.result_table.item(row, 3).text()
     assert win.result_table.item(row, 3).background().color().name() == "#fdeaea"
+
+
+def test_precondition_step_started_reaches_results_view(qapp, monkeypatch, tmp_path):
+    """★ 前置子步骤的「执行中」行要进结果表(用户 2026-10-13 问"前置执行中的状态
+    为何没显示"): prepare_items 的 on_step_start → worker 的 step_started →
+    on_step_started 插「执行中」行, step_done 就地改成 PASS —— 与用例路径同体验。
+    (该功能在 2.0.12 发版之后才做 —— 用户看到没显示, 因为跑的是 2.0.12 的包。)"""
+    import types
+
+    import uiautomator2 as u2
+
+    from gui import main_window as mw
+    from gui import runner_thread as rt
+
+    f = _write_case(tmp_path, "组甲", "a.yaml", "冒烟")
+    fake_d = types.SimpleNamespace(
+        implicitly_wait=lambda t: None,
+        dump_hierarchy=lambda: '<node text="100%"/>',
+        screenshot=lambda path=None, format=None: None)
+    monkeypatch.setattr(u2, "connect", lambda dev: fake_d)
+    monkeypatch.setattr(rt, "ExcelReport",
+                        lambda: __import__("core.excel_report", fromlist=["ExcelReport"])
+                        .ExcelReport(path=str(tmp_path / "rep.xlsx")))
+
+    def _prep(d_, cfg_, items, on_progress=None, should_cancel=None, on_item_done=None,
+              shot_subdir=None, on_step_start=None):
+        if on_step_start:
+            on_step_start("自定义步骤(1步): 等一下", 1)   # 真实前缀见 _run_one(_item_label)
+        r = {"key": "pre0", "desc": "自定义步骤(1步)", "ok": True, "elapsed": 0.1,
+             "sub": [{"desc": "等一下", "passed": True, "error": "",
+                      "screenshot": "", "elapsed": 0.1}]}
+        on_item_done(r)
+        return [r]
+    monkeypatch.setattr(rt.session, "prepare_items", _prep)
+    monkeypatch.setattr(rt.session, "restart_app", lambda *a, **k: None)
+    monkeypatch.setattr(rt.session, "get_battery_level", lambda d_: 50)
+    monkeypatch.setattr(rt, "load_config",
+                        lambda: {"runner": {"step_interval": 0, "default_timeout": 1,
+                                            "click_timeout": 1},
+                                 "app": {"package": "p", "name": "x"},
+                                 "target_device": "SE3L"})
+
+    started, done = [], []
+    w = rt.RunWorker("fake-dev", [f], [{"type": "restart", "enabled": True}], 1)
+    w.step_started.connect(lambda p: started.append(dict(p)))
+    w.step_done.connect(lambda p: done.append(dict(p)))
+    w.run()
+
+    assert started and started[0]["desc"] == "前置-自定义步骤(1步): 等一下", started
+    sub_done = [p for p in done if p["desc"] == started[0]["desc"]]
+    assert sub_done, f"完成行要与执行中行同名才能就地改: {[p['desc'] for p in done]}"
+    # 视图链: 执行中行插入 → 结果就地替换(不新增行)
+    win = mw.MainWindow()
+    try:
+        win.on_step_started(started[0])
+        row = win._running_row
+        assert row is not None
+        assert win.result_table.item(row, 2).text() == "前置-自定义步骤(1步): 等一下"
+        assert "执行中" in win.result_table.item(row, 3).text()
+        rows_before = win.result_table.rowCount()
+        win.on_step_done(sub_done[0])
+        assert win.result_table.rowCount() == rows_before, "应就地改成 PASS 而不是新起一行"
+        assert win.result_table.item(row, 3).text() == "PASS"
+    finally:
+        win.close()
 
 
 def test_worker_qt标准所有权_parent加deleteLater(win):

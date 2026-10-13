@@ -1283,6 +1283,117 @@ class _StepsEditor(QWidget):
         self.count_label.setText(f"共 {len(self.host.steps)} 步")
 
 
+class StatusWordsDialog(QDialog):
+    """故障词/空闲词配置弹窗(用户 2026-10-13)。
+
+    两个文本框, 词以逗号/顿号/分号/换行/空格分隔(与 core.session._split_texts 兼容)。
+    保存路径: 主 config.yaml 的 runner.fault_texts / runner.idle_texts —— 在线编辑
+    场景下用户期望改完即时生效, 不重启。ActionRunner 启动时会从 config 读一次, 这里
+    保存后立即调 core.session.set_status_words 同步到全局, 当轮如果再触发哨兵
+    立即用新词表。
+    误触防护(2026-10-13): 两个数字框配连续命中次数 —— 1=瞬时即触发(开发用),
+    3=默认(过瞬态 toast), 上限 10。改完同样即时生效。
+    """
+
+    def __init__(self, fault_texts, idle_texts,
+                 fault_streak=3, idle_streak=3, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("故障与空闲词配置")
+        lay = QVBoxLayout(self)
+        hint = QLabel(
+            "文本等待与断言的轮询里, 页面出现以下词时的处理方式:\n"
+            "· 故障词: 立即报错, 报错与日志带**整段原文**(如「滚刷被困, 请清理」)\n"
+            "· 空闲词: 立即判不成立, 不再傻等满超时\n"
+            "多个词用逗号/顿号/分号/换行/空格分隔。\n"
+            "★ 误触防护(2026-10-13): 连续命中**下方的次数**才触发 —— 半秒就消失的\n"
+            "  toast / 状态栏瞬闪的「等待」字样不会再误判。1=瞬时即触发(开发用)。\n"
+            "修改即时生效, 不重启。")
+        hint.setStyleSheet("color:#475569;")
+        hint.setWordWrap(True)
+        lay.addWidget(hint)
+
+        lay.addWidget(QLabel("故障词(命中 → 立即报错):"))
+        self.fault_edit = QPlainTextEdit(self)
+        self.fault_edit.setPlainText(fault_texts or "")
+        self.fault_edit.setPlaceholderText("故障,错误,卡住,被困,问题,检查,失败,异常")
+        self.fault_edit.setFixedHeight(70)
+        lay.addWidget(self.fault_edit)
+
+        # ★ 连续命中次数(误触防护, 2026-10-13 用户加): 两个 QSpinBox 与词表一同保存
+        row = QHBoxLayout()
+        row.addWidget(QLabel("故障词连续次数:"))
+        self.fault_streak = QSpinBox()
+        self.fault_streak.setRange(1, 10)
+        self.fault_streak.setValue(int(fault_streak))
+        self.fault_streak.setToolTip("必须连续命中多少轮才触发 —— 防止瞬态 toast 误判")
+        row.addWidget(self.fault_streak)
+        row.addSpacing(20)
+        row.addWidget(QLabel("空闲词连续次数:"))
+        self.idle_streak = QSpinBox()
+        self.idle_streak.setRange(1, 10)
+        self.idle_streak.setValue(int(idle_streak))
+        self.idle_streak.setToolTip("必须连续命中多少轮才触发")
+        row.addWidget(self.idle_streak)
+        row.addStretch()
+        lay.addLayout(row)
+
+        lay.addWidget(QLabel("空闲词(命中 → 立即判不成立):"))
+        self.idle_edit = QPlainTextEdit(self)
+        self.idle_edit.setPlainText(idle_texts or "")
+        self.idle_edit.setPlaceholderText("待机,空闲,等待")
+        self.idle_edit.setFixedHeight(50)
+        lay.addWidget(self.idle_edit)
+
+        btns = QHBoxLayout()
+        btns.addStretch()
+        defaults = QPushButton("恢复默认")
+        defaults.clicked.connect(self._restore_defaults)
+        btns.addWidget(defaults)
+        cancel = QPushButton("取消")
+        cancel.clicked.connect(self.reject)
+        btns.addWidget(cancel)
+        ok = QPushButton("保存")
+        ok.setObjectName("statusWordsSaveBtn")
+        ok.setDefault(True)
+        ok.clicked.connect(self._save)
+        btns.addWidget(ok)
+        lay.addLayout(btns)
+
+    def _restore_defaults(self):
+        from core.session import (DEFAULT_FAULT_WORDS, DEFAULT_IDLE_WORDS,
+                                 DEFAULT_FAULT_STREAK, DEFAULT_IDLE_STREAK)
+        self.fault_edit.setPlainText(",".join(DEFAULT_FAULT_WORDS))
+        self.idle_edit.setPlainText(",".join(DEFAULT_IDLE_WORDS))
+        self.fault_streak.setValue(DEFAULT_FAULT_STREAK)
+        self.idle_streak.setValue(DEFAULT_IDLE_STREAK)
+
+    def _save(self):
+        from core import driver
+        fault = self.fault_edit.toPlainText().strip()
+        idle = self.idle_edit.toPlainText().strip()
+        fault_n = int(self.fault_streak.value())
+        idle_n = int(self.idle_streak.value())
+        # ★ 写盘 + 同步到内存(2026-10-13): 缺一不可 —— 写盘是永久化, 同步
+        #   是让当轮后续步骤立即用上新词表(否则要等下一个 ActionRunner 启动)
+        try:
+            driver.update_config({"runner.fault_texts": fault,
+                                  "runner.idle_texts": idle,
+                                  "runner.fault_streak": fault_n,
+                                  "runner.idle_streak": idle_n})
+        except Exception as e:
+            QMessageBox.warning(self, "保存失败", f"写配置失败: {e}")
+            return
+        try:
+            from core import session
+            session.set_status_words(fault, idle,
+                                     fault_streak=fault_n, idle_streak=idle_n)
+        except Exception:
+            pass
+        self.fault_texts, self.idle_texts = fault, idle
+        self.fault_streak_value, self.idle_streak_value = fault_n, idle_n
+        self.accept()
+
+
 class PreconditionEditDialog(QDialog):
     """新增/编辑单个前置条件: 选类型 + 填参数(按类型动态生成表单)"""
 
@@ -2308,6 +2419,18 @@ class MainWindow(QMainWindow):
         self.file_label.setStyleSheet("color:#94a3b8;")
         lay.addWidget(self.file_label)
         lay.addStretch()
+        # ★ 「故障检测」按钮(用户 2026-10-13): 在线改故障/空闲词表 —— 运行时即时生效
+        #   不重启(写 config.yaml 并同步到 core.session 的全局词表), 加在前置条件左边。
+        #   弹窗里两个文本框, 一并编辑, 词以逗号/顿号分隔。
+        self.fault_btn = QPushButton("故障检测")
+        self.fault_btn.setToolTip(
+            "配置文本等待与断言轮询里的**故障词**与**空闲词**——\n"
+            "· 故障词命中 → 立即报错, 报错和日志带整段原文\n"
+            "· 空闲词命中 → 立即判不成立, 不再傻等超时\n"
+            "修改后即时生效, 不重启。")
+        self.fault_btn.clicked.connect(self.on_edit_status_words)
+        lay.addWidget(self.fault_btn)
+
         pre_btn = QPushButton("前置条件")
         self.pre_menu = QMenu(pre_btn)
         pre_btn.setMenu(self.pre_menu)
@@ -2315,6 +2438,11 @@ class MainWindow(QMainWindow):
         # 从配置加载前置项(无则用默认 4 项) → 动态生成菜单
         self.preconditions = self._load_preconditions()
         self._build_pre_menu()
+
+        # ★ 启动时把 config 的故障/空闲词表同步到全局(2026-10-13):
+        #   不调的话, 之前发的 2.0.12 用内置默认; 现在 GUI 显式弹窗可见默认值,
+        #   与 config 注释保持一致。ActionRunner 每次启动也会再调一次, 这里双保险。
+        self._load_status_words_from_config()
 
         # ── 执行次数 ──
         lay.addWidget(QLabel("次数"))
@@ -3316,6 +3444,40 @@ class MainWindow(QMainWindow):
         if 0 <= idx < len(self.preconditions):
             self.preconditions[idx]["enabled"] = bool(on)
             self._save_preconditions()
+
+    def on_edit_status_words(self):
+        """故障/空闲词配置弹窗(用户 2026-10-13): 写 config.yaml + 同步全局词表,
+        当轮后续步骤立即用上新词表(不重启)。"""
+        fault, idle, fault_n, idle_n = self._load_status_words_from_config()
+        dlg = StatusWordsDialog(fault, idle,
+                                fault_streak=fault_n, idle_streak=idle_n,
+                                parent=self)
+        if dlg.exec():
+            log.info(f"[故障检测] 已更新(运行时即时生效): "
+                     f"故障={dlg.fault_texts!r}(连续{dlg.fault_streak_value}次), "
+                     f"空闲={dlg.idle_texts!r}(连续{dlg.idle_streak_value}次)")
+
+    def _load_status_words_from_config(self):
+        """从 config.yaml 读 runner.fault_texts / runner.idle_texts / *streak, 同步到全局。
+        返回当前值便于弹窗预填。无 config/无键 → 用内置默认。"""
+        from core import driver, session
+        try:
+            cfg = driver.load_config() or {}
+        except Exception:
+            cfg = {}
+        r = cfg.get("runner", {}) if isinstance(cfg, dict) else {}
+        fault = str(r.get("fault_texts") or "")
+        idle = str(r.get("idle_texts") or "")
+        # 读 streak: 非法值/_clamp_streak 兜底(空字符串/字母/0/-1 都会回默认 3)
+        fault_n = session._clamp_streak(r.get("fault_streak"))
+        idle_n = session._clamp_streak(r.get("idle_streak"))
+        try:
+            session.set_status_words(fault, idle,
+                                     fault_streak=fault_n, idle_streak=idle_n)
+        except Exception:
+            pass
+        return fault, idle, fault_n, idle_n
+        return fault, idle
 
     def on_edit_preconditions(self):
         """打开设置对话框: 增删改/排序前置条件, 保存到当前 APP 组"""

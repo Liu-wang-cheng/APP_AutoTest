@@ -117,11 +117,14 @@ def test_scan_status_words_returns_full_sentence():
 
 
 def test_text_present_detail_fault_raises_with_full_text():
-    """等待/断言轮询撞上故障词 → FaultStateError, 报错带整段原文"""
+    """等待/断言轮询撞上故障词 → FaultStateError, 报错带整段原文
+    (误触防护下默认 streak=3, 这里设 1 验证"立刻抛"路径; 连续命中才抛见 streak 测试)"""
+    session.set_status_words("", "", fault_streak=1, idle_streak=1)
     xml = '<node text="卡住在障碍物旁边"/>'
     with pytest.raises(session.FaultStateError) as ei:
         session.text_present_detail(FakeDevice(xml=xml), ("充电中",))
     assert "卡住在障碍物旁边" in str(ei.value), "报错要带整段原文"
+    session.set_status_words("", "", fault_streak=3, idle_streak=3)  # 还原默认
 
 
 def test_text_present_detail_idle_returns_false_immediately():
