@@ -94,6 +94,9 @@ class ActionRunner:
         #  ★ 只对**用例步骤**开(用户要求 2026-10-11: "测试步骤的点击操作才需要截图");
         #    前置条件里的自定义步骤属于准备动作, 不在这里留证据。
         self.click_shots = click_shots
+        # ★ True = 每一步都留截图(前置的自定义步骤用): 以前只有点击类/显式 screenshot
+        #   才截, wait/assert/if 这类子步骤在"前置也默认截图"里缺席(用户 2026-10-13)
+        self.always_screenshot = False
         # 设备页名称(配置里的 target_device): 插件页整页文本读不出来时, 用它重进设备页
         self.device_name = device_name
         # 用例级 wait 优先,否则用全局 step_interval
@@ -770,7 +773,7 @@ class ActionRunner:
         #   步骤里写 screenshot: false 也照样截; 写了路径就用那个路径。
         click_step = (self.click_shots
                       and reg.is_click_action(reg.primary_action_key(step)))
-        if "screenshot" in step or click_step:
+        if "screenshot" in step or click_step or self.always_screenshot:
             sv = step.get("screenshot")
             if isinstance(sv, str) and sv.strip():
                 path = sv                       # 旧用例的手动路径, 兼容保留
@@ -795,7 +798,8 @@ class ActionRunner:
                 path = os.path.join(BASE_DIR, path)
             try:
                 os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-                self._sleep(1.5)
+                if click_step or "screenshot" in step:
+                    self._sleep(1.5)        # 点击后的画面安定(原语义; 默认截图路径即时截)
                 self.d.screenshot(path)
                 screenshot = path
                 self._mark_last_click_on(path)

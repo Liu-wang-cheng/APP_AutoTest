@@ -434,6 +434,51 @@ def test_add_precondition_menu_lists_all_types(qapp, monkeypatch, tmp_path):
 
 # ── 前置条件可以写「用例步骤」(用户要求: 和添加测试步骤一样) ──
 
+def test_precondition_steps_carry_elapsed(tmp_path):
+    """★ 前置子步骤也要有耗时(用户 2026-10-13: "前置执行时的if子步骤为何没有算耗时")。
+
+    用例路径的耗时是 runner_thread 的 on_result 包装算的, 前置的 runner 原来没有
+    这个包装 —— collect 到的是原始结果(根本没有 elapsed 字段), 结果表里一列空白。
+    """
+    items = [{"type": "steps", "name": "自定义步骤", "enabled": True,
+              "steps": [{"desc": "等一下", "wait": 0.05},
+                        {"desc": "再等一下", "wait": 0.05}]}]
+    res = session.prepare_items(FakeDev(), {"runner": {"step_interval": 0}}, items)
+    sub = res[0]["sub"]
+    assert len(sub) == 2, sub
+    for sr in sub:
+        assert isinstance(sr.get("elapsed"), (int, float)) and sr["elapsed"] >= 0, \
+            f"子步骤没有耗时: {sr}"
+
+
+class _ShotDev(FakeDev):
+    """带 screenshot 的设备桩: 记录发起的截图路径(验证前置步骤默认截图)"""
+
+    def __init__(self, *a, **k):
+        super().__init__(*a, **k)
+        self.shots = []
+
+    def screenshot(self, path=None, format=None):
+        self.shots.append(path)
+        p = Path(path)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(b"png")
+
+
+def test_precondition_steps_screenshot_by_default(tmp_path):
+    """★ 前置的自定义步骤**默认截图**(用户 2026-10-13: "还有一些前置的自定义步骤
+    没有截图"): 以前只有点击类/显式 screenshot 的步骤才截, wait/assert/if 这些
+    子步骤什么都没有 —— 与"前置也默认截图"的初衷(2.0.6)相悖。"""
+    items = [{"type": "steps", "name": "自定义步骤", "enabled": True,
+              "steps": [{"desc": "等一下", "wait": 0.05}]}]
+    dev = _ShotDev()
+    res = session.prepare_items(dev, {"runner": {"step_interval": 0}}, items,
+                                shot_subdir="甲用例-第1次")
+    sr = res[0]["sub"][0]
+    assert sr.get("screenshot"), f"非点击步骤也该有截图: {sr}"
+    assert dev.shots, "runner 没有发起截图"
+
+
 def test_precondition_steps_type_runs_steps(monkeypatch):
     """type=steps 的前置项 → 用 ActionRunner 顺序执行这些步骤"""
     calls = []

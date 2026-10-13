@@ -746,6 +746,25 @@ def _run_one(d, cfg, item, on_progress, should_cancel, collect=None,
                               cancel_check=should_cancel)
         if shot_subdir:
             runner.shot_subdir = shot_subdir   # 截图进本轮的「用例名-第N次」目录(见上)
+        # ★ 每一步都留截图(用户 2026-10-13: "还有一些前置的自定义步骤没有截图"):
+        #   以前只有点击类/显式 screenshot 的步骤才截, wait/assert/if 这些子步骤
+        #   什么都没有 —— 与"前置也默认截图"的初衷(2.0.6)相悖。
+        runner.always_screenshot = True
+        # ★ 子步骤耗时(用户 2026-10-13: "前置执行时的if子步骤为何没有算耗时"):
+        #   用例路径的耗时是 runner_thread 的 on_result 包装算的, 前置 runner 原来没有
+        #   —— collect 到的原始结果没有 elapsed 字段。results 里存的就是传回调的
+        #   **同一个 dict**(core/runner.py 在 append 之后回调), 原地盖章即可。
+        last_ts = {"t": time.time()}
+
+        def _on_step_start(desc, attempt=1):
+            last_ts["t"] = time.time()          # 耗时从"本步开始"算(与用例路径同语义)
+
+        def _on_result(r):
+            now = time.time()
+            r["elapsed"] = round(now - last_ts["t"], 1)
+            last_ts["t"] = now
+        runner.on_step_start = _on_step_start
+        runner.on_result = _on_result
         ok = runner.run_steps(steps)
         if collect is not None:
             collect.extend(runner.results)      # 内部每一步的结果(含截图)
