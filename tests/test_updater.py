@@ -183,6 +183,71 @@ def test_pick_download_mirror_prefers_config_order(monkeypatch):
     assert updater.pick_download_mirror(None) is None
 
 
+def test_pick_download_mirror_prefers_measured_speed():
+    """★ 2026-10-13: 有探针数据时按**实测下载吞吐**挑, 谁快用谁(用户要求
+    "要按实际的下载速度去选择镜像源") —— 与延迟、与配置顺序都无关。"""
+    ranked = [
+        updater.MirrorResult("github", "u", "", 10.0, True, probe_kbps=30.0),
+        updater.MirrorResult("ghfast", "u", "https://gf/", 5.0, True, probe_kbps=100.0),
+        updater.MirrorResult("ghproxy", "u", "https://gp/", 900.0, True, probe_kbps=500.0),
+    ]
+    assert updater.pick_download_mirror(ranked).name == "ghproxy"
+    # 同速平级 → 配置顺序(先出现的赢)
+    tie = [updater.MirrorResult("a", "u", "https://a/", 1.0, True, probe_kbps=100.0),
+           updater.MirrorResult("b", "u", "https://b/", 1.0, True, probe_kbps=100.0)]
+    assert updater.pick_download_mirror(tie).name == "a"
+
+
+def test_probe_download_mirrors_attaches_and_dedupes(monkeypatch):
+    """探针: 把实测速度填进 probe_kbps; **探测 URL 相同的源只测一次**(直连与
+    jsdelivr 这类空前缀拉的是同一个地址, 共享速度); 不可达的源不探测(0.0)。"""
+    probed_urls = []
+
+    def fake_probe(url, max_bytes=None, budget_s=None):
+        probed_urls.append(url)
+        return 123.0
+    monkeypatch.setattr(updater, "_probe_one", fake_probe)
+    ranked = [
+        updater.MirrorResult("github", "u", "", 1.0, True),
+        updater.MirrorResult("jsdelivr", "u", "", 1.0, True),        # 与直连同 URL → 去重
+        updater.MirrorResult("gh-proxy", "u", "https://gp/", 1.0, True),
+        updater.MirrorResult("dead", "u", "https://dd/", 1.0, False),  # 不可达 → 不测
+    ]
+    out = updater.probe_download_mirrors(ranked, "https://e/a.zip")
+    assert len(probed_urls) == 2, probed_urls
+    assert probed_urls[0] == "https://e/a.zip"
+    assert probed_urls[1] == "https://gp/https://e/a.zip"
+    by_name = {m.name: m.probe_kbps for m in out}
+    assert by_name["github"] == 123.0 and by_name["jsdelivr"] == 123.0
+    assert by_name["gh-proxy"] == 123.0
+    assert by_name["dead"] == 0.0
+
+
+def test_check_for_update_probes_only_when_new_version(monkeypatch):
+    """探针只在**发现新版本**时跑(已是最新就不需要选下载源)。"""
+    calls = []
+
+    def fake_probe(ranked, url, **kw):
+        calls.append((url, [m.name for m in ranked]))
+        return ranked
+    monkeypatch.setattr(updater, "probe_download_mirrors", fake_probe)
+    cfg = {"update": {"enabled": True, "repository": "o/r"}}
+
+    body = b'{"version":"9.9","download_url":"https://e/a.exe","sha256":"x"}'
+    monkeypatch.setattr(updater, "_request",
+                        lambda url, **kw: _Resp(body, 200))
+    r = updater.check_for_update(cfg, current="1.0")
+    assert r.status == "has_update"
+    assert len(calls) == 1 and calls[0][0] == "https://e/a.exe"
+
+    body2 = b'{"version":"1.0","download_url":"https://e/a.exe","sha256":"x"}'
+    monkeypatch.setattr(updater, "_request",
+                        lambda url, **kw: _Resp(body2, 200))
+    r2 = updater.check_for_update(cfg, current="1.0")
+    assert r2.status == "up_to_date"
+    assert len(calls) == 1, "已是最新就不该探测下载速度"
+
+
 def test_default_mirrors_download_order_is_by_measured_speed():
     """默认镜像顺序要按**实测下载速度**排: gh-proxy(558 KB/s) 在 ghfast(368 KB/s) 前
 

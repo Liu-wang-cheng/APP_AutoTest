@@ -26,6 +26,7 @@ import urllib.request
 import zipfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
+import dataclasses
 from urllib.parse import urlparse
 
 from core.logger import get_logger
@@ -47,8 +48,16 @@ _UA = "AutoTest-Updater"          # 有的 CDN 对空 UA 不友好
 #:   取小文件(version.json): github 直连最快 829ms > ghfast 2096ms > jsdelivr 2395ms
 #:   下载大文件(3MB 实测):  github 直连**几乎不可用**(1.2s 只得到 0 字节)
 #:                          gh-proxy 558 KB/s > ghfast 368 KB/s
-#: 所以两边分开选: 清单优先 GitHub 直连(权威、避开 CDN 缓存), 下载按**下面的顺序**
-#: 取第一个带 download_prefix 的 —— gh-proxy 排在 ghfast 前面就是因为实测它更快。
+#: 所以两边分开选: 清单优先 GitHub 直连(权威、避开 CDN 缓存), 下载按**实测吞吐**选
+#: (probe_download_mirrors, 2026-10-13 起), 没有探针数据时才退回下面的配置顺序。
+#:
+#: ★ 镜像调研(2026-10-13, 拿真实资产包 Range 实测 12 个公开加速源):
+#:   只有 gh-proxy(553KB/s)与 ghfast(139KB/s)活着且有用; ghproxy.net 3.7KB/s、
+#:   直连 28KB/s, mirror.ghproxy.com / gh.ddlc.top(429) / gh.con.sh / ghproxy.link /
+#:   hub.gitmirror.com / gh-proxy.net(401) / github.moeyy.xyz / ghproxy.cc /
+#:   cf.ghproxy.cc / ghps.cc(403) / ghp.ci / gitproxy.click / slink.ltd /
+#:   gh.api.99988866.xyz 全部死链、限流或返回错误页 —— **一个都没收进清单**。
+#:   jsdelivr 留在清单里是因为它能加速**版本清单**(CDN, 436ms), 不服务 Release 资产。
 DEFAULT_MIRRORS = (
     {"name": "github",
      "base_url": "https://raw.githubusercontent.com/{repo}/{branch}",
@@ -66,20 +75,92 @@ DEFAULT_MIRRORS = (
 
 
 def pick_download_mirror(ranked):
-    """从测速结果里挑**下载用**的镜像: 可达 + 带加速前缀, 按配置顺序取第一个。
+    """从测速结果里挑**下载用**的镜像。
 
-    ★ 为什么按**配置顺序**而不是测速延迟: 延迟测的是 version.json 这种小文件,
-      不代表大文件下载速度 —— 实测 ghfast 延迟更低(2096ms)但下载更慢(368 KB/s),
-      gh-proxy 延迟略高(2520ms)却快得多(558 KB/s)。所以顺序由 DEFAULT_MIRRORS
-      的排列决定(排在前面的优先), 用户也能在 config 里调。
-    ★ 与"取版本清单"分开选: 清单要**最新**(优先 GitHub 直连, 避开 CDN 缓存),
-      下载要**快且下得动**(直连拉大文件实测 3MB 只得到 0 字节)。
+    ★ 2026-10-13 起**按实测下载吞吐**挑(用户要求: "要按实际的下载速度去选择镜像源"):
+      检查到新版本时各源 Range 拉真实资产的前 1MB(见 probe_download_mirrors),
+      谁快用谁; 同速平级按配置顺序(max 取第一个最大)。
+    ★ 没有探针数据(老调用/探测全失败)时退回老规则: 配置顺序第一个"可达且带前缀"的
+      —— 延迟只反映小文件, ghfast 延迟低但下载慢是实测教训; 都没前缀再退最前面的可用源。
     """
     usable = [m for m in (ranked or []) if m.success]
+    if not usable:
+        return None
+    probed = [m for m in usable if m.probe_kbps > 0]
+    if probed:
+        return max(probed, key=lambda m: m.probe_kbps)
     for m in usable:                      # ranked 已按配置顺序稳定排序
         if m.download_prefix:
             return m
     return usable[0] if usable else None  # 都没有前缀 -> 退回最前面的可用镜像
+
+
+#: 下载吞吐探针: 每源最多拉这么多字节/花这么多秒 —— 并发探测, 总耗时 ≈ PROBE_BUDGET_S
+PROBE_MAX_BYTES = 1024 * 1024
+PROBE_BUDGET_S = 6.0
+PROBE_TIMEOUT = 10
+
+
+def _probe_one(url, max_bytes=PROBE_MAX_BYTES, budget_s=PROBE_BUDGET_S):
+    """Range 拉真实资产的前 max_bytes 字节测吞吐, 返回 KB/s; 失败/0 字节返回 0.0。
+
+    ★ 有的镜像不认 Range(会整包 215MB 砸过来) —— 读满 max_bytes 就收手关连接,
+      测到的仍是"前 1MB 的速度", 正是要的量; budget_s 封顶防呆。
+    """
+    start = time.monotonic()
+    total = 0
+    try:
+        with _request(url, timeout=PROBE_TIMEOUT,
+                      extra_headers={"Range": f"bytes=0-{max_bytes - 1}"}) as resp:
+            while total < max_bytes:
+                if time.monotonic() - start >= budget_s:
+                    break
+                chunk = resp.read(64 * 1024)
+                if not chunk:
+                    break
+                total += len(chunk)
+    except Exception:
+        pass
+    elapsed = time.monotonic() - start
+    return total / elapsed / 1024.0 if total > 0 and elapsed > 0 else 0.0
+
+
+def probe_download_mirrors(ranked, download_url,
+                           max_bytes=PROBE_MAX_BYTES, budget_s=PROBE_BUDGET_S):
+    """实测各镜像拉**真实资产包**的吞吐, 填进 probe_kbps(原顺序返回新列表)。
+
+    ★ 只在**发现新版本**时由 check_for_update 调一次(下载才需要选源); 各源并发探测,
+      总耗时 ≈ budget_s。★ 探测 URL 相同的源(直连与 jsdelivr 这类空前缀的)只测一次,
+      速度共享 —— 反正它们拉的是同一个地址。
+    任何异常都不抛(单源失败 = 0.0, 选源时自然被排到后面)。
+    """
+    jobs, seen = [], set()
+    for m in (ranked or []):
+        if not m.success:
+            continue
+        u = apply_download_prefix(download_url, m.download_prefix)
+        if u in seen:
+            continue
+        seen.add(u)
+        jobs.append((m, u))
+    speeds = {}
+    if jobs:
+        with ThreadPoolExecutor(max_workers=len(jobs)) as pool:
+            futs = {pool.submit(_probe_one, u, max_bytes, budget_s): u
+                    for _m, u in jobs}
+            for fut, u in futs.items():
+                try:
+                    speeds[u] = fut.result()
+                except Exception:               # 线程内兜底
+                    speeds[u] = 0.0
+    out = [dataclasses.replace(
+        m, probe_kbps=speeds.get(apply_download_prefix(download_url,
+                                                       m.download_prefix), 0.0))
+        for m in (ranked or [])]
+    detail = ", ".join(f"{m.name} {m.probe_kbps:.0f}KB/s"
+                       for m in out if m.probe_kbps > 0) or "全部不可用"
+    log.info(f"[更新] 下载测速(各拉前 {max_bytes // 1024}KB): {detail}")
+    return out
 
 
 def default_config():
@@ -145,6 +226,7 @@ class MirrorResult:
     download_prefix: str = ""
     latency_ms: float = -1.0
     success: bool = False
+    probe_kbps: float = 0.0    # 下载吞吐实测(Range 拉真实资产前 1MB), 0=没测/失败
 
 
 @dataclass
@@ -423,6 +505,10 @@ def check_for_update(cfg, current=None):
                                info, mirror, ranked=ranked)
         # 本地版本低于 min_version -> 强制更新(不允许继续用旧版)
         force = bool(info.min_version) and is_newer(info.min_version, cur)
+        # ★ 发现有新版才实测下载吞吐(用户 2026-10-13: "要按实际的下载速度去选择
+        #   镜像源") —— 各源 Range 拉真实资产前 1MB, 下载时谁快用谁; 已是最新不探测。
+        if info.download_url:
+            ranked = probe_download_mirrors(ranked, info.download_url)
         return CheckResult("has_update",
                            f"发现新版本 {info.version}(当前 {cur})"
                            + ("，需强制更新" if force else ""),
