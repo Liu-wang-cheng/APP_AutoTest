@@ -212,6 +212,28 @@ def _isolate_base_dir(monkeypatch, tmp_path):
     yield
 
 
+@pytest.fixture
+def mk_stale_files(tmp_path):
+    """造 n 个 mtime 递增的文件 —— 「留最新 N 个」断言的根基(审查 2026-10-12 #31)。
+
+    test_idle_cleanup / test_packaging 都要这个错峰模式; 以前各处手抄 12+ 份,
+    base 偏移还各不相同(漏改一处就是假绿/假红)。d 传相对 tmp_path 的路径或绝对路径。
+    """
+    def _make(d, n, size=10, base=1000, prefix="f", ext=".png"):
+        d = Path(d)
+        if not d.is_absolute():
+            d = tmp_path / d
+        d.mkdir(parents=True, exist_ok=True)
+        out = []
+        for i in range(n):
+            f = d / f"{prefix}{i}{ext}"
+            f.write_bytes(b"x" * size)
+            os.utime(f, (base + i, base + i))
+            out.append(f)
+        return out
+    return _make
+
+
 @pytest.fixture(autouse=True)
 def _reset_idle_gate():
     """每个测试前后把「空闲闸门」清零(core/idle.py)。

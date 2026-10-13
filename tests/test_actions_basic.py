@@ -475,6 +475,31 @@ def test_if_checks_capped_at_120(runner):
     assert calls[0].get("rounds") == 120, calls
 
 
+def test_if_image_condition_ignores_threshold_separation(runner, monkeypatch):
+    """★ if 判断与图像对比**分为两个步骤**(用户 2026-10-13): if 里的 threshold 不再生效,
+    图片条件一律"在页面里找这张模板图"; 按相似度对比是 compare 步骤的职责。"""
+    from core import vision
+    seq = {"n": 0}
+    compares = []
+
+    def _find(gray, tpl, **kw):
+        seq["n"] += 1
+        return None
+    monkeypatch.setattr(vision, "find_in_gray", _find)
+    monkeypatch.setattr(vision, "resolve_template", lambda n: f"tpl/{n}")
+    monkeypatch.setattr("core.actions.asserts.compare_screen",
+                        lambda *a, **k: compares.append(1))
+    runner._poll_sleep = lambda n: None
+    import numpy as np
+    runner.d.screenshot = (lambda path=None, format=None:
+                           np.zeros((1920, 1080, 3), dtype=np.uint8))
+    runner._execute({"if": "按钮.png", "threshold": 1,
+                     "else": [{"desc": "不成立时点", "click": [1, 2]}]})
+    assert seq["n"] == 10, f"图片条件走模板匹配(两轮×五次): {seq['n']}"
+    assert not compares, "if 步骤不得再做整屏相似度对比(那是 compare 步骤的职责)"
+    assert runner._pending_sub_results, "没找到模板 → 条件不成立 → 走 else"
+
+
 def test_if_template_condition_now_waits_instead_of_single_shot(runner, monkeypatch):
     """★ 模板条件原来**只查一次**(晚 1 秒出现就走进 else), 现在同样跑满节奏"""
     from core import vision

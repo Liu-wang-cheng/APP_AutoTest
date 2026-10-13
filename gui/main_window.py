@@ -1900,7 +1900,6 @@ class MainWindow(QMainWindow):
         self.data = self._empty_data()
         self.case_idx = 0
         self.worker = None
-        self._retired_workers = []   # 刚跑完、线程还没真正退出的 worker(见 _retire_worker)
         self.expanded_key = None  # 展开的卡片: (顶层序号,) 或 (父序号, 子序号)
         self._preview_path = None  # 当前预览的截图路径
 
@@ -3960,8 +3959,13 @@ class MainWindow(QMainWindow):
         self._running_row = None
         self._set_preview_placeholder("单击结果行显示对应截图\n点击图片可放大查看")
 
+        # ★ Qt 标准所有权(审查 2026-10-12 #23): worker 挂到窗口下 + run() 返回后
+        #   deleteLater。这样 on_run_finished 里的 self.worker=None 只是丢一个无害的
+        #   Python 包装 —— C++ 对象归窗口所有, 析构永远在 run() 返回之后, "线程还
+        #   活着就被析构"的 qFatal 闪退从根上不再可能(退休机制因此整体删除)。
         self.worker = RunWorker(device_id, case_files, pre_items, repeat,
-                                pre_by_group=pre_by_group)
+                                parent=self, pre_by_group=pre_by_group)
+        self.worker.finished.connect(self.worker.deleteLater)
         self.worker.step_done.connect(self.on_step_done)
         # ★ 步骤开始就插一行「执行中」, 跑完再就地改成通过/失败(用户要求 2026-10-12)
         self.worker.step_started.connect(self.on_step_started)
@@ -4158,40 +4162,9 @@ class MainWindow(QMainWindow):
             self.run_btn.setEnabled(True)
             self.stop_btn.setEnabled(False)
             self._set_locked(False)
-            self._retire_worker()
-
-    def _retire_worker(self):
-        """把跑完的 worker 挪进"退休区", 等 QThread.finished(run() 真正返回)再丢引用。
-
-        ★ 为什么不能直接 `self.worker = None`: finished_run 是 run() **里面**发的 ——
-          发完线程还有 finally 尾巴(兜底存报告 + idle.end_run)要跑。worker 没有 parent,
-          最后一个 Python 引用一丢 PySide6 就立刻析构 C++ QThread, 线程还活着时析构 =
-          Qt qFatal("QThread: Destroyed while thread is still running") → 整个进程闪退
-          (用户实测 2026-10-12: 2.0.7 点「停止」必闪退 —— idle.end_run 把尾巴从微秒级
-          拉长到毫秒级, 这个从 2.0.6 就埋着的竞态开始输了)。
-        ★ 退休区是**列表**(审查 2026-10-12): 上一轮还没退完、新一轮已经结束时会同时
-          有两个 —— 单槽会被后者覆盖, 旧 worker 的最后一个引用被丢, 换个更窄的窗口
-          复发同一个 qFatal。
-        """
-        w, self.worker = self.worker, None
-        if w is None:
-            return
-        try:
-            finished = bool(w.isFinished())
-        except Exception:
-            finished = True      # 问不了就当它已结束(测试替身) —— 清理代码绝不抛
-        if finished:             # 尾巴已经跑完(信号排队太久) → 现在丢就安全
-            return
-        # finished(QThread 内建, run() 返回后才发)时放掉退休引用 —— 发送者就是它自己
-        w.finished.connect(self._on_worker_thread_finished)
-        self._retired_workers.append(w)
-
-    def _on_worker_thread_finished(self):
-        w = self.sender()
-        try:
-            self._retired_workers.remove(w)
-        except ValueError:
-            pass
+            # ★ parent 所有权下(见 on_run)这里丢的只是 Python 包装, 线程还活着也安全;
+            #   C++ 对象由 finished→deleteLater 在 run() 返回后销毁
+            self.worker = None
 
     def closeEvent(self, event):
         # ★ 留痕: 日志里出现这行 = **用户正常关窗**(不是崩溃/被杀)。下次排查"闪退"时,
@@ -4199,20 +4172,13 @@ class MainWindow(QMainWindow):
         log.info("[退出] 收到关窗请求")
         self._save_expanded_groups()      # 关窗前记住组展开状态(下次打开还原)
         self._cleanup_update_backups()    # 正常关窗 = 本次更新确实可用, 可以扔掉旧版本
-        w_list = list(self._retired_workers)   # 上一轮刚结束、线程还在跑收尾尾巴 → 等
-        for w in w_list:
-            try:
-                if not w.isFinished():
-                    w.wait(2000)               # 尾巴毫秒级; 2s 是给慢盘兜底报告的余量
-            except RuntimeError:
-                pass                           # C++ 对象已删: 无需等
         if self.worker:
             if QMessageBox.question(self, "正在执行", "用例正在执行,停止并退出?") == QMessageBox.Yes:
                 try:
                     self.worker.request_stop()
                     self.worker.wait(5000)
                 except RuntimeError:
-                    pass                       # 同上: 退休/删除竞态下对象可能已不在
+                    pass                       # 包装可能已被 GC(执行刚结束): 无需再停
                 event.accept()
             else:
                 event.ignore()

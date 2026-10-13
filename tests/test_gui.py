@@ -3743,21 +3743,28 @@ def test_manual_stop_shows_neutral_summary(win):
     assert win.result_table.item(row, 3).background().color().name() == "#fdeaea"
 
 
-def test_on_run_finished_不在线程活着时丢worker引用(win, qapp):
-    """★ on_run_finished 不得在 run() 还没返回时就丢掉 worker 的最后一个引用。
+def test_worker_qt标准所有权_parent加deleteLater(win):
+    """★ 闪退的病根是所有权(审查 2026-10-12 #23): RunWorker 必须 parent 到窗口,
+    并在 QThread.finished(run() 真正返回)→deleteLater。
 
-    finished_run 是 run() **里面**发的 —— 发完线程还有 finally 尾巴(兜底存报告 +
-    idle.end_run)要跑; 此时 `self.worker = None` 会让 PySide6 立刻析构 C++ QThread,
-    Qt 直接 qFatal("QThread: Destroyed while thread is still running") → 整个进程闪退
-    (用户实测 2026-10-12: 2.0.7 点「停止」必闪退; 2.0.6 的尾巴短, 竞态几乎不输)。
-
-    ★ 手动停止与**自动跑完**走同一条路(emit 点在 run() 里的 4 处: 停止/全部通过/
-      存在失败/执行异常), 所以两种消息都钉 —— 用户追问过"自动结束会不会也闪退"。
-
-    ★ 测试持有额外引用(ref)保进程不死 —— 否则真踩中这个 bug 时红的是整个 pytest
-      而不是这一条断言。这里只验证引用的生命周期: 结束信号到达时挪进"退休区",
-      QThread.finished(run() 真正返回)之后再放掉。
+    这样 `self.worker = None` 只是丢一个无害的 Python 包装 —— C++ 对象归窗口所有,
+    析构永远发生在 run() 返回之后, 不再依赖"退休区"的时序兜底(退休机制已整体删除)。
+    谁把 parent/deleteLater 拿掉, "QThread: Destroyed while thread is still running"
+    的闪退就会回来, 这条就红。
     """
+    import inspect
+
+    import gui.main_window as mw
+    src = inspect.getsource(mw.MainWindow.on_run)
+    assert "parent=self" in src, \
+        "RunWorker 没挂到窗口下(parent=self): 丢引用会析构运行中的线程"
+    assert "self.worker.finished.connect(self.worker.deleteLater)" in src, \
+        "run() 返回后没有安排 C++ 侧销毁(deleteLater), 线程对象会滞留"
+
+
+def test_worker_finishing_during_tail_is_harmless(win, qapp):
+    """行为面: 结束信号到达时线程还在收尾尾巴里(模拟 1.5s) —— parent 所有权下
+    on_run_finished 丢引用**无害**(不析构线程), 解锁照常, 一切如常收场。"""
     import time as _time
 
     from PySide6.QtCore import QThread, Signal as QSignal
@@ -3765,41 +3772,21 @@ def test_on_run_finished_不在线程活着时丢worker引用(win, qapp):
     class _W(QThread):
         finished_run = QSignal(bool, str)
 
-        def __init__(self, message):
-            super().__init__()
-            self._message = message
-
         def run(self):
-            self.finished_run.emit(False, self._message)
-            _time.sleep(1.5)           # 模拟 run() 在 emit 之后的收尾尾巴 —— 要比主线程
-                                       # 槽函数的最坏延迟长(全量跑时有后台线程抢事件循环),
-                                       # 否则断言"槽跑完时线程还在尾巴里"会变成调度竞态
+            self.finished_run.emit(False, "已手动停止")
+            _time.sleep(1.5)           # 模拟 run() 在 emit 之后的收尾尾巴
 
-    for message in ("已手动停止",              # 手动停止路径
-                    "全部通过(1 轮 × 1 个用例)"):   # 自动跑完路径 —— 同一条 on_run_finished
-        w = _W(message)
-        ref = w                        # 保命引用: 实现有 bug 也不许析构运行中的线程
-        win.worker = w
-        w.finished_run.connect(win.on_run_finished)
-        w.start()
-        try:
-            deadline = _time.time() + 10
-            while win.worker is not None and _time.time() < deadline:
-                qapp.processEvents()
-                _time.sleep(0.01)
-            assert win.worker is None, "on_run_finished 没清 self.worker(解锁逻辑坏了)"
-            assert w in win._retired_workers, \
-                "worker 引用必须保到 QThread.finished(run() 真正返回)为止"
-            assert w.isRunning(), "此刻 run() 的收尾尾巴应该还在跑(模拟 1.5s)"
-            # 线程真正返回后, 退休引用必须放掉 —— 不许每轮漏一个 wrapper
-            deadline = _time.time() + 10
-            while win._retired_workers and _time.time() < deadline:
-                qapp.processEvents()
-                _time.sleep(0.01)
-            assert win._retired_workers == []
-            assert not w.isRunning()
-        finally:
-            w.wait(3000)
+    w = _W(win)                        # ★ parent=win: 与 on_run 里的真实创建一致
+    win.worker = w
+    w.finished_run.connect(win.on_run_finished)
+    w.start()
+    deadline = _time.time() + 10
+    while win.worker is not None and _time.time() < deadline:
+        qapp.processEvents()
+        _time.sleep(0.01)
+    assert win.worker is None, "on_run_finished 没清 self.worker(解锁逻辑坏了)"
+    assert w.isRunning(), "尾巴还在跑, 但引用已丢 —— parent 所有权下这是安全的"
+    w.wait(3000)                       # 等线程退完再让 wrapper 出作用域
 
 
 def test_stop_asks_for_confirmation(win, monkeypatch):

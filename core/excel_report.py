@@ -69,12 +69,9 @@ class ExcelReport:
 
         case = self._cases[case_name]
         ws = case["sheet"]
-        # ★ 记下这次执行的起止时间(汇总页要显示"结束时间", 用户要求 2026-10-12):
-        #   第一条结果的时间当开始, 最后一条当结束 —— 报告写入点是每步跑完时, 秒级够用。
-        now = datetime.now()
-        if case.get("started") is None:
-            case["started"] = now
-        case["ended"] = now
+        # ★ 记下这次执行的**结束时间**(汇总页要显示它, 用户要求 2026-10-12):
+        #   最后一条结果的写入时刻 —— 报告写入点是每步跑完时, 秒级够用。
+        case["ended"] = datetime.now()
         case["total"] += 1
         r = case["row"]
         status = "PASS" if passed else "FAIL"
@@ -156,7 +153,7 @@ class ExcelReport:
             self._style_header(ws.cell(row=1, column=ci, value=h))
         ws.row_dimensions[1].height = 26
         return {"sheet": ws, "row": 2, "total": 0, "passed": 0, "failed": 0, "_last_desc": "",
-                "started": None, "ended": None}
+                "ended": None}
 
     def _border_range(self, ws, r1, c1, r2, c2):
         for r in range(r1, r2 + 1):

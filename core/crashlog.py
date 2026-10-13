@@ -28,24 +28,23 @@ log = get_logger()
 _crash_file = None          # 必须一直开着: faulthandler 写的是这个句柄
 
 
-def _data_dir():
-    from core.driver import DATA_DIR
-    return DATA_DIR
-
-
 def install(data_dir=None, qt=True):
     """装上三条取证手段; 任何一条失败都不影响程序启动
 
     ★ data_dir 缺省(生产启动)时**幂等**: 重复调用直接返回, 不覆盖旧句柄、不重装钩子
       (审查 2026-10-12 —— 重装会泄漏上一个 crash.log 句柄, Windows 上文件被占住删不掉)。
       测试显式传 data_dir, 每次都是全新安装。
+    ★ DATA_DIR 在**函数内** import(与 core/backup、core/logger 同一惯用法):
+      模块级导入会在 import 时把路径定死, conftest 的 _isolate_base_dir monkeypatch
+      就不再生效 —— 别把它"简化"上去(审查 2026-10-12 #32)。
     """
     global _crash_file
     if _crash_file is not None and data_dir is None:
         return
     # ① 原生崩溃栈 → reports/crash.log
     try:
-        root = data_dir or _data_dir()
+        from core.driver import DATA_DIR
+        root = data_dir or DATA_DIR
         path = os.path.join(root, "reports", "crash.log")
         os.makedirs(os.path.dirname(path), exist_ok=True)
         # buffering=1: 行缓冲, 崩的那一刻已经落盘; 必须保住这个句柄(局部变量会被回收)

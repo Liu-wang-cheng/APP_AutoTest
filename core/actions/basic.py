@@ -290,7 +290,8 @@ def do_if_impl(runner, step, negate):
 
     文本:    if: 扫地机器人  /  if not: 扫地机器人
     数值:    if: 电量 > 50
-    图片:    if: 按钮.png(可配 threshold 走图像对比)
+    图片:    if: 按钮.png —— 在页面里找这张模板图(与图像对比分为两个步骤, 用户
+             2026-10-13; 要按相似度对比用「图像相似度对比」步骤)
     ID:      if: com.xxx:id/btn
     """
     condition = step.get("if", step.get("if not", ""))
@@ -302,57 +303,40 @@ def do_if_impl(runner, step, negate):
         if op in condition:
             keyword, expected = condition.split(op, 1)
             from core.actions.data_ops import extract_value
-            for i in range(checks):          # ★ 数值也按节奏查(原来是"取一次快照")
+
+            def _num_ok(_i):
                 try:
                     val = extract_value(runner, runner._get_all_nodes(), keyword.strip())
                 except ValueError:
-                    val = None
-                if val:
-                    try:
-                        passed = bool(fn(float(val), float(expected.strip())))
-                    except (TypeError, ValueError):
-                        passed = False
-                    if passed:
-                        break
-                if i + 1 < checks:           # 末次已定局, 不再白睡(审查 2026-10-12)
-                    runner._poll_sleep(i + 1)
+                    return False
+                try:
+                    return bool(fn(float(val), float(expected.strip())))
+                except (TypeError, ValueError):
+                    return False
+            passed = runner._poll_until(checks, _num_ok)
             break
     else:
         if runner._is_image(condition):
-            threshold = step.get("threshold")
-            if threshold is not None:
-                from core.actions.asserts import compare_screen
-                for i in range(checks):      # ★ 原来只比一次, 现在同样跑满节奏
-                    try:
-                        compare_screen(runner, condition, float(threshold))
-                        passed = True
-                        break
-                    except AssertionError:
-                        if i + 1 < checks:
-                            runner._poll_sleep(i + 1)
-            else:
-                import cv2
-                from core import vision
-                # ★ 先解析到组模板目录(审查 2026-10-12): 裸名直接丢给 find_in_gray 会在
-                #   getmtime 处 FileNotFoundError —— 异常不受 except AssertionError 接,
-                #   步骤直接报错, 而不是老实判"条件不成立"。wait_for/_assert_template
-                #   都先 resolve, 这里原本漏了。
-                tpl = vision.resolve_template(condition)
-                for i in range(checks):      # ★ 模板条件原来只查一次(晚一秒就判错), 现在会等
-                    screen = runner.d.screenshot(format="opencv")
-                    if vision.find_in_gray(cv2.cvtColor(screen, cv2.COLOR_BGR2GRAY),
-                                           tpl, min_matches=3) is not None:
-                        passed = True
-                        break
-                    if i + 1 < checks:
-                        runner._poll_sleep(i + 1)
+            # ★ 图片条件只判"这张模板图出现在页面上"(用户要求 2026-10-13: if 判断与
+            #   图像对比**分为两个步骤**) —— 以前这里还认 step["threshold"] 走整屏
+            #   相似度对比, 那是 compare 步骤的职责(阈值属于它), if 里已移除。
+            #   老用例 YAML 里写的 threshold 会被忽略(模板匹配本就是严格判断)。
+            import cv2
+            from core import vision
+            # ★ 先解析到组模板目录(审查 2026-10-12): 裸名直接丢给 find_in_gray 会在
+            #   getmtime 处 FileNotFoundError —— wait_for/_assert_template 都先
+            #   resolve, 这里原本漏了。
+            tpl = vision.resolve_template(condition)
+
+            def _tpl_ok(_i):
+                screen = runner.d.screenshot(format="opencv")
+                return vision.find_in_gray(
+                    cv2.cvtColor(screen, cv2.COLOR_BGR2GRAY),
+                    tpl, min_matches=3) is not None
+            passed = runner._poll_until(checks, _tpl_ok)
         elif ":id/" in condition:
-            for i in range(checks):          # ★ 同样统一节奏(原来是 u2 自己按秒轮询)
-                if runner.d(resourceId=condition).exists(timeout=0.2):
-                    passed = True
-                    break
-                if i + 1 < checks:
-                    runner._poll_sleep(i + 1)
+            passed = runner._poll_until(
+                checks, lambda _i: runner.d(resourceId=condition).exists(timeout=0.2))
         else:
             # 多值(逗号/顿号/分号/换行分隔): 任一命中即条件成立(与 assert 的多值语义一致)。
             # v1.4 的 TextViewContentChecker(driver, ["充电中","充电完成"], t) 就是这个语义,

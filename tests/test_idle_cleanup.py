@@ -30,24 +30,12 @@ def qapp():
     return QApplication.instance() or QApplication([])
 
 
-def _mkfiles(d, n, size=10, base=1000):
-    """造 n 个 mtime 递增的文件(便于验证"留最新")"""
-    d.mkdir(parents=True, exist_ok=True)
-    out = []
-    for i in range(n):
-        f = d / f"f{i}.png"
-        f.write_bytes(b"x" * size)
-        os.utime(f, (base + i, base + i))
-        out.append(f)
-    return out
-
-
 # ── 闸门本体 ──
 
-def test_idle_when_not_running_runs_immediately(tmp_path):
+def test_idle_when_not_running_runs_immediately(tmp_path, mk_stale_files):
     """空闲时照旧立刻执行, 且不排队(闸门不能把正常运行也拦掉)"""
     d = tmp_path / "reports" / "failures"
-    _mkfiles(d, 3)
+    mk_stale_files(d, 3)
     assert idle.is_busy() is False
     n, _freed = bootstrap.trim_failures(str(d), keep=2)
     assert n == 1, "空闲时清理应当立刻动手, 而不是排进待办"
@@ -183,10 +171,10 @@ def test_prune_run_artifacts_deferred_while_running(tmp_path):
     assert len(left) == 10 and "甲用例-第1次" not in left, left
 
 
-def test_prune_debug_artifacts_deferred_while_running(tmp_path):
+def test_prune_debug_artifacts_deferred_while_running(tmp_path, mk_stale_files):
     """调试产物封顶: 执行期间不删, 结束后按每个目录留最新 N 个"""
     d = tmp_path / "Test_img" / "debug" / "clicks"
-    _mkfiles(d, 5)
+    mk_stale_files(d, 5)
     idle.begin_run()
     try:
         assert bootstrap.prune_debug_artifacts(str(tmp_path), keep_per_dir=2) == (0, 0)
@@ -198,10 +186,10 @@ def test_prune_debug_artifacts_deferred_while_running(tmp_path):
     assert sorted(p.name for p in d.iterdir()) == ["f3.png", "f4.png"]
 
 
-def test_trim_failures_deferred_while_running(tmp_path):
+def test_trim_failures_deferred_while_running(tmp_path, mk_stale_files):
     """失败截图循环覆盖: 执行期间不删(它按用例名存, 推迟不会堆文件), 结束后收"""
     d = tmp_path / "reports" / "failures"
-    _mkfiles(d, 3)
+    mk_stale_files(d, 3)
     idle.begin_run()
     try:
         assert bootstrap.trim_failures(str(d), keep=2) == (0, 0)
@@ -290,9 +278,9 @@ def test_cleanup_old_backup_deferred_while_running(tmp_path):
 # ── 结构性守护: 将来新增的清理不许漏掉闸门 ──
 
 def test_每个清理入口都装了空闲闸门():
-    """清理类函数**必须**先问闸门 —— 漏一个, 它就又会在跑用例时抢内存。
+    """清理类函数**必须**挂 @idle.gated —— 漏一个, 它就又会在跑用例时抢内存。
 
-    ★ 用源码扫描而不是逐个调用: 新增清理函数时这条会立刻红, 提醒照做
+    ★ 用源码扫描而不是逐个调用: 新增清理函数时这条会立刻红, 提醒照挂
       (与 test_conftest_guard 同一思路)。
     """
     entries = [
@@ -305,7 +293,7 @@ def test_每个清理入口都装了空闲闸门():
         bootstrap.trim_case_screenshots,
     ]
     missing = [f.__name__ for f in entries
-               if "idle.is_busy()" not in inspect.getsource(f)]
+               if "@idle.gated" not in inspect.getsource(f)]
     assert not missing, f"这些清理函数没有空闲闸门(执行用例时会抢内存): {missing}"
 
 

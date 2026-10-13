@@ -24,30 +24,35 @@
     执行入口互不干扰, 迟到/重复的 end_run 也动不了别的轮次的计数(审查 2026-10-12)。
 
 ★ 清理函数怎么接(唯一写法)
-    在最前面加三行, 内部实现一行都不用改:
+    挂上 `@idle.gated` 装饰器, 内部实现一行都不用改:
 
-        from core import idle
-        if idle.is_busy():                      # 正在跑用例 → 推迟(见 core/idle.py)
-            idle.defer("这件清理的名字", lambda: <再来一次同样的调用>)
-            return <空结果>
+        @idle.gated("这件清理的名字", empty=(0, 0))      # empty = 忙时的空返回值
+        def trim_xxx(...): ...
 
-    `defer` 的名字用中文短句、同一件事只排一次; `lambda` 里**必须把参数原样带上**
-    (漏一个, 补做时就用的是默认值)。`core/bootstrap.py` 的 7 个清理入口都是这个形态,
-    并且有一条结构性守护测试盯着它们 —— 新增清理函数照做, 否则它就成了漏网的那个。
+    名字用中文短句、同一件事只排一次; 要按**参数**去重的(如 trim_case_screenshots 按
+    用例名), name 传 `lambda *a, **k: f"...({a[1]})"`。装饰器会按**原参数**重调 ——
+    补做时不会用默认值。`core/bootstrap.py` 的 7 个清理入口都挂了它, 并且有一条结构性
+    守护测试盯着 —— 新增清理函数照做, 否则它就成了漏网的那个。
+
+★ 已知的窄残余(有意保留, 审查 2026-10-12 #16)
+    补做线程 pop 出一件清理后、执行期间, 用户点了「执行」—— **这一件**会跑完
+    (下一件起才被挡住, 见 _flush_now 的循环内检查)。要根除得让清理函数支持协作式中断,
+    收益(几秒的目录遍历重叠)配不上复杂度; `test_flush_stops_when_a_new_run_starts`
+    钉住了"下一件必须被挡下"这条底线。
 """
+import functools
 import threading
+import time
 
 from core.logger import get_logger
 
 log = get_logger()
 
 _lock = threading.RLock()
-_cond = threading.Condition(_lock)   # 用同一个锁: "补做"完成时唤醒等待者
 _active = set()                  # 在执行的"令牌"集 —— 非空 = 正在执行用例
 _token_seq = 0                   # 令牌发号器(begin_run 发一个, end_run 凭令牌销账)
 _pending = []                    # [(名字, 可调用)] —— 运行中被推迟的清理, 保持顺序
-_names = set()                   # 同一件事只排一次(封顶清理每次失败都会调一次)
-_flushing = False                # 补做正在进行, 避免 repeat 叠加
+_flushing = False                # 补做正在进行(_flush_now 入口串行化, 不并发两趟)
 
 
 def begin_run():
@@ -82,12 +87,32 @@ def is_busy():
         return bool(_active)
 
 
+def gated(name, empty):
+    """清理函数的闸门装饰器: 正在执行用例 → 把**原参数**的调用记进待办, 返回空结果。
+
+    name:  字符串; 或 callable(*args, **kwargs) → str(按参数去重, 见 trim_case_screenshots)。
+    empty: 忙时的返回值 —— list/tuple 传**常量**(不可变, 共享无碍); 传 callable 则每次
+           新造(如 `list`), 需要新鲜可变对象时用后者。
+    """
+    def deco(fn):
+        @functools.wraps(fn)
+        def wrapper(*args, **kwargs):
+            if is_busy():
+                nm = name(*args, **kwargs) if callable(name) else name
+                defer(nm, lambda: fn(*args, **kwargs))
+                if empty is None:
+                    return None
+                return empty() if callable(empty) else empty
+            return fn(*args, **kwargs)
+        return wrapper
+    return deco
+
+
 def defer(name, fn):
     """记下"这件清理待做"; 已经排过同名的不重复排。返回 True=新排入"""
     with _lock:
-        if name in _names:
+        if any(n == name for n, _f in _pending):
             return False
-        _names.add(name)
         _pending.append((name, fn))
         # ★ "闸门刚开"的缝隙(审查 2026-10-12): is_busy()→defer() 两步之间本轮恰好
         #   结束、补做线程已扫过空队列返回 —— 再不自己触发一次, 这件清理就滞留到
@@ -113,42 +138,46 @@ def flush(background=True):
     ★ 同步模式(background=False)必须**真的做完才返回**: 已经有一趟在跑时先等它
       结束, 而不是看见 `_flushing` 就走 —— 否则"补做完了"是假的(测试里表现为
       断言时文件还在, 后台线程晚一步才删)。
-    ★ 每做一件前先看闸门: 用户又点了「执行」就**停手**, 剩下的等下一轮 —— 不然等于
-      把清理挪到了新一轮的执行期间, 白折腾。
     """
     if background:
         _flush_in_thread()
         return
-    with _lock:
-        while _flushing:            # Condition.wait 会临时放锁, 让人家做完
-            _cond.wait(0.05)
+    while _flushing:                # 有后台补做在跑: 等它收尾(见 _flush_now 的串行化)
+        time.sleep(0.05)
     _flush_now()
 
 
 def _flush_in_thread():
-    global _flushing
     with _lock:
         if _flushing or not _pending:
             return
-        _flushing = True
     threading.Thread(target=_flush_now, name="idle-cleanup", daemon=True).start()
 
 
 def _flush_now():
+    """真正干活的一趟; 后台线程与同步 flush 都从这进 —— **串行化**, 不并发两趟。
+
+    ★ 每做一件前先看闸门: 用户又点了「执行」就**停手**, 剩下的等下一轮 —— 不然等于
+      把清理挪到了新一轮的执行期间, 白折腾。(pop 出来的那一件除外 —— 已知窄残余,
+      见模块 docstring。)
+    """
     global _flushing
-    with _lock:
-        _flushing = True
+    while True:
+        with _lock:
+            if not _flushing:
+                _flushing = True
+                break
+        time.sleep(0.05)            # 已有一趟在跑: 等它收尾再接手(审查 2026-10-12)
     try:
         while True:
             with _lock:
                 if not _pending:
                     return
                 if _active:
-                    # 又开始跑用例了: 原样留着(名字也留着, 免得重复排), 等下一次 end_run
+                    # 又开始跑用例了: 原样留着(名字随条目一起留, 免得重复排), 等下一次 end_run
                     log.debug("[清理] 又开始了新一轮执行, 推迟的清理继续等")
                     return
                 name, fn = _pending.pop(0)
-                _names.discard(name)
             try:
                 fn()
                 log.debug(f"[清理] 补做完成: {name}")
@@ -157,16 +186,23 @@ def _flush_now():
     finally:
         with _lock:
             _flushing = False
-            _cond.notify_all()
 
 
 def reset():
-    """清空状态(仅测试用) —— 计数归零、丢弃排队项, 不执行任何清理"""
-    global _token_seq
+    """清空状态(仅测试用) —— 丢弃排队项、等在跑的补做收尾(最多 5s), 不执行任何清理。
+
+    ★ 等**而不是强清**(审查 2026-10-12 #17): 强清 _flushing 会让上一条测试的补做
+      线程与下一条测试的并发起来; 守护线程指向的还是上一条测试的临时目录。
+    """
+    global _token_seq, _flushing
+    deadline = time.monotonic() + 5
+    while True:
+        with _lock:
+            if not _flushing or time.monotonic() > deadline:
+                break
+        time.sleep(0.05)
     with _lock:
-        _active.clear()
         _token_seq = 0
-        _flushing = False
+        _active.clear()
         _pending.clear()
-        _names.clear()
-        _cond.notify_all()
+        _flushing = False

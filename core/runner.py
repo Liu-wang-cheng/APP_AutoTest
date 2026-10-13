@@ -158,6 +158,20 @@ class ActionRunner:
         else:
             self._sleep(POLL_MAX)
 
+    def _poll_until(self, checks, pred):
+        """按节奏探测 `checks` 次, `pred(i)` 真值即成立(审查 2026-10-12 #21)。
+
+        if 条件的四类检测(数值/图片阈值/模板/ID)共用这一个循环 —— 以前是四段
+        近乎复制的 for+break+_poll_sleep, 已经漂移出过 bug(模板分支丢了
+        resolve_template)。间隔走 _poll_sleep 阶梯, 末次已定局不再白睡。
+        """
+        for i in range(1, checks + 1):
+            if pred(i):
+                return True
+            if i < checks:
+                self._poll_sleep(i)
+        return False
+
     @property
     def stopped(self):
         """停止标志: 自身标志 **或** 外部取消信号(cancel_check)任一为真。
