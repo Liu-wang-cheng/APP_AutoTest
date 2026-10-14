@@ -221,25 +221,46 @@ def test_trim_traces_deferred_while_running(tmp_path):
 
 
 def test_trim_case_screenshots_deferred_while_running(tmp_path):
-    """用例截图循环: 执行期间不删, 结束后只留最新 N 次
+    """用例截图循环: 执行期间不删, 结束后按**运行**整组循环覆盖(保留最近 2 次运行)
 
-    ★ 目录名两种形态都收(审查 2026-10-12): 「用例名-第N次」(现行)与「用例名-N」
-      (2.0.7 短暂生成过的) —— 后者不认的话, 已装 2.0.7 的机器上那些目录永远没人清。
+    ★ 一次「运行」跑多轮 = 多个目录共用一个运行标签 = 一组, 整组保留/整组删除
+      (用户 2026-10-14: "一次多轮测试执行也只算同一轮"; "要循环存储而不是整个都删")
     """
     shots = tmp_path / "screenshots"
-    for i, name in enumerate(["甲用例-9", "甲用例-第1次", "甲用例-第2次", "甲用例-第3次"]):
+    runs = [("甲用例_r20260101_090000_第1次", 3000),   # 运行1(两轮)
+            ("甲用例_r20260101_090000_第2次", 3001),
+            ("甲用例_r20260101_090001_第1次", 3002),   # 运行2(一轮)
+            ("甲用例_r20260101_090002_第1次", 3003),   # 运行3(两轮)
+            ("甲用例_r20260101_090002_第2次", 3004)]
+    for name, mt in runs:
         d = shots / name
         d.mkdir(parents=True)
-        os.utime(d, (3000 + i, 3000 + i))      # 甲用例-9 最旧
+        os.utime(d, (mt, mt))
     idle.begin_run()
     try:
         assert bootstrap.trim_case_screenshots(str(shots), case_name="甲用例", keep=2) == (0, 0)
-        assert len(list(shots.iterdir())) == 4
+        assert len(list(shots.iterdir())) == 5
         assert "截图循环(甲用例)" in idle.pending_names()
     finally:
         idle.end_run()
     idle.flush(background=False)
-    assert sorted(p.name for p in shots.iterdir()) == ["甲用例-第2次", "甲用例-第3次"], \
+    # 保留运行2+运行3(最近两次), 运行1 两轮整组删除
+    assert sorted(p.name for p in shots.iterdir()) == [
+        "甲用例_r20260101_090001_第1次",
+        "甲用例_r20260101_090002_第1次", "甲用例_r20260101_090002_第2次"], \
+        sorted(p.name for p in shots.iterdir())
+
+
+def test_trim_case_screenshots_legacy_names_still_matched(tmp_path):
+    """旧式目录名(2.0.8~2.0.13 的 甲用例-第N次 / 2.0.7 的 甲用例-N)仍按用例键认领,
+    循环覆盖逐个淘汰 —— 升级后老目录不能变成没人收的孤儿"""
+    shots = tmp_path / "screenshots"
+    for i, name in enumerate(["甲用例-9", "甲用例-第1次", "甲用例-第2次"]):
+        d = shots / name
+        d.mkdir(parents=True)
+        os.utime(d, (3000 + i, 3000 + i))
+    assert bootstrap.trim_case_screenshots(str(shots), case_name="甲用例", keep=1) == (2, 0)
+    assert sorted(p.name for p in shots.iterdir()) == ["甲用例-第2次"], \
         sorted(p.name for p in shots.iterdir())
 
 

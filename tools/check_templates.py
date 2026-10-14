@@ -25,7 +25,7 @@ IMAGE_KEYS = ("click", "click_template", "long_click", "assert", "wait_for", "co
               "switch_tpl", "add_tpl")
 META = {"desc", "wait", "timeout", "retry", "threshold", "duration", "circular",
         "switch_area", "switch_label", "then", "else",
-        "wait_after", "swipe_end"}
+        "wait_after", "swipe_end", "compare_area"}
 
 
 def collect_template_refs(only_file=None):

@@ -70,11 +70,15 @@ ACTIONS = [
         {"key": "compare", "label": "基准图", "type": "stepshot",
          "hint": "选择前面开启了自动截图的步骤, 以其截图为基准"},
         {"key": "threshold", "label": "相似度阈值", "type": "float", "hint": "默认 0.6,低于即失败"},
+        {"key": "compare_area", "label": "对比范围", "type": "text",
+         "hint": "两种单位自动识别:\n· 百分比: 数字带 %, 如 10%,20% 90%,80%\n· 像素: 不带 %, 如 100,200 900,1500\n顺序 = 左,上,右,下(左上角→右下角)\n留空 = 默认中部(10%,30%-90%,80%)\n范围矩形+相似度/阈值会标注在证据截图上"},
     ]},
     {"key": "diff", "label": "图像变化检测", "category": "断言", "fields": [
         {"key": "diff", "label": "基准图", "type": "text", "required": True,
          "hint": "与基准图有差异才通过(反相对比)"},
         {"key": "threshold", "label": "相似度阈值", "type": "float", "hint": "默认 0.99,高于即'无变化'失败"},
+        {"key": "compare_area", "label": "对比范围", "type": "text",
+         "hint": "两种单位自动识别:\n· 百分比: 数字带 %, 如 10%,20% 90%,80%\n· 像素: 不带 %, 如 100,200 900,1500\n顺序 = 左,上,右,下; 留空 = 默认中部(10%,30%-90%,80%)"},
     ]},
 
     # ── 数据 ──
@@ -318,7 +322,7 @@ def step_summary(step):
     action_key = primary_action_key(step)
     if action_key is None:
         if "wait" in step and len(step) <= 2:
-            return f"延时等待 {step['wait']} 秒"
+            return f"延时等待 {step['wait']:g}s"
         return str(step)
     action = ACTION_BY_KEY[action_key]
     val = step[action_key]
@@ -326,8 +330,12 @@ def step_summary(step):
         val = ",".join(f"{k}={v}" for k, v in val.items() if v not in (None, ""))
     elif isinstance(val, list):
         val = f"[{','.join(map(str, val))}]"
+    elif isinstance(val, float):
+        val = f"{val:g}"                      # 5.0 → 5(用户 2026-10-14: 显示 5s 而非 5.0)
     # ★ chip(彩色标签)已经显示动作名, summary 只显示「具体参数」, 不再重复
     detail = "" if val in (True, "") else str(val)
+    if action_key == "sleep" and detail:
+        detail = f"{detail}s"                 # 延时等待: 5 → 5s
     desc = str(step.get("desc", "")).strip()
     if desc and desc != action["label"]:
         main = f"{desc} · {detail}" if detail else desc

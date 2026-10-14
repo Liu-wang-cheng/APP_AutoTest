@@ -895,6 +895,30 @@ class StepCard(QFrame):
         w, getter = _make_field_widget(field, self.step.get(field["key"]),
                                        steps=self.main.steps,
                                        exclude_index=self.index)
+        if field["key"] == "compare_area":
+            # ★ 预览对比范围(用户 2026-10-14): 点一下连当前设备截屏, 按本框现值
+            #   画标注图弹窗 —— 范围合不合理, 不用跑用例就能确认。
+            #   信号/宽度仍绑在**原控件** w 上; box 只负责网格布局(否则 editingFinished
+            #   等属性在容器上找不到, 保存回写会断 —— 实测踩过)。
+            from PySide6.QtWidgets import (
+                QPushButton as _PB, QWidget as _QW, QHBoxLayout as _HL)
+            btn = _PB("预览范围")
+            btn.setToolTip("连接当前设备截屏, 按本框现值画范围标注图\n"
+                           "确认对比范围合不合理(不跑用例)")
+            btn.clicked.connect(lambda: self.main.preview_compare_area(getter()))
+            box = _QW()
+            hb = _HL(box)
+            hb.setContentsMargins(0, 0, 0, 0)
+            hb.addWidget(w)
+            hb.addWidget(btn)
+            grid.addWidget(box, row, 1, Qt.AlignLeft)
+            self.widgets[field["key"]] = w
+            self.getters[field["key"]] = getter
+            if hasattr(w, "changed"):
+                w.changed.connect(self._write_back)
+            else:
+                w.editingFinished.connect(self._write_back)
+            return row + 1
         if isinstance(w, _FormCheckBox):
             pass                     # ★ 勾选框保持自然大小: 拉宽会产生"点不动/点哪儿都算"
         elif isinstance(w, _FitCombo):
@@ -3453,6 +3477,33 @@ class MainWindow(QMainWindow):
         if 0 <= idx < len(self.preconditions):
             self.preconditions[idx]["enabled"] = bool(on)
             self._save_preconditions()
+
+    def preview_compare_area(self, region_text):
+        """预览对比范围(用户 2026-10-14): 连当前设备截屏 → 按范围画标注图 → 弹窗。
+        范围非法/设备未连接都转警告框, 不打断编辑。"""
+        from core.actions.asserts import preview_region
+        try:
+            if not str(region_text or "").strip():
+                QMessageBox.warning(
+                    self, "预览对比范围",
+                    "对比范围是空的 —— 会用默认中部区域\n"
+                    "(10%,30%-90%,80%); 填上后可预览自定义范围")
+                region_text = ""
+            import uiautomator2 as u2
+            dev_id = self.device_combo.currentData()
+            d = u2.connect(dev_id)
+            frame = d.screenshot(format="opencv")
+            path, desc = preview_region(frame, region_text)
+        except ValueError as e:
+            QMessageBox.warning(self, "对比范围有误", str(e))
+            return
+        except Exception as e:
+            QMessageBox.warning(self, "预览失败",
+                                f"{type(e).__name__}: {e}\n请确认设备已连接")
+            return
+        dlg = ImageViewDialog(path, parent=self)
+        dlg.setWindowTitle(f"对比范围预览 - {desc}")
+        dlg.exec()
 
     def on_edit_status_words(self):
         """故障/空闲词配置弹窗(用户 2026-10-13): 写 config.yaml + 同步全局词表,

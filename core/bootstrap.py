@@ -365,7 +365,8 @@ def prune_debug_artifacts(app_dir=None, keep_per_dir=DEBUG_KEEP_PER_DIR,
 
 
 #: 「跑出来的产物」封顶策略(用户要求 2026-10-12: "如何确保不会越来越大")
-SCREENSHOT_KEEP_RUNS = 10         # 每个用例最多保留最近多少"次执行"的截图目录
+SCREENSHOT_KEEP_RUNS = 3          # 每个用例保留最近 3 次**运行**的截图(用户 2026-10-14:
+                                  # 一次点「运行」即使跑多轮也只算一次运行)
 SCREENSHOT_MAX_TOTAL_MB = 1024    # 所有用例截图目录合计上限(超了按最旧优先删)
 REPORT_KEEP = 20                  # 最多保留多少份报告
 REPORT_FAIL_SHOTS_KEEP = 50       # 失败截图最多保留多少张(用户 2026-10-12: 50)
@@ -424,13 +425,20 @@ def prune_run_artifacts(app_dir=None, keep_runs=None, max_total_mb=None,
                     by_case.setdefault(case, []).append(p)
             for plist in by_case.values():
                 plist.sort(key=os.path.getmtime, reverse=True)     # 新 → 旧
-                for old_run in plist[keep_runs:]:                  # 每个用例只留最近 N 次
-                    n, b = _tree_size(old_run)
-                    if _rm_tree(old_run):
-                        dirs_removed += 1
-                        files_removed += n
-                        freed += b
-                shot_dirs.extend(p for p in plist[:keep_runs] if os.path.isdir(p))
+                # ★ 保留单位是**运行**(2026-10-14): 一次点「运行」跑 R 轮 = R 个目录
+                #   同属一组**整组保留**, 只算一次 —— 按轮次号回到 1 分组
+                #   (见 group_runs_newest_first)
+                runs = group_runs_newest_first(plist)
+                for group in runs[keep_runs:]:
+                    for old_run in group:                          # 整组删除
+                        n, b = _tree_size(old_run)
+                        if _rm_tree(old_run):
+                            dirs_removed += 1
+                            files_removed += n
+                            freed += b
+                # 容量兜底要统计的是**存活**目录 = 保留组里的全部目录(含多轮)
+                shot_dirs.extend(p for g in runs[:keep_runs]
+                                 for p in g if os.path.isdir(p))
         # ② 总容量兜底: 超上限 → 按目录时间最旧优先整目录删
         total = sum(_tree_size(p)[1] for p in shot_dirs)
         if total > max_total_mb * 1024 * 1024:
@@ -540,10 +548,66 @@ def trim_traces(failures_dir, keep=None):
     return n, freed
 
 
+def _round_of(dirname):
+    """截图目录名 → 轮次号(第N次的 N); 无轮次号(老式裸名)返回 None"""
+    m = re.search(r"_r\d{8}_\d{6}_第(\d+)次$", dirname)
+    if m:
+        return int(m.group(1))
+    stem, sep, tail = dirname.rpartition("-第")
+    if sep and tail.endswith("次") and tail[:-1].isdigit():
+        return int(tail[:-1])
+    return None
+
+
+_RUN_TAG_RE = re.compile(r"_r(\d{8}_\d{6})_第\d+次$")
+
+
+def _run_tag_of(dirname):
+    """截图目录名 → 运行标签(r 后的 14 位时间戳); 旧式目录返回 None"""
+    m = _RUN_TAG_RE.search(dirname)
+    return m.group(1) if m else None
+
+
+def group_runs_newest_first(dirs):
+    """把同用例的截图目录按**运行**分组(用户 2026-10-14: 一次点「运行」跑多轮
+    = 多个目录共用一个运行标签 = 一组, **整组保留/整组删除**)。
+
+    dirs 需已按 mtime 新→旧排序。分组依据 = 运行标签(_r<时间戳>_第N次);
+    旧式目录(无标签)各自成组 —— 它们之间无法区分运行, 让循环覆盖逐个淘汰。
+    返回组列表(组间新→旧, 组内也新→旧)。
+    """
+    groups, index = [], {}
+    for p in dirs:
+        tag = _run_tag_of(os.path.basename(p)) or f"__legacy_{os.path.basename(p)}"
+        if tag not in index:
+            index[tag] = len(groups)
+            groups.append([])
+        groups[index[tag]].append(p)
+    return groups
+
+
+def keep_newest_runs(dirs, keep):
+    """循环覆盖: 只保留最近 keep 次**运行**的目录, 更旧的一组整组删除。
+
+    返回 (删除目录数, 释放字节)。dirs 需为同用例的目录(新→旧由内部排序)。
+    """
+    dirs = sorted(dirs, key=os.path.getmtime, reverse=True)   # 新 → 旧
+    groups = group_runs_newest_first(dirs)
+    to_delete = [p for g in groups[keep:] for p in g]
+    freed = 0
+    for p in to_delete:
+        freed += _tree_size(p)[1]
+        _rm_tree(p)
+    return len(to_delete), freed
+
+
 def _shot_case_of(name):
-    """截图目录名 → 用例键。两种形态都认(审查 2026-10-12):
-    「用例名-第N次」(现行) / 「用例名-N」(2.0.7 短暂生成过的) —— 后者若不认,
-    已装 2.0.7 的机器上那些目录就永远没人收。"""
+    """截图目录名 → 用例键。三种形态都认:
+    「用例名_r<标签>_第N次」(现行, 2026-10-14 起按运行分目录) /
+    「用例名-第N次」(2.0.8~2.0.13) / 「用例名-N」(2.0.7 短暂用过)。"""
+    m = _RUN_TAG_RE.search(name)
+    if m:
+        return name[:m.start()]
     stem, sep, tail = name.rpartition("-第")
     if sep and tail.endswith("次") and tail[:-1].isdigit():
         return stem
@@ -569,7 +633,7 @@ def trim_case_screenshots(shots_dir, case_name="", keep=None):
         p = os.path.join(shots_dir, name)
         if os.path.isdir(p) and (not case_name or _shot_case_of(name) == case_name):
             dirs.append(p)
-    n, freed = keep_newest(dirs, keep)
+    n, freed = keep_newest_runs(dirs, keep)
     if n:
         log.info(f"[清理] 截图循环: {case_name or '全部用例'} 删最旧 {n} 次, "
                  f"释放 {freed / 1048576:.1f}MB")

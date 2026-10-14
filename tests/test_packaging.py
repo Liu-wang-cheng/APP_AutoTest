@@ -1059,19 +1059,26 @@ def test_caps_are_fifty_and_recycle_at_write_time(tmp_path, monkeypatch):
 
 
 def test_case_screenshots_recycle_at_write_time(tmp_path, monkeypatch):
-    """用例截图: 每次执行结束后把该用例的旧执行目录循环掉(只留最新 10 次)"""
+    """用例截图: 每次执行结束后按**运行**循环掉旧的(默认保留最近 3 次运行;
+    一次运行跑多轮 = 多个目录同标签整组保留 —— 用户 2026-10-14)"""
     import os as _os
     from core import bootstrap
     monkeypatch.setattr(bootstrap, "_app_root", lambda app_dir=None: str(tmp_path))
     shots = tmp_path / "Test_cases" / "组甲" / "screenshots"
-    for i in range(12):
-        d = shots / f"甲用例-第{i + 1}次"
+    # 4 次运行: 运行1 两轮(第1/2次), 运行2~4 各一轮 —— 默认保留最近 3 次 → 运行1 整组删
+    for name, mt in [("甲用例_r20260101_090000_第1次", 3000),
+                     ("甲用例_r20260101_090000_第2次", 3001),
+                     ("甲用例_r20260101_090001_第1次", 3002),
+                     ("甲用例_r20260101_090002_第1次", 3003),
+                     ("甲用例_r20260101_090003_第1次", 3004)]:
+        d = shots / name
         d.mkdir(parents=True)
         (d / "step01.png").write_bytes(b"x")
-        _os.utime(d, (3000 + i, 3000 + i))
-    (shots / "乙用例-第1次").mkdir()          # 别的用例: 不该被动
+        _os.utime(d, (mt, mt))
+    (shots / "乙用例_r20260101_090004_第1次").mkdir()   # 别的用例: 不该被动
     n, _freed = bootstrap.trim_case_screenshots(str(shots), case_name="甲用例")
     left = sorted(p.name for p in shots.iterdir())
     assert n == 2, n
-    assert "乙用例-第1次" in left and "甲用例-第1次" not in left, left
-    assert len([x for x in left if x.startswith("甲用例")]) == 10, left
+    assert "乙用例_r20260101_090004_第1次" in left, left
+    assert "甲用例_r20260101_090000_第1次" not in left, left
+    assert len([x for x in left if x.startswith("甲用例")]) == 3, left

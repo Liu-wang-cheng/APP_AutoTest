@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """断言类动作: assert / assert_switch / switch_to / compare / diff"""
 import os
+import re
 import time
 
 import cv2
@@ -9,6 +10,7 @@ from PIL import Image
 
 from core import registry as reg
 from core.driver import BASE_DIR, split_texts
+from core.actions.basic import parse_xy
 from core.logger import get_logger
 
 log = get_logger()
@@ -31,13 +33,150 @@ def check_threshold(threshold, inverse):
             f"similarity < {threshold} 恒成立, 断言会恒为失败。请改用不超过 1 的值")
 
 
-def compare_screen(runner, baseline, threshold=0.6, inverse=False):
+def _parse_region(text):
+    """解析 compare_area 的 4 个数字 → (l, t, r, b, is_percent)。
+
+    ★ 两种单位都支持、自动识别(用户 2026-10-14: "要写明是百分比还是坐标值,
+      并且两个都需要兼容"):
+      · 数字带 **%** → 百分比(相对画面宽/高): "10%,20% 90%,80%"
+      · 数字不带 %   → **像素**: "100,200 900,1500"
+      · 可选前缀 pct: / px: 显式声明(增强可读性), 前缀与后缀混用报错
+    分隔: 空格/逗号/全角逗号; 返回整数(已剥 % 与前缀)。
+    """
+    raw = str(text or "").strip()
+    prefix = ""
+    for p in ("pct:", "px:"):
+        if raw.startswith(p):
+            prefix, raw = p, raw[len(p):].strip()
+            break
+    if not raw:
+        raise ValueError(f"对比范围(compare_area)为空: {text!r}")
+    toks = [t for t in re.split(r"[\s,，]+", raw) if t]
+    if len(toks) != 4:
+        raise ValueError(
+            f"对比范围(compare_area)要 4 个数字(左,上,右,下), 收到: {text!r}")
+    is_pct = prefix == "pct:"
+    vals = []
+    pct_flags = []
+    for t in toks:
+        pct = t.endswith("%")
+        if pct:
+            if prefix == "px:":
+                raise ValueError(f"对比范围单位混用(px: 前缀不能配 %): {text!r}")
+            is_pct = True
+            t = t[:-1].strip()
+        elif prefix == "pct:":
+            raise ValueError(f"对比范围单位混用(pct: 前缀要每个数字都带 %): {text!r}")
+        pct_flags.append(pct)
+        try:
+            vals.append(int(float(t)))
+        except ValueError:
+            raise ValueError(
+                f"对比范围(compare_area)的数字看不懂: {t!r}(整串: {text!r})")
+    if any(pct_flags) and not all(pct_flags):
+        raise ValueError(f"对比范围单位混用(% 与像素不能混填): {text!r}")
+    return vals, is_pct
+
+
+def _resolve_region(runner, region, shape):
+    """对比范围(用户 2026-10-14): 左上角(左,上) — 右下角(右,下)。
+
+    ★ 两种单位都支持、自动识别(用户 2026-10-14):
+      · **百分比**: 数字带 %(相对画面宽/高) —— 分辨率无关, 换设备不用改;
+      · **像素**: 不带 %(或 px: 前缀) —— 精确落点。
+    None/空 → 默认中部(10%,30%-90%,80%, 避开状态栏与底栏);
+    越界自动夹到画面内; 零面积/左右颠倒直接报错。
+    返回 (x1, y1, x2, y2, 范围描述文本)。
+    """
+    h, w = shape
+    if not region:
+        return (int(w * 0.1), int(h * 0.3), int(w * 0.9), int(h * 0.8),
+                "10%,30%-90%,80%(默认)")
+    vals, is_pct = _parse_region(region)
+    if is_pct:
+        l, t, r, b = (max(0, min(v, 100)) for v in vals)
+        x1, x2 = int(w * l / 100), int(w * r / 100)
+        y1, y2 = int(h * t / 100), int(h * b / 100)
+        if l >= r or t >= b:
+            raise ValueError(
+                f"对比范围的左/上要**小于**右/下(左上角→右下角): "
+                f"{l}%,{t}% - {r}%,{b}%")
+        if x2 - x1 < 2 or y2 - y1 < 2:
+            raise ValueError(
+                f"对比范围太小或为空: {l}%,{t}% - {r}%,{b}% (画面 {w}x{h})")
+        return x1, y1, x2, y2, f"{l}%,{t}%-{r}%,{b}%(百分比)"
+    # 像素: 越界夹到画面内
+    x1, y1, x2, y2 = (max(0, min(v, m)) for v, m in
+                      zip(vals, (w, h, w, h)))
+    x1, x2 = sorted((x1, x2))
+    y1, y2 = sorted((y1, y2))
+    if x2 - x1 < 2 or y2 - y1 < 2:
+        raise ValueError(
+            f"对比范围太小或为空: {vals} (画面 {w}x{h})")
+    return x1, y1, x2, y2, f"{x1},{y1}-{x2},{y2}(像素)"
+
+
+def _draw_region_annotation(img, x1, y1, x2, y2, pct_txt, sim_line=None):
+    """对比范围标注(共用): 范围矩形 + 两行大字(相似度/阈值 + 范围百分比)。
+
+    半透明深色底衬 + 黑描边亮黄字 —— 任何底色(绿色横幅/浅色页面)都可读。
+    sim_line: "sim 97.2% / thr 80%" 这类; None = 只画范围(预览模式)。
+    """
+    cv2.rectangle(img, (x1, y1), (x2 - 1, y2 - 1), (0, 200, 255), 3)
+    line1 = sim_line or ""
+    line2 = f"area {pct_txt}"
+    ty1 = y1 - 60 if y1 >= 110 else y1 + 56
+    ty2 = y1 - 20 if y1 >= 110 else y1 + 100
+    tx = x1 + 10
+    sx1, sy1 = max(0, x1), max(0, ty1 - 46)
+    sx2 = min(img.shape[1], x1 + max(len(line1), len(line2)) * 26 + 24)
+    sy2 = min(img.shape[0], ty2 + 14)
+    if sx2 > sx1 and sy2 > sy1:
+        overlay = img.copy()
+        cv2.rectangle(overlay, (sx1, sy1), (sx2, sy2), (25, 25, 25), -1)
+        cv2.addWeighted(overlay, 0.45, img, 0.55, 0, img)
+    if line1:
+        cv2.putText(img, line1, (tx, ty1), cv2.FONT_HERSHEY_SIMPLEX, 1.4,
+                    (0, 0, 0), 6, cv2.LINE_AA)
+        cv2.putText(img, line1, (tx, ty1), cv2.FONT_HERSHEY_SIMPLEX, 1.4,
+                    (0, 220, 255), 3, cv2.LINE_AA)
+    cv2.putText(img, line2, (tx, ty2), cv2.FONT_HERSHEY_SIMPLEX, 1.4,
+                (0, 0, 0), 6, cv2.LINE_AA)
+    cv2.putText(img, line2, (tx, ty2), cv2.FONT_HERSHEY_SIMPLEX, 1.4,
+                (0, 220, 255), 3, cv2.LINE_AA)
+
+
+def preview_region(frame, region):
+    """预览对比范围(用户 2026-10-14): 在**当前设备画面**上画范围标注 → 存临时文件。
+
+    返回 (标注图路径, 范围描述)。不算相似度(没有基准), 只画范围 —— 用户在编辑
+    步骤时点「预览范围」确认矩形盖得对不对。范围非法抛 ValueError(界面转警告框)。
+    """
+    h, w = frame.shape[:2]
+    x1, y1, x2, y2, pct_txt = _resolve_region(None, region, (h, w))
+    vis = frame.copy()
+    _draw_region_annotation(vis, x1, y1, x2, y2, pct_txt, sim_line=None)
+    d = os.path.join(BASE_DIR, "Test_img", "debug", "compare_preview")
+    os.makedirs(d, exist_ok=True)
+    path = os.path.join(d, time.strftime("%H%M%S") + "_预览.png")
+    ok, buf = cv2.imencode(".png", vis)
+    if ok:
+        with open(path, "wb") as f:
+            f.write(buf.tobytes())
+    return path, f"{pct_txt} → 像素 {x1},{y1}-{x2},{y2}"
+
+
+def compare_screen(runner, baseline, threshold=0.6, inverse=False, region=None):
     """对比当前屏幕与基准图,差异>阈值则断言失败。
-    只比较中间区域(地图区),忽略状态栏和底部控制区。
 
     threshold 是相似度门槛,值域为 [0,1]:
       inverse=False (compare): similarity < threshold 判失败
       inverse=True  (diff)   : similarity > threshold 判失败
+    region: 对比范围(用户 2026-10-14) —— 左上角(x1,y1)-右下角(x2,y2) 绝对像素;
+      缺省 = 画面中部(原行为)。
+
+    ★ 标注(2026-10-14): 比对帧上画出**对比范围矩形** + 相似度/阈值文字, 存为本步
+      证据截图(经 runner 的证据槽) —— 报告里直接看出"比的是哪块、阈值多少、结果多少"。
     """
     check_threshold(threshold, inverse)
     screen = runner.d.screenshot(format="opencv")
@@ -53,13 +192,12 @@ def compare_screen(runner, baseline, threshold=0.6, inverse=False):
     if cur.shape != ref.shape:
         ref = cv2.resize(ref, (cur.shape[1], cur.shape[0]))
     h, w = cur.shape
-    # 只比较中间区域
-    r1, r2 = int(h * 0.2), int(h * 0.8)
-    c1, c2 = int(w * 0.1), int(w * 0.9)
-    cur, ref = cur[r1:r2, c1:c2], ref[r1:r2, c1:c2]
-    diff = cv2.absdiff(cur, ref)
+    x1, y1, x2, y2, pct_txt = _resolve_region(runner, region, (h, w))
+    cur_r, ref_r = cur[y1:y2, x1:x2], ref[y1:y2, x1:x2]
+    diff = cv2.absdiff(cur_r, ref_r)
     similarity = 1 - np.count_nonzero(diff > 25) / diff.size
-    msg = f"相似度 {similarity:.1%}"
+    rng_txt = f"(范围 {pct_txt} → 像素 {x1},{y1}-{x2},{y2})" if region else ""
+    msg = f"相似度 {similarity:.1%} {rng_txt}".strip()
     if inverse:
         # diff 模式:相似度 < 阈值(即有差异)则通过;默认 0.99 = 变化超 1% 算通过
         if similarity > threshold:
@@ -70,6 +208,28 @@ def compare_screen(runner, baseline, threshold=0.6, inverse=False):
     # ★ 通过也要留痕: 只记失败的话, 报告里看不出"比对到底比了多少、阈值多少"
     log.info(f"[截图比对] {msg},阈值 {threshold:.0%} → 通过")
     runner._last_compare_msg = msg
+    # ★ 标注 + 证据落盘(2026-10-14): 范围矩形 + 相似度/阈值写在比对帧上,
+    #   作为本步的截图证据(经证据槽, _execute 后置块让路)。不在步骤上下文
+    #   (单元测试直调/显式 screenshot 键)时跳过落盘, 只算数。
+    try:
+        if runner._cur_step is not None and "screenshot" not in (runner._cur_step or {}):
+            vis = screen.copy()         # 标注底图用**彩色**BGR(灰度图上矩形/文字没有颜色)
+            path = runner._step_shot_path(getattr(runner, "_cur_step_desc", "") or "compare")
+            os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+            ok, out = cv2.imencode(".png", vis)
+            if ok:
+                with open(path, "wb") as f:
+                    f.write(out.tobytes())
+
+                def _draw(img):
+                    # ★ 两行大字(2026-10-14 用户: 字体大一些 + 要有范围百分比),
+                    #   半透明深色底衬 + 黑描边 —— 见 _draw_region_annotation
+                    _draw_region_annotation(img, x1, y1, x2, y2, pct_txt,
+                                            sim_line=f"sim {similarity:.1%} / thr {threshold:.0%}")
+                runner._annotate_shot(path, _draw)
+                runner._pre_click_shot = path
+    except Exception as e:
+        log.debug(f"[截图比对] 证据标注失败(不影响比对结果): {e}")
 
 
 @reg.action("assert", priority=10)
@@ -137,13 +297,15 @@ def _resolve_baseline(runner, value):
 @reg.action("compare", priority=95)
 def do_compare(runner, step):
     baseline = _resolve_baseline(runner, step["compare"])
-    compare_screen(runner, baseline, float(step.get("threshold", 0.6)), inverse=False)
+    compare_screen(runner, baseline, float(step.get("threshold", 0.6)),
+                   inverse=False, region=step.get("compare_area"))
 
 
 @reg.action("diff", priority=115)
 def do_diff(runner, step):
     """断言屏幕「有」变化: 默认 0.99 = 只要变化超过 1% 就算通过"""
-    compare_screen(runner, step["diff"], float(step.get("threshold", 0.99)), inverse=True)
+    compare_screen(runner, step["diff"], float(step.get("threshold", 0.99)),
+                   inverse=True, region=step.get("compare_area"))
 
 
 def get_switch_state(runner, area=None, switch_tpl=None, switch_label=None):

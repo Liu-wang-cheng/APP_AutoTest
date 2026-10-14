@@ -249,7 +249,8 @@ def do_wait_for(runner, step):
                 log.info(f"[wait_for] 等到文本(任一): {value}")
                 return
         n += 1
-        end += runner._poll_sleep(n) or 0    # 暂停挂起 → 超时顺延(2026-10-14 审查)
+        if end is not None:                  # timeout=0(无限等): 无 deadline 可顺延
+            end += runner._poll_sleep(n) or 0    # 暂停挂起 → 超时顺延(2026-10-14 审查)
 
 
 # 加载态提示语。涂鸦各页面用词不统一(列表页"正在加载"、地图页"请稍候"),

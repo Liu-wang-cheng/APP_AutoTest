@@ -129,7 +129,7 @@ def test_sleep_step_is_a_real_action():
     assert a and a["label"] == "延时等待", "延时等待不是注册动作(界面会显示「未知」)"
     step = schema.new_step("sleep")
     assert step.get("sleep", 0) > 0, "新建的延时步骤没有默认秒数"
-    assert schema.step_summary(step) == "10", schema.step_summary(step)
+    assert schema.step_summary(step) == "10s", schema.step_summary(step)
     assert "sleep" in EXECUTED, "延时等待没有执行器"
 
 

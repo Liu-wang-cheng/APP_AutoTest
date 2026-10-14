@@ -5,6 +5,7 @@
 import logging
 import os
 import re
+import time
 
 import yaml
 from PySide6.QtCore import QThread, Signal
@@ -58,13 +59,15 @@ class _QtLogHandler(logging.Handler):
             pass
 
 
-def _shot_dir_name(case_key, run_no):
-    """截图子目录名: 「用例键-第N次」—— bootstrap 的封顶清理(trim/prune)按这个名解析。
+def _shot_dir_name(case_key, run_no, run_tag):
+    """截图子目录名: 「用例键_r<运行标签>_第N次」—— bootstrap 的封顶清理按这个名
+    解析(用例键 = _shot_case_of, 运行标签 = _run_tag_of, 循环覆盖**按运行整组**)。
 
-    ★ 以前直接用报告表名(「用例名-N」)当目录名, 与清理代码认的「用例名-第N次」
-      对不上, 逐用例封顶静默失效(审查 2026-10-12 抓到)。顺带洗掉文件系统非法字符。
+    ★ 运行标签 = 本次「运行」开始的 14 位时间戳(2026-10-14) —— 同一次运行的全部
+      轮次/用例共用, 多轮整组保留; 以前不带标签, 每次运行写同一路径, 历史轮次被
+      原地覆盖("要循环存储"的前提是先有可区分的运行)。顺带洗掉文件系统非法字符。
     """
-    return re.sub(r'[\\/:*?"<>|]+', "_", f"{case_key}-第{run_no}次")
+    return re.sub(r'[\\/:*?"<>|]+', "_", f"{case_key}_r{run_tag}_第{run_no}次")
 
 
 class RunWorker(QThread):
@@ -207,6 +210,9 @@ class RunWorker(QThread):
         #   出现"上一轮的收尾还没跑完、新一轮已经开始"的重叠, 迟到的 end 不会把
         #   新一轮的计数清掉、误触封顶清理。
         run_token = idle.begin_run()
+        # ★ 运行标签(2026-10-14): 本次「运行」的唯一名片 —— 全部轮次/用例的截图
+        #   目录共用它, 循环覆盖按"运行"整组进行
+        self._run_tag = time.strftime("%Y%m%d_%H%M%S")
         report = None
         report_saved = False
         try:
@@ -257,9 +263,9 @@ class RunWorker(QThread):
                     #   一张表(用例名-1 / 用例名-2 …), 不再把几轮结果堆在同一张表里;
                     #   顺带也解决"同一个用例文件里有多个用例时共用一张表"。
                     sheet = case_sheet_name(case_key, rnd + 1)
-                    # ★ 截图目录与表键**解耦**(审查 2026-10-12): 目录必须是「用例名-第N次」,
-                    #   封顶清理才认得; 表名是给 openpyxl 的(它自己会洗非法字符/去重)
-                    run_dir = _shot_dir_name(case_key, rnd + 1)
+                    # ★ 截图目录与表键**解耦**(审查 2026-10-12): 目录带运行标签
+                    #   (「用例名_r<标签>_第N次」), 封顶清理按运行整组循环覆盖
+                    run_dir = _shot_dir_name(case_key, rnd + 1, self._run_tag)
                     # ★ 本次执行的标签: 结果表每行都带它, 一眼看出"现在跑的是第几轮"
                     self._exec_label = f"{case_key}(第{rnd + 1}次)"
                     # 用例所在 APP 组 = 用例文件所在目录名

@@ -437,7 +437,8 @@ class ActionRunner:
                     log.info(f"[点击] 「{value}」当前是未渲染的隐藏节点, 继续等待: "
                              f"{self._element_desc(el)}")
                     check_count += 1
-                    end_time += self._poll_sleep(check_count) or 0
+                    if end_time is not None:      # timeout=0(无限等)时 end_time 是 None
+                        end_time += self._poll_sleep(check_count) or 0
                     continue
                 try:
                     info = el.info
@@ -463,7 +464,8 @@ class ActionRunner:
                     log.info(f"[点击] OCR 兜底命中「{value}」 @ ({pos[0]},{pos[1]})")
                     return
             check_count += 1
-            end_time += self._poll_sleep(check_count) or 0
+            if end_time is not None:              # timeout=0(无限等): 无 deadline 可顺延
+                end_time += self._poll_sleep(check_count) or 0
 
     def _ocr_find_xy(self, value):
         """OCR 全文扫描, 找含 value 的那行, 返回 (value, (x, y)) / (None, None)。"""
@@ -829,7 +831,8 @@ class ActionRunner:
                          + (f" @ {pos}" if pos else ""))
                 return
             check_count += 1
-            end_time += self._poll_sleep(check_count) or 0
+            if end_time is not None:              # timeout=0(无限等): 无 deadline 可顺延
+                end_time += self._poll_sleep(check_count) or 0
 
     # ── 主循环 ──
     def run_steps(self, steps: list) -> bool:

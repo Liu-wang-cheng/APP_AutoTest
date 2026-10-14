@@ -3986,11 +3986,16 @@ def test_shot_dir_name_matches_cleaner_and_is_sanitized():
     「用例名-第N次」解析永远匹配不上, 逐用例封顶静默失效。
     """
     from gui.runner_thread import _shot_dir_name
-    assert _shot_dir_name("冒烟", 1) == "冒烟-第1次"
-    assert _shot_dir_name("冒烟(a)", 2) == "冒烟(a)-第2次"
-    assert _shot_dir_name('清扫: 上午?', 3) == "清扫_ 上午_-第3次"
-    # bootstrap 侧的双后缀解析也顺手钉在这(同一个契约的两端)
-    from core.bootstrap import _shot_case_of
+    # 新式命名带运行标签(2026-10-14): 循环覆盖按"运行"整组进行
+    assert _shot_dir_name("冒烟", 1, "20260101_090000") == "冒烟_r20260101_090000_第1次"
+    assert _shot_dir_name("冒烟(a)", 2, "20260101_090001") == "冒烟(a)_r20260101_090001_第2次"
+    assert _shot_dir_name('清扫: 上午?', 3, "20260101_090002") ==         "清扫_ 上午__r20260101_090002_第3次"
+    # bootstrap 侧的解析也顺手钉在这(同一个契约的两端)
+    from core.bootstrap import _shot_case_of, _run_tag_of, _round_of
+    name = "冒烟_r20260101_090000_第12次"
+    assert _shot_case_of(name) == "冒烟" and _run_tag_of(name) == "20260101_090000"
+    assert _round_of(name) == 12
+    # 旧式目录仍认(升级前的存量)
     assert _shot_case_of("冒烟-第12次") == "冒烟"
     assert _shot_case_of("冒烟-3") == "冒烟"          # 2.0.7 短暂生成过的形态
     assert _shot_case_of("甲-1-第2次") == "甲-1"      # 用例名本身带连字符
