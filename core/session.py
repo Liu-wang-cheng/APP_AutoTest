@@ -459,7 +459,7 @@ DEFAULT_IDLE_STREAK = 3
 _status_words = {"fault": DEFAULT_FAULT_WORDS, "idle": DEFAULT_IDLE_WORDS}
 #: 连续命中计数: {(xml 指纹, 类别): 次数} —— 每轮 +=1(命中) / *= 0(未命中);
 #: xml 切换(同节点集合变了)就当另一页, 重置对应类别的计数。
-#: 这里用 _lock 保护(轮询/线程内并发不会撞)
+#: 并发访问靠 GIL 的 dict 原子操作成立(session 无锁; 值只会整数增减, 读到旧值无害)
 _streak_counters = {}
 
 

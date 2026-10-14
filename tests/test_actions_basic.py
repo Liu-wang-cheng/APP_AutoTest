@@ -198,6 +198,23 @@ def test_assert_timeout_extends_by_pause(runner, monkeypatch):
     assert t.is_alive(),         f"1s 超时 + 每轮挂起 2s 顺延, 2.5s 内不该抛: {errors}"
 
 
+def test_wait_for_timeout_extends_by_pause(runner, monkeypatch):
+    """★ wait_for 轮询同样顺延(2026-10-14 审查 P1): _poll_sleep 每轮返回"挂起 2s"
+    → 15s 的 wait_for 在 3s 墙钟内不该超时(旧实现必超时)"""
+    monkeypatch.setattr(runner, "_poll_sleep", lambda n: 2.0)
+    errors = []
+
+    def _run():
+        try:
+            runner._execute({"wait_for": "永远不会出现", "timeout": 3})
+        except AssertionError as e:
+            errors.append(e)
+    t = threading.Thread(target=_run, daemon=True)
+    t.start()
+    t.join(3.0)
+    assert t.is_alive(),         f"3s 超时 + 每轮挂起 2s 顺延, 3s 墙钟内不该抛: {errors}"
+
+
 def test_stop_wins_over_pause(runner):
     """挂起中点停止 → 立即 UserStopped(停止优先于暂停)"""
     from core.runner import UserStopped

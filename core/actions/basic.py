@@ -249,7 +249,7 @@ def do_wait_for(runner, step):
                 log.info(f"[wait_for] 等到文本(任一): {value}")
                 return
         n += 1
-        runner._poll_sleep(n)
+        end += runner._poll_sleep(n) or 0    # 暂停挂起 → 超时顺延(2026-10-14 审查)
 
 
 # 加载态提示语。涂鸦各页面用词不统一(列表页"正在加载"、地图页"请稍候"),
@@ -272,7 +272,7 @@ def do_wait_loading(runner, step):
         #   只读无障碍树会把"还在加载"误判成"已加载完"; 轮次传下去, OCR 仍按 5 轮一次
         if not runner._text_present(*_LOADING_TEXTS, round_no=n):
             return
-        runner._sleep(1)
+        end += runner._sleep(1) or 0    # 暂停挂起 → 超时顺延(2026-10-14 审查)
     log.warning(f"[wait_loading] {timeout}s 后加载提示仍在,继续执行")
 
 

@@ -242,7 +242,7 @@ def _wait_map_ready(runner, timeout=300):
     while time.time() < end:
         if not runner.d(textContains="地图正在加载").exists(timeout=1):
             return True
-        runner._sleep(3)
+        end += runner._sleep(3) or 0    # 暂停挂起 → 超时顺延(2026-10-14 审查)
     log.warning("[map] 120s 内地图仍在加载中")
     return False
 
@@ -543,7 +543,7 @@ def _wait_loading(runner, timeout=15):
     while time.time() < end:
         if not any(runner.d(textContains=t).exists(timeout=0.5) for t in _LOADING_TEXTS):
             return
-        runner._sleep(1)
+        end += runner._sleep(1) or 0    # 暂停挂起 → 超时顺延(2026-10-14 审查)
 
 
 @reg.action("merge_zones", priority=80, fixed_bool=True)

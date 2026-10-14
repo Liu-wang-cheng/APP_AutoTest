@@ -798,8 +798,6 @@ def extract_update(zip_path, dest_dir):
 
 #: 传给替换脚本的「目标程序名」标记文件(见 write_target_marker / generate_update_bat)
 TARGET_MARKER = "_update_target.txt"
-#: 传给替换脚本的「目标程序名」标记文件(见 write_target_marker / generate_update_bat)
-TARGET_MARKER = "_update_target.txt"
 #: 目标名里**绝不能有**的字符: 这个名字会被 cmd 再解析一次(% 会二次展开, 引号/
 #: 重定向/管道符能改变命令结构) —— 遇到这类名字就不写标记文件, 让 bat 走默认名兜底,
 #: 绝不冒险把名字拼进命令行。
