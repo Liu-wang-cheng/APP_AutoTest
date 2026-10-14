@@ -116,6 +116,9 @@ class _SeqDev(FakeDevice):
     def click(self, x, y):
         self.ops.append(("click", x, y))
 
+    def swipe(self, sx, sy, ex, ey, duration=None):
+        self.ops.append(("swipe", sx, sy, ex, ey))
+
     def screenshot(self, path=None, format=None):
         self.ops.append(("shot", path))
         from pathlib import Path as _P
@@ -202,6 +205,42 @@ def test_stop_wins_over_pause(runner):
     threading.Timer(0.3, runner.stop).start()
     with pytest.raises(UserStopped):
         runner._wait_if_paused()
+
+
+# ── 滑动: 默认截图 + 路径标注 + 起止拆分(用户 2026-10-14) ──
+
+def test_swipe_screenshots_before_swiping_with_path(runner):
+    """★ 滑动与点击同权: **滑动前**截图(证据 = 本步 screenshot), 顺序 shot→swipe"""
+    runner.d = _SeqDev()
+    res = runner._execute({"desc": "滑一下", "swipe": [100, 500, 100, 1500]})
+    kinds = [o[0] for o in runner.d.ops]
+    assert kinds[0] == "shot" and kinds[1] == "swipe", runner.d.ops
+    assert res == runner.d.ops[0][1], "滑动前那张就是本步证据截图"
+
+
+def test_swipe_start_end_split_fields(runner):
+    """★ 界面拆两框: swipe=开始点位 + swipe_end=结束点位 → 拼成一次滑动"""
+    runner.d = _SeqDev()
+    runner._execute({"desc": "滑", "swipe": "100,500", "swipe_end": "100,1500"})
+    swipes = [o for o in runner.d.ops if o[0] == "swipe"]
+    assert swipes == [("swipe", 100, 500, 100, 1500)], runner.d.ops
+    assert runner.d.ops[0][0] == "shot", "拆分写法同样要先截图标注"
+
+
+def test_swipe_direction_marks_path(runner, monkeypatch):
+    """方向名滑动(left 等)也走标注: 证据槽被填, 坐标按窗口尺寸展开"""
+    runner.d = _SeqDev()
+    runner._execute({"desc": "左滑", "swipe": "left"})
+    assert any(o[0] == "shot" for o in runner.d.ops), "方向滑动也要默认截图"
+    assert runner._pre_click_shot, "证据槽应记录路径标注图"
+
+
+def test_swipe_legacy_full_string_still_works(runner):
+    """旧用例整串写法 [sx,sy,ex,ey] 不动: 无 swipe_end 时按原解析"""
+    runner.d = _SeqDev()
+    runner._execute({"desc": "老写法", "swipe": "[100,500,100,1500]"})
+    swipes = [o for o in runner.d.ops if o[0] == "swipe"]
+    assert swipes == [("swipe", 100, 500, 100, 1500)], runner.d.ops
 
 
 def test_click_coordinates(runner):

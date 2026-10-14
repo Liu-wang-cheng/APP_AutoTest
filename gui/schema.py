@@ -38,8 +38,10 @@ ACTIONS = [
     ]},
     {"key": "back", "label": "按返回键", "category": "操作", "fields": [], "fixed_bool": True},
     {"key": "swipe", "label": "滑动", "category": "操作", "fields": [
-        {"key": "swipe", "label": "方向/坐标", "type": "text", "required": True,
-         "hint": "left/right/up/down/fast-left/fast-right 或 [sx,sy,ex,ey]"},
+        {"key": "swipe", "label": "开始点位", "type": "text", "required": True,
+         "hint": "起点坐标, 如 100,500"},
+        {"key": "swipe_end", "label": "结束点位", "type": "text", "required": True,
+         "hint": "终点坐标, 如 100,1500 —— 滑动路径会标注在证据截图上"},
     ]},
     {"key": "if_click", "label": "条件点击", "category": "操作", "fields": [
         {"key": "if_click", "label": "候选目标", "type": "text", "required": True,

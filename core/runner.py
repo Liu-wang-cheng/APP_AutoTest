@@ -639,6 +639,57 @@ class ActionRunner:
         except Exception:
             pass                      # 标记只是附加证据,绝不能影响执行
 
+    def _annotate_shot(self, path, draw):
+        """在已落盘的截图上作标注(中文路径安全读写); 失败不影响证据本身"""
+        try:
+            import cv2
+            import numpy as np
+            buf = np.fromfile(path, dtype=np.uint8)   # 中文路径须用 imdecode
+            img = cv2.imdecode(buf, cv2.IMREAD_COLOR)
+            if img is None:
+                return
+            draw(img)
+            ok, out = cv2.imencode(".png", img)
+            if ok:
+                with open(path, "wb") as f:
+                    f.write(out.tobytes())
+        except Exception:
+            pass
+
+    def _draw_swipe_marker(self, img, sx, sy, ex, ey):
+        """滑动路径: 起点**实心圆**(出发) + 青色**箭头线**指向终点(区分点击的红圈)"""
+        import cv2
+        sx, sy, ex, ey = int(sx), int(sy), int(ex), int(ey)
+        color = (255, 170, 0)         # BGR 青蓝色 —— 与点击的红圈一眼区分
+        cv2.arrowedLine(img, (sx, sy), (ex, ey), color, 4, tipLength=0.12)
+        cv2.circle(img, (sx, sy), 16, color, -1)      # 起点: 实心(从这里出发)
+        cv2.circle(img, (ex, ey), 22, color, 3)       # 终点: 空圈(滑到这里)
+
+    def mark_swipe(self, sx, sy, ex, ey, label=""):
+        """滑动**前**截图并标注路径(用户 2026-10-14: 滑动也算点击操作 —— 默认
+        截图, 且要显示滑动路径: 起点圈 + 箭头指向终点)。
+
+        机制与 mark_click 同一套证据槽: 每步最多一张, _execute 后置块见到就让路;
+        显式 `screenshot:` 键不在此拍(老语义)。
+        """
+        if getattr(self, "_pre_click_shot", None):
+            return
+        if not (self.click_shots or self.always_screenshot):
+            return
+        if "screenshot" in (self._cur_step or {}):
+            return
+        try:
+            path = self._step_shot_path(self._cur_step_desc)
+            os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+            self.d.screenshot(path)     # 滑动前: 界面还是"要滑"的样子, 立即截
+            self._annotate_shot(
+                path, lambda img: self._draw_swipe_marker(img, sx, sy, ex, ey))
+            self._pre_click_shot = path
+            log.info(f"[滑动标注] {path} ({sx},{sy})→({ex},{ey})")
+        except Exception as e:
+            log.warning(f"[截图] 滑动前截图失败(滑动照常, 由后置截图兜底): "
+                        f"{type(e).__name__}: {e}")
+
     def _step_shot_path(self, step_desc=""):
         """步骤截图的标准路径: Test_cases/<组>/screenshots/<shot_subdir>/stepNN_<desc>.png"""
         from core import vision as _vision

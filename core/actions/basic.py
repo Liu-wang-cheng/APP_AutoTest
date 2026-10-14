@@ -39,6 +39,10 @@ def parse_xy(value, n):
         except (TypeError, ValueError):
             return None
     text = str(value or "").strip()
+    # ★ 方括号串 "[sx,sy,ex,ey]" 也认(schema 提示一直这么写, 但正则漏了 [ ] ——
+    #   字符串带方括号从来解析不了, 只有 YAML 列表形式可以; 2026-10-14 顺手补上)
+    if text.startswith("[") and text.endswith("]"):
+        text = text[1:-1].strip()
     # 只由数字/分隔符组成才算坐标 —— 含字母或中文的一律不是(left/fast-up/按钮名/图片名)
     if not text or not re.fullmatch(r"[\d\s,，.]+", text):
         return None
@@ -144,10 +148,26 @@ def do_swipe(runner, step):
     方向滑动从「中心向两侧展开」: 起点在 cx+dist、终点在 cx-dist,总行程
     是 2*dist(普通 1.0 屏宽、fast 0.6 屏宽)。只从中心往单侧滑行程太短,
     列表翻页和地图拖动经常带不动。
+
+    ★ 起止分开填(用户 2026-10-14): 界面分「开始点位/结束点位」两框 ——
+      swipe: "100,500" + swipe_end: "100,1500"; 两种写法都兼容:
+      整串 [sx,sy,ex,ey] 与方向名照旧(旧用例不动)。
+    ★ 滑动前截图并标注路径(起点圈+箭头, 2026-10-14): 与点击证据同等待遇。
     """
     value = step["swipe"]
-    xy = parse_xy(value, 4)
+    end_value = str(step.get("swipe_end") or "").strip()
+    xy = None
+    if end_value:
+        sxy = parse_xy(value, 2)
+        exy = parse_xy(end_value, 2)
+        if not sxy or not exy:
+            raise ValueError(
+                f"开始/结束点位要各 2 个数字(x,y): 开始={value!r} 结束={end_value!r}")
+        xy = (sxy[0], sxy[1], exy[0], exy[1])
+    else:
+        xy = parse_xy(value, 4)
     if xy:
+        runner.mark_swipe(xy[0], xy[1], xy[2], xy[3], step.get("desc") or "滑动")
         log.info(f"[滑动] 坐标 ({xy[0]},{xy[1]})→({xy[2]},{xy[3]})")
         runner.d.swipe(*xy)
     elif looks_like_numbers(value):
@@ -167,6 +187,7 @@ def do_swipe(runner, step):
         }.get(name)
         if quad is None:
             raise ValueError(f"swipe 方向不认识: {value}(支持 left/right/up/down/fast-*)")
+        runner.mark_swipe(*quad, step.get("desc") or f"滑动 {name}")
         log.info(f"[滑动] {name} ({quad[0]},{quad[1]})→({quad[2]},{quad[3]})")
         runner.d.swipe(*quad)
     runner._sleep(step.get("wait_after", 1))
