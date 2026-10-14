@@ -64,8 +64,15 @@ def begin_run():
         return _token_seq
 
 
+#: 运行结束后的**空闲宽限**(秒, 用户 2026-10-14: "清理流程放到工具空闲时再运行"):
+#: 结束后先等这么久, 期间没有新运行才真正补做 —— 用户跑完马上又点「执行」的话,
+#: 清理会再次让路(待办保留, 下次 end_run 再排)。改小可加速测试。
+FLUSH_IDLE_DELAY = 120.0
+_flush_timer = None
+
+
 def end_run(token=None):
-    """标记"本轮执行结束"——把运行中推迟的清理补做一遍(后台线程, 不拖住调用方)
+    """标记"本轮执行结束"——**等工具空闲**(宽限期无新运行)后把推迟的清理补做一遍。
 
     token: begin_run 返回的令牌。带上它, "上一轮迟到的收尾"就不会动新一轮的
     计数(审查 2026-10-12); 不带(旧调用/测试)退回减一语义。
@@ -78,7 +85,29 @@ def end_run(token=None):
         elif _active:
             _active.pop()
     if not _active:
+        _schedule_idle_flush()
+
+
+def _schedule_idle_flush():
+    """空闲宽限后补做(用户 2026-10-14): 结束立即刷会撞上"用户马上又点执行" ——
+    宽限期内新运行开始, 定时器到点时 is_busy → 直接跳过(待办保留, 下次 end_run
+    再排); 真空闲才 flush。多个定时器并发无害(_flush_now 自身串行 + 查闸门)。
+    """
+    global _flush_timer
+    t = threading.Timer(FLUSH_IDLE_DELAY, _idle_flush_fire)
+    t.daemon = True
+    t.name = "idle-cleanup-wait"
+    with _lock:
+        _flush_timer = t
+    t.start()
+
+
+def _idle_flush_fire():
+    with _lock:
+        _flush_timer = None
+    if not _active:
         _flush_in_thread()
+    # 忙(宽限期内又开始运行) → 待办原样保留, 下一次 end_run 再排
 
 
 def is_busy():
@@ -118,7 +147,7 @@ def defer(name, fn):
         #   结束、补做线程已扫过空队列返回 —— 再不自己触发一次, 这件清理就滞留到
         #   下一次 end_run / 下次启动(本次会话内静默失效)
         orphaned = not _active and not _flushing
-    log.info(f"[清理] 正在执行用例, {name} 推迟到本轮结束后再做")
+    log.info(f"[清理] 正在执行用例, {name} 推迟到工具空闲时再做")
     if orphaned:
         _flush_in_thread()
     return True

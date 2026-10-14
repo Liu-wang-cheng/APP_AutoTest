@@ -362,7 +362,10 @@ class RunWorker(QThread):
                         all_passed = False
                         if not self._stop_requested:
                             # 用例级失败截图
-                            fail_dir = os.path.join(BASE_DIR, "reports", "failures")
+                            # ★ 与逐步失败图/时序证据同目录(2026-10-14 合并):
+                            #   失败证据只看一处; 按用例名复用, 不新增文件
+                            fail_dir = os.path.join(BASE_DIR, "Test_img", "debug",
+                                                    "failures")
                             os.makedirs(fail_dir, exist_ok=True)
                             try:
                                 d.screenshot(os.path.join(fail_dir, f"{case_name}.png"))

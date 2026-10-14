@@ -251,6 +251,16 @@ def _reset_idle_gate():
 
 
 @pytest.fixture(autouse=True)
+def _fast_idle_flush():
+    """★ 空闲宽限改 0.05s(用户 2026-10-14 加了 120s 宽限): 测试不等两分钟 ——
+    既有用例的 end_run→flush 行为在 0.05s 下与原语义一致(立即≈很快)。"""
+    from core import idle
+    idle.FLUSH_IDLE_DELAY = 0.05
+    yield
+    idle.FLUSH_IDLE_DELAY = 0.05
+
+
+@pytest.fixture(autouse=True)
 def _reset_status_words():
     """★ 状态词/streak 在每个测试前后还原默认(用户 2026-10-13):
     set_status_words() 改的是模块级全局, 不清掉会泄漏给下一个测试 ——

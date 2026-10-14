@@ -394,7 +394,9 @@ def prune_run_artifacts(app_dir=None, keep_runs=None, max_total_mb=None,
       策略(只删**可以重跑出来的**东西, 绝不碰用例/模板/配置/备份):
         · Test_cases/<组>/screenshots/<每次执行一个目录> → 每个用例保留最近 N 次;
           所有用例合计超过上限时, 按目录时间最旧优先整目录删。
-        · reports/ 下: 报告文件保留最近 N 份; reports/failures/ 的失败截图保留最近 M 张。
+        · reports/ 下: 报告文件保留最近 N 份;
+        · Test_img/debug/failures/: 失败截图/时序证据保留最近 M 组(2026-10-14 起
+          用例级失败截图也并到这里, 不再放 reports/failures/)。
     """
     # ★ 阈值在**调用时**读取(不是写进默认参数): 默认参数在导入时就绑定了, 改不动,
     #   测试/调优都没法覆盖。
@@ -461,16 +463,19 @@ def prune_run_artifacts(app_dir=None, keep_runs=None, max_total_mb=None,
                 if _remove(old):
                     files_removed += 1
                     freed += _file_size(old)
-            # ── ④ 失败截图: 保留最近 M 张 ──
-            fdir = os.path.join(rep_dir, "failures")
-            if os.path.isdir(fdir):
-                shots = [os.path.join(fdir, f) for f in os.listdir(fdir)
-                         if os.path.isfile(os.path.join(fdir, f))]
-                shots.sort(key=lambda x: os.path.getmtime(x), reverse=True)
-                for old in shots[fail_keep:]:
-                    if _remove(old):
-                        files_removed += 1
-                        freed += _file_size(old)
+        # ── ④ 失败截图: 保留最近 M 张 ──
+        fdir = os.path.join(root, "Test_img", "debug", "failures")
+        # ★ 2026-10-14 并入 debug 树; 本函数作用域没有 debug_dir(那是
+        #   prune_debug_artifacts 的局部变量), 直接用 root 拼 —— NameError
+        #   会被外层 try 吞掉导致整段清理静默失效(实测抓到)
+        if os.path.isdir(fdir):
+            shots = [os.path.join(fdir, f) for f in os.listdir(fdir)
+                     if os.path.isfile(os.path.join(fdir, f))]
+            shots.sort(key=lambda x: os.path.getmtime(x), reverse=True)
+            for old in shots[fail_keep:]:
+                if _remove(old):
+                    files_removed += 1
+                    freed += _file_size(old)
         if files_removed or dirs_removed:
             log.info(f"[清理] 运行产物封顶: 删 {dirs_removed} 个旧截图目录 / {files_removed} 个文件, "
                      f"释放 {freed / 1048576:.0f}MB")

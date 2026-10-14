@@ -959,14 +959,17 @@ def test_prune_run_artifacts_caps_total_and_reports(tmp_path, monkeypatch):
     for i in range(3):
         _mk_run(shots, f"甲用例-第{i + 1}次", n_files=1, size=1024, mtime=2000 + i)
     reps = tmp_path / "reports"
-    (reps / "failures").mkdir(parents=True)
+    reps.mkdir(parents=True)
     for i in range(5):
         f = reps / f"report_{i}.xlsx"
         f.write_bytes(b"r")
         import os as _os
         _os.utime(f, (3000 + i, 3000 + i))
+    # 用例级失败截图已并入 debug/failures(2026-10-14, 与逐步失败图/时序证据同目录)
+    fdir = tmp_path / "Test_img" / "debug" / "failures"
+    fdir.mkdir(parents=True)
     for i in range(4):
-        f = reps / "failures" / f"c{i}.png"
+        f = fdir / f"c{i}.png"
         f.write_bytes(b"p")
         import os as _os
         _os.utime(f, (4000 + i, 4000 + i))
@@ -976,7 +979,7 @@ def test_prune_run_artifacts_caps_total_and_reports(tmp_path, monkeypatch):
     left = sorted(p.name for p in shots.iterdir())
     assert left == ["甲用例-第2次", "甲用例-第3次"], left      # 2KB 上限 → 只剩最新两个
     assert sorted(p.name for p in reps.glob("*.xlsx")) == ["report_3.xlsx", "report_4.xlsx"]
-    assert sorted(p.name for p in (reps / "failures").iterdir()) == ["c3.png"]
+    assert sorted(p.name for p in fdir.iterdir()) == ["c3.png"]
 
 
 def test_failure_shots_and_trace_dirs_capped_at_twenty(tmp_path, monkeypatch):
@@ -991,15 +994,15 @@ def test_failure_shots_and_trace_dirs_capped_at_twenty(tmp_path, monkeypatch):
     monkeypatch.setattr(bootstrap, "TRACE_KEEP", 2)
     monkeypatch.setattr(bootstrap, "REPORT_FAIL_SHOTS_KEEP", 2)
 
-    # ① reports/failures 下的失败截图
-    fdir = tmp_path / "reports" / "failures"
+    # ①② 失败截图与时序证据**同目录**(2026-10-14 合并):
+    #     文件 = 用例级失败截图(按张数封顶), 目录 = 时序证据(按组数封顶) —— 互不干扰
+    fdir = tmp_path / "Test_img" / "debug" / "failures"
     fdir.mkdir(parents=True)
     for i in range(5):
         f = fdir / f"用例{i}.png"
         f.write_bytes(b"s")
         _os.utime(f, (1000 + i, 1000 + i))
-    # ② 时序证据目录(Test_img/debug/failures)
-    tdir = tmp_path / "Test_img" / "debug" / "failures"
+    tdir = fdir
     for i in range(5):
         d = tdir / f"用例{i}_trace"
         d.mkdir(parents=True)
@@ -1008,10 +1011,9 @@ def test_failure_shots_and_trace_dirs_capped_at_twenty(tmp_path, monkeypatch):
 
     bootstrap.prune_run_artifacts()          # 内部会连带跑 prune_debug_artifacts
 
-    assert sorted(p.name for p in fdir.iterdir()) == ["用例3.png", "用例4.png"], \
+    assert sorted(p.name for p in fdir.iterdir()) == \
+        ["用例3.png", "用例3_trace", "用例4.png", "用例4_trace"], \
         sorted(p.name for p in fdir.iterdir())
-    assert sorted(p.name for p in tdir.iterdir()) == ["用例3_trace", "用例4_trace"], \
-        sorted(p.name for p in tdir.iterdir())
 
 
 def test_caps_are_fifty_and_recycle_at_write_time(tmp_path, monkeypatch):

@@ -23,7 +23,7 @@ from core.logger import get_logger
 
 log = get_logger()
 
-BACKUP_KEEP = 10          # 最多保留多少份(超出则删最旧的)
+BACKUP_KEEP = 2           # 最多保留 2 份(用户 2026-10-14: "只备份2个旧版本的循环")
 BACKUP_DIRNAME = "backups"
 
 #: (相对 DATA_DIR 的路径, 是否目录) —— 备份范围, 见模块注释

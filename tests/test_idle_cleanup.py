@@ -251,6 +251,31 @@ def test_trim_case_screenshots_deferred_while_running(tmp_path):
         sorted(p.name for p in shots.iterdir())
 
 
+def test_flush_waits_for_tool_idle(monkeypatch):
+    """★ 空闲宽限(用户 2026-10-14: "清理放到工具空闲时再运行"):
+    end_run 后先等宽限期; 宽限期内**又开始运行** → 到点时忙 → 跳过,
+    待办保留到这轮 end_run 再排; 空闲后(这轮也结束)才真正补做。
+
+    ★ 无竞态写法: begin_run 紧跟 end_run(不留真空闲缝隙 —— 缝隙里工具确实
+      空闲, 定时器触发清理是**正确行为**, 不能当 bug 测)。"""
+    from core import idle
+    monkeypatch.setattr(idle, "FLUSH_IDLE_DELAY", 0.15)
+    ran = []
+    idle.begin_run()
+    idle.defer("甲", lambda: ran.append(1))
+    idle.end_run()                     # 宽限 0.15s 计时开始
+    idle.begin_run()                   # 宽限期内立刻又开始运行(无缝隙)
+    time.sleep(0.3)                    # 定时器到点 → 忙 → 跳过
+    assert ran == [], "宽限期内又开始运行, 不该清理"
+    assert idle.pending_names() == ["甲"]
+    idle.end_run()                     # 这一轮结束 → 再排 → 到点补做
+    for _ in range(50):
+        if ran:
+            break
+        time.sleep(0.02)
+    assert ran == [1], "空闲后应补做"
+
+
 def test_trim_case_screenshots_legacy_names_still_matched(tmp_path):
     """旧式目录名(2.0.8~2.0.13 的 甲用例-第N次 / 2.0.7 的 甲用例-N)仍按用例键认领,
     循环覆盖逐个淘汰 —— 升级后老目录不能变成没人收的孤儿"""
