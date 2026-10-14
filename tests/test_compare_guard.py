@@ -75,6 +75,15 @@ def test_所有用例的阈值都合法():
 
 # ── 对比范围(百分比) + 证据标注(用户 2026-10-14) ──
 
+def _imread_any(path):
+    """读图(中文路径安全): 项目惯例 imdecode, cv2.imread 在 Windows 中文路径返回 None
+    (CI 真机踩到: runneradmin 的 tmp 路径含「对比」二字 → imread None → 假失败)"""
+    import cv2
+    import numpy as np
+    buf = np.fromfile(path, dtype=np.uint8)
+    return cv2.imdecode(buf, cv2.IMREAD_COLOR)
+
+
 class _FrameDev:
     """返回指定帧的设备桩: 帧 = 上半灰(120) 下半白(250), 便于按区域算相似度"""
     serial = "fake"
@@ -191,7 +200,7 @@ def test_compare_area_pixel_form(tmp_path):
     base_path = _write_baseline(tmp_path, frame)
     compare_screen(runner, base_path, threshold=0.99, region="10,20 90,180")   # 像素
     assert runner._pre_click_shot
-    img = cv2.imread(runner._pre_click_shot)
+    img = _imread_any(runner._pre_click_shot)
     assert tuple(img[20, 50]) == (0, 200, 255), tuple(img[20, 50])   # 边框在 y=20(像素)
 
 
@@ -217,8 +226,8 @@ def test_compare_area_annotates_evidence(tmp_path):
     base_path = _write_baseline(tmp_path, frame)
     compare_screen(runner, base_path, threshold=0.99, region="10%,10% 90%,90%")
     shot = runner._pre_click_shot
-    assert shot and cv2.imread(shot) is not None
-    img = cv2.imread(shot)
+    assert shot and _imread_any(shot) is not None
+    img = _imread_any(shot)
     # 范围矩形边框画在 10%~90% 位置: 100x200 帧 → x=10..90, y=20..180, 边框色 (0,200,255) BGR
     assert tuple(img[20, 50]) == (0, 200, 255), tuple(img[20, 50])
     assert tuple(img[180, 50]) == (0, 200, 255), tuple(img[180, 50])
