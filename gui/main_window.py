@@ -2456,6 +2456,15 @@ class MainWindow(QMainWindow):
         self.run_btn.setObjectName("runBtn")
         self.run_btn.clicked.connect(self.on_run)
         lay.addWidget(self.run_btn)
+        self.pause_btn = QPushButton("⏸ 暂停")
+        self.pause_btn.setObjectName("pauseBtn")
+        self.pause_btn.setEnabled(False)
+        self.pause_btn.clicked.connect(self.on_pause)
+        self.pause_btn.setToolTip(
+            "暂停执行: 当前步骤跑完后挂起(设备保持现状)\n"
+            "再点一次(变成「▶ 继续」)接着跑; 暂停中超时不计时\n"
+            "挂起中随时可以点「停止」")
+        lay.addWidget(self.pause_btn)
         self.stop_btn = QPushButton("■ 停止")
         self.stop_btn.setObjectName("stopBtn")
         self.stop_btn.setEnabled(False)
@@ -4156,9 +4165,25 @@ class MainWindow(QMainWindow):
         self._set_locked(True)  # 执行期间锁定编排区
         self.run_btn.setEnabled(False)
         self.stop_btn.setEnabled(True)
+        self.pause_btn.setEnabled(True)
+        self.pause_btn.setText("⏸ 暂停")
         self.tabs.setCurrentIndex(0)
         self.log_view.appendPlainText(
             f"[运行] {len(case_files)} 个文件 × {repeat} 轮 设备={device_id}")
+
+    def on_pause(self):
+        """暂停/继续切换(用户 2026-10-13): 同一个按钮, 按当前状态翻转。
+        暂停语义见 gui.runner_thread.RunWorker.request_pause —— 步骤间挂起,
+        超时顺延, 设备保持现状; 挂起中「停止」随时可用。"""
+        w = self.worker
+        if not w:
+            return
+        if w._pause_requested:
+            w.request_resume()
+            self.pause_btn.setText("⏸ 暂停")
+        else:
+            w.request_pause()
+            self.pause_btn.setText("▶ 继续")
 
     def on_stop(self):
         w = self.worker
@@ -4327,6 +4352,8 @@ class MainWindow(QMainWindow):
         finally:
             self.run_btn.setEnabled(True)
             self.stop_btn.setEnabled(False)
+            self.pause_btn.setEnabled(False)
+            self.pause_btn.setText("⏸ 暂停")
             self._set_locked(False)
             # ★ parent 所有权下(见 on_run)这里丢的只是 Python 包装, 线程还活着也安全;
             #   C++ 对象由 finished→deleteLater 在 run() 返回后销毁

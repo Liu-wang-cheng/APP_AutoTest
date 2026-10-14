@@ -97,12 +97,33 @@ class RunWorker(QThread):
         self._exec_label = ""
         self.runner = None
         self._stop_requested = False
+        self._pause_requested = False   # 暂停请求(2026-10-13): 前置阶段按下, 进用例补生效
 
     def request_stop(self):
         """界面停止按钮调用: 置位停止标志,前置等待与当前步骤尽快退出"""
         self._stop_requested = True
         if self.runner:
             self.runner.stop()
+
+    # ── 暂停/继续(用户 2026-10-13) ──
+    def request_pause(self):
+        """界面暂停按钮: 置位暂停标志并转发当前 runner(步骤间/等待分片挂起)。
+        前置阶段按下的暂停记在 _pause_requested, 进用例时补生效(见 _apply_pause)。"""
+        self._pause_requested = True
+        if self.runner:
+            self.runner.pause()
+        self.status.emit("⏸ 已请求暂停 —— 当前步骤跑完后挂起(设备保持现状), 点「继续」接着跑")
+
+    def request_resume(self):
+        self._pause_requested = False
+        if self.runner:
+            self.runner.resume()
+        self.status.emit("▶ 已继续执行")
+
+    def _apply_pause(self):
+        """每个用例开始前: 把前置阶段按下的暂停请求补到新 runner 上"""
+        if self._pause_requested and self.runner:
+            self.runner.pause()
 
     def _emit_step(self, payload):
         """发一条结果到执行结果表 —— 统一盖上"用例名(第几次)", 用 户才看得出这是第几轮"""
@@ -317,6 +338,7 @@ class RunWorker(QThread):
                     runner.on_step_start = on_step_start
                     runner.on_result = on_result
                     self.runner = runner
+                    self._apply_pause()      # 前置阶段按下的暂停 → 本用例步骤间生效
                     passed = runner.run_steps(steps)
                     self.runner = None
 

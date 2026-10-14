@@ -3,6 +3,9 @@
 import sys
 from pathlib import Path
 
+import threading
+import time
+
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -135,6 +138,70 @@ def test_click_explicit_screenshot_stays_after_click(runner):
     runner.d = _SeqDev()
     runner._execute({"desc": "点完留证", "click": [10, 20], "screenshot": True})
     assert [o[0] for o in runner.d.ops] == ["click", "shot"], runner.d.ops
+
+
+# ── 暂停/继续(用户 2026-10-13) ──
+# ★ 测试设计原则: 不与墙钟竞速(OCR 懒加载等会让时序漂移), 分段验证机制本身。
+_REAL_SLEEP = ActionRunner._sleep   # _fast_sleep(autouse) 换掉前的真实现(暂停测试要用)
+
+
+def test_pause_suspends_between_steps_and_resume_completes(runner):
+    """步骤 1 跑完 → 挂起(run_steps 步骤间) → 恢复后步骤 2 才开始"""
+    fired = []
+    orig = runner._execute
+
+    def _rec(step):
+        out = orig(step)
+        fired.append(time.time())
+        if len(fired) == 1:
+            runner.pause()
+            threading.Timer(0.5, runner.resume).start()
+        return out
+    runner._execute = _rec
+    ok = runner.run_steps([{"desc": "等一下", "wait": 0.05},
+                           {"desc": "再等一下", "wait": 0.05}])
+    assert ok is True and len(fired) == 2, fired
+    assert fired[1] - fired[0] >= 0.4,         f"步骤 2 应在恢复后才开始(挂起 0.5s), 实际间隔 {fired[1]-fired[0]:.2f}s"
+
+
+def test_sleep_pauses_and_returns_paused_seconds(runner, monkeypatch):
+    """_sleep 挂起: 挂起时长不计入等待, 返回挂起秒数(调用方据此顺延 timeout)。
+    ★ 本文件 _fast_sleep(autouse)把 _sleep 换成了 no-op —— 这里恢复真实现再测。"""
+    monkeypatch.setattr(ActionRunner, "_sleep", _REAL_SLEEP)
+    runner.pause()
+    threading.Timer(0.6, runner.resume).start()
+    t0 = time.time()
+    paused = runner._sleep(0.2)
+    wall = time.time() - t0
+    assert paused >= 0.35, f"应返回挂起秒数(≥0.4), 实际 {paused:.2f}"
+    assert wall >= paused + 0.15,         f"实际耗时 = 0.2 等待 + 挂起, 实际 {wall:.2f}s (挂起 {paused:.2f}s)"
+
+
+def test_assert_timeout_extends_by_pause(runner, monkeypatch):
+    """timeout 顺延: _poll_sleep 每轮返回"挂起了 2s" → 1s 的断言在 2.5s 内不应超时
+    (旧行为: 1s 即抛 AssertionError —— 该行为已随暂停引入而改变)"""
+    monkeypatch.setattr(runner, "_poll_sleep", lambda n: 2.0)
+    errors = []
+
+    def _run():
+        try:
+            runner._assert_locator("永远不会出现", timeout=1)
+        except AssertionError as e:
+            errors.append(e)
+    t = threading.Thread(target=_run, daemon=True)
+    t0 = time.time()
+    t.start()
+    t.join(2.5)
+    assert t.is_alive(),         f"1s 超时 + 每轮挂起 2s 顺延, 2.5s 内不该抛: {errors}"
+
+
+def test_stop_wins_over_pause(runner):
+    """挂起中点停止 → 立即 UserStopped(停止优先于暂停)"""
+    from core.runner import UserStopped
+    runner.pause()
+    threading.Timer(0.3, runner.stop).start()
+    with pytest.raises(UserStopped):
+        runner._wait_if_paused()
 
 
 def test_click_coordinates(runner):

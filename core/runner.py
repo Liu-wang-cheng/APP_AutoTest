@@ -121,6 +121,7 @@ class ActionRunner:
         #: 截图子目录名(worker 传"用例名-第N次", 让多轮截图互不覆盖); 空则用 case_name
         self.shot_subdir = ""
         self._stopped = False    # 停止标志,GUI 停止按钮置位(对外经 stopped 属性读)
+        self._paused = False     # 暂停标志,GUI 暂停按钮置位(2026-10-13)
         # ★ 外部取消信号(如前置阶段的 should_cancel 回调): 与自身停止标志等效。
         #   前置里的「自定义步骤」会新建一个 ActionRunner, 它拿不到主 runner 的
         #   stop() —— 于是用户点停止后那串前置会一路跑完(实测: 4s 的等待步骤在
@@ -155,23 +156,36 @@ class ActionRunner:
 
     # ── 等待与停止 ──
     def _sleep(self, seconds):
-        """可中断等待: 收到停止请求后快速退出并抛 UserStopped"""
+        """可中断等待: 收到停止请求后快速退出并抛 UserStopped。
+
+        ★ 暂停感知(2026-10-13): 分片里若处于暂停, 挂起等待 resume, 且**挂起时长
+          不计入等待** —— 返回挂起秒数, 调用方的 timeout 据此顺延(用户直觉: 暂停
+          10 分钟回来继续等剩下的)。停止优先于暂停(挂起中点停止立即抛)。
+        """
         end = time.time() + max(0.0, seconds)
+        paused_total = 0.0
         while not self.stopped:
             remain = end - time.time()
             if remain <= 0:
-                return
+                return paused_total
             time.sleep(min(0.2, remain))
+            if self._paused:
+                p = self._wait_if_paused()
+                paused_total += p
+                end += p            # 挂起不计入等待: timeout 顺延
         raise UserStopped("用户手动停止")
 
     def _poll_sleep(self, check_count):
-        """轮询间隔: 1s→2s→5s 封顶(保证刚出现的元素尽快被发现)"""
+        """轮询间隔: 1s→2s→5s 封顶(保证刚出现的元素尽快被发现)。
+        返回挂起秒数(调用方的 timeout 据此顺延, 见 _sleep)"""
+        paused = 0.0
         if check_count <= POLL_SHORT_N:
-            self._sleep(POLL_SHORT)
+            paused = self._sleep(POLL_SHORT)
         elif check_count <= POLL_MID_N:
-            self._sleep(POLL_MID)
+            paused = self._sleep(POLL_MID)
         else:
-            self._sleep(POLL_MAX)
+            paused = self._sleep(POLL_MAX)
+        return paused or 0.0
 
     def _poll_until(self, checks, pred):
         """按节奏探测 `checks` 次, `pred(i)` 真值即成立(审查 2026-10-12 #21)。
@@ -202,6 +216,35 @@ class ActionRunner:
 
     def stop(self):
         self.stopped = True
+
+    # ── 暂停/继续(用户 2026-10-13: "支持测试用例暂停再继续") ──
+    @property
+    def paused(self):
+        return self._paused
+
+    def pause(self):
+        """请求暂停: 当前步骤跑完后, 在步骤间/等待分片里挂起(不碰设备)"""
+        self._paused = True
+
+    def resume(self):
+        self._paused = False
+
+    def _wait_if_paused(self):
+        """挂起点: 暂停请求到达后阻塞在这里, 直到 resume 或 stop。
+
+        返回挂起了多少秒(0 = 没挂起) —— 调用方据此**顺延 timeout**(用户直觉:
+        暂停 10 分钟回来, 继续等剩下的, 而不是恢复即超时)。
+        ★ 停止优先于暂停: 挂起中收到停止请求 → 抛 UserStopped(同正常等待路径)。
+        ★ 设备侧不碰: 暂停的真实场景是"机器人卡住要人工处理" —— 设备保持现状。
+        """
+        if not self._paused:
+            return 0.0
+        t0 = time.time()
+        while self._paused:
+            if self.stopped:
+                raise UserStopped("用户手动停止")
+            time.sleep(0.2)
+        return time.time() - t0
 
     # ── 设备 ──
     def _ensure_device(self):
@@ -364,7 +407,7 @@ class ActionRunner:
                 continue
             if end is None or time.time() >= end:
                 return False
-            self._sleep(1)
+            end += self._sleep(1) or 0    # 暂停挂起 → timeout 顺延(2026-10-13)
 
     def _click_by_locator(self, value, timeout=None):
         """按定位串点击,超时内轮询。
@@ -394,7 +437,7 @@ class ActionRunner:
                     log.info(f"[点击] 「{value}」当前是未渲染的隐藏节点, 继续等待: "
                              f"{self._element_desc(el)}")
                     check_count += 1
-                    self._poll_sleep(check_count)
+                    end_time += self._poll_sleep(check_count) or 0
                     continue
                 try:
                     info = el.info
@@ -420,7 +463,7 @@ class ActionRunner:
                     log.info(f"[点击] OCR 兜底命中「{value}」 @ ({pos[0]},{pos[1]})")
                     return
             check_count += 1
-            self._poll_sleep(check_count)
+            end_time += self._poll_sleep(check_count) or 0
 
     def _ocr_find_xy(self, value):
         """OCR 全文扫描, 找含 value 的那行, 返回 (value, (x, y)) / (None, None)。"""
@@ -735,7 +778,7 @@ class ActionRunner:
                          + (f" @ {pos}" if pos else ""))
                 return
             check_count += 1
-            self._poll_sleep(check_count)
+            end_time += self._poll_sleep(check_count) or 0
 
     # ── 主循环 ──
     def run_steps(self, steps: list) -> bool:
@@ -743,6 +786,9 @@ class ActionRunner:
         for i, step in enumerate(steps):
             if self.stopped:
                 break
+            # ★ 暂停挂起点(2026-10-13): 当前步骤已跑完, 在步骤间挂起 —— 不打断
+            #   设备交互; 挂起中收到停止 → UserStopped(与停止路径同一出口)
+            self._wait_if_paused()
             step = self._resolve_step(step)  # 解析 ${section.key} 定位器引用
             desc = self._step_desc(step)
             retry = step.get("retry", 0) if isinstance(step, dict) else 0

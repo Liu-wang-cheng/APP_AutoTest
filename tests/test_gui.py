@@ -81,25 +81,31 @@ def test_status_words_dialog_saves_to_config_and_runtime(win, monkeypatch, tmp_p
     assert "new_idle" in session._status_words["idle"], session._status_words
 
 
-def test_status_words_dialog_saves_to_config_and_runtime(win, monkeypatch, tmp_path):
-    """★ 在线改词表 → 写 config.yaml + 同步 core.session 全局(用户 2026-10-13)"""
-    from gui import main_window as mw
-    from core import session, driver
-    cfg_path = tmp_path / "config.yaml"
-    cfg_path.write_text("runner:\n  default_timeout: 30\n",
-                         encoding="utf-8", newline="")
-    monkeypatch.setattr(driver, "CONFIG_PATH", str(cfg_path))
-    dlg = mw.StatusWordsDialog("OLD_FAULT", "OLD_IDLE", parent=win)
-    dlg.fault_edit.setPlainText("new_fault")
-    dlg.idle_edit.setPlainText("new_idle")
-    dlg._save()
-    text = cfg_path.read_text(encoding="utf-8")
-    assert "new_fault" in text and "new_idle" in text, text
-    assert "new_fault" in session._status_words["fault"]
-    assert "new_idle" in session._status_words["idle"]
+def test_pause_button_toggles_and_resets(win):
+    """★ 暂停按钮: 运行时启用, 点击在 ⏸/▶ 间切换, 结束后复位并禁用(2026-10-13)"""
+    class _W:
+        _pause_requested = False
+
+        def request_pause(self):
+            self._pause_requested = True
+
+        def request_resume(self):
+            self._pause_requested = False
+    win.worker = _W()
+    win.pause_btn.setEnabled(True)
+    try:
+        win.on_pause()
+        assert win.pause_btn.text() == "▶ 继续" and win.worker._pause_requested
+        win.on_pause()
+        assert win.pause_btn.text() == "⏸ 暂停" and not win.worker._pause_requested
+        # 结束路径复位
+        win.on_run_finished(True, "全部通过")
+        assert win.pause_btn.text() == "⏸ 暂停" and not win.pause_btn.isEnabled()
+    finally:
+        win.worker = None
+
 
 def test_window_built(win):
-
     assert win.device_combo is not None
     assert win.result_table is not None
     assert win.step_count_label.text().startswith("共")
