@@ -407,15 +407,27 @@ def _run_branch(runner, steps, label=""):
         return
     runner._pending_sub_results = []
     prefix = f"[{label}] " if label else ""
+    parent_desc = getattr(runner, "_cur_step_desc", "")
     for s in steps:
         desc = prefix + str(s.get("desc", runner._step_desc(s)))
+        # ★ 子步骤的证据归属(用户 2026-10-15: "if 子步骤的截图显示不正确"):
+        #   · 证据文件名用**子步骤自己的描述**(以前继承父 if 的, 一串子步骤全同名);
+        #   · 清掉上一个子步骤遗留的证据槽 —— 否则"点击子步骤拍的照片"会被后面的
+        #     断言子步骤、乃至父 if 行**当成自己的**继承下去(截图错乱的根因)。
+        runner._cur_step_desc = desc
+        runner._pre_click_shot = None
+        err = None
         ss = ""
         try:
             ss = runner._execute(s) or ""
-            runner._pending_sub_results.append({"desc": desc, "passed": True,
-                                                "error": "", "screenshot": ss})
+            sub = {"desc": desc, "passed": True, "error": "", "screenshot": ss}
         except Exception as e:
-            runner._pending_sub_results.append({"desc": desc, "passed": False,
-                                                "error": str(e), "screenshot": ss})
-            raise
+            sub = {"desc": desc, "passed": False, "error": str(e), "screenshot": ss}
+            err = e
+        # ★ 子步骤结果**即时**推 GUI(用户 2026-10-15: "子步骤在 if 全部结束后才显示")
+        runner._emit_sub(sub)
+        runner._pending_sub_results.append(sub)
+        if err is not None:
+            raise err   # 失败子步骤: 已推给界面, 这里继续抛给主循环走失败流程
         time.sleep(runner.interval)
+    runner._cur_step_desc = parent_desc      # 还原父 if 的描述(后续后置块用它)

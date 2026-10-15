@@ -293,9 +293,20 @@ class ActionRunner:
                 return f"{key}:{val}" if not isinstance(val, bool) else key
         return str(step)
 
-    def _append_result(self, result: dict):
-        self.results.append(result)
+    def _emit_sub(self, sub: dict):
+        """if 子步骤结果**即时**推 GUI(用户 2026-10-15: "子步骤在 if 全部结束后才
+        显示出来") —— 只推回调不入 results(落账统一在分支结束时做, 重试切换分支
+        时 pending 清空, 不会留幽灵行)。"""
         if self.on_result:
+            try:
+                self.on_result(sub)
+            except Exception as e:
+                log.warning(f"[on_result] 回调异常: {e}")
+
+    def _append_result(self, result: dict, fire=True):
+        """结果落账; fire=False = 只入 results 不推 GUI(if 子步骤已流式推过, 见下)"""
+        self.results.append(result)
+        if fire and self.on_result:
             try:
                 self.on_result(result)
             except Exception as e:
@@ -873,7 +884,7 @@ class ActionRunner:
                     self.trace.capture(self.d, desc, True)
                     if getattr(self, "_pending_sub_results", None):
                         for sub in self._pending_sub_results:
-                            self._append_result(sub)
+                            self._append_result(sub, fire=False)
                         self._pending_sub_results = None
                     succeeded = True
                     break
@@ -911,9 +922,12 @@ class ActionRunner:
                         except Exception:
                             pass
             if not succeeded:
-                err_text = ("用户手动停止执行"
-                            if (self.stopped or isinstance(last_err, UserStopped))
-                            else str(last_err))
+                if self.stopped or isinstance(last_err, UserStopped):
+                    err_text = "用户手动停止执行"      # 中性信息, 不加时间戳
+                else:
+                    # ★ 失败发生时间写进错误信息(用户 2026-10-15: 报告/执行结果要能
+                    #   看出"什么时候失败的") —— 结果表与报告的 error 列同源
+                    err_text = f"[{time.strftime('%H:%M:%S')}] {last_err}"
                 self._append_result({"desc": desc, "passed": False, "error": err_text,
                                      "screenshot": screenshot})
                 # 真实失败才留时序证据;用户主动停止没有诊断价值
@@ -922,7 +936,7 @@ class ActionRunner:
                     self.trace.dump(self.d, i)
                 if getattr(self, "_pending_sub_results", None):
                     for sub in self._pending_sub_results:
-                        self._append_result(sub)
+                        self._append_result(sub, fire=False)
                     self._pending_sub_results = None
                 return False
             # 步骤间等待(可中断)。
@@ -1020,6 +1034,9 @@ class ActionRunner:
             # 点击/等待证据已在**动作前**拍好并标注(2026-10-13/14) —— 直接采用,
             #   不再动作后再拍一张(那时页面已经变了)
             screenshot = pre_shot
+            # ★ 采用即消费(用户 2026-10-15): 不清掉的话, if 分支的后续子步骤和
+            #   父 if 行会把这张图**当成自己的**继承下去 —— 子步骤截图显示错乱的根因
+            self._pre_click_shot = None
         elif "screenshot" in step or click_step or self.always_screenshot:
             sv = step.get("screenshot")
             if isinstance(sv, str) and sv.strip():

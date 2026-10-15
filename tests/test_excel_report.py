@@ -5,6 +5,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from core.excel_report import ExcelReport
+from openpyxl import load_workbook
 
 
 def test_two_phase_desc_and_stats(tmp_path):
@@ -223,3 +224,20 @@ def test_same_case_twice_shares_no_state(tmp_path):
     ws = wb["汇总"]                                    # 汇总页逐行对应一次执行
     assert (ws.cell(row=6, column=5).value, ws.cell(row=6, column=6).value) == (1, 1)
     assert (ws.cell(row=7, column=5).value, ws.cell(row=7, column=6).value) == (2, 2)
+
+
+def test_case_priority_written_to_summary(tmp_path):
+    """★ 汇总页"优先级"列写真实值(用户 2026-10-15: "这里设置的优先级也没有在
+    测试报告的汇总页写出来") —— 界面/用例 YAML 里设置的 priority 此前恒为空。"""
+    from core.excel_report import ExcelReport
+    rep = ExcelReport(path=str(tmp_path / "p.xlsx"))
+    rep.set_case_priority("冒烟", "P0")
+    rep.add_result("冒烟", True, "", "")
+    rep.add_result("别的用例", True, "", "")      # 没设优先级 → 留空
+    rep.save()
+    wb = load_workbook(tmp_path / "p.xlsx")
+    ws = wb["汇总"]
+    rows = {ws.cell(row=r, column=2).value: ws.cell(row=r, column=3).value
+            for r in range(6, ws.max_row + 1) if ws.cell(row=r, column=2).value}
+    assert rows.get("冒烟") == "P0", rows
+    assert rows.get("别的用例") in ("", None), rows

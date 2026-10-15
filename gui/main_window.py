@@ -2154,6 +2154,12 @@ class MainWindow(QMainWindow):
                 b.setObjectName("primaryBtn")     # 主按钮走主题蓝
             made.append(b)
         box.setDefaultButton(made[default])
+        # ★ 抢前台(用户 2026-10-15: "弹窗优先显示"): 自动检查更新的弹窗多在用户
+        #   切到别的应用时出现 —— 不主动 raise 会被压在别的窗口后面, 用户根本看不到
+        self.raise_()
+        self.activateWindow()
+        box.raise_()
+        box.activateWindow()
         box.exec()
         clicked = box.clickedButton()
         for b, t in zip(made, texts):
@@ -3500,6 +3506,24 @@ class MainWindow(QMainWindow):
             self.preconditions[idx]["enabled"] = bool(on)
             self._save_preconditions()
 
+    def on_precondition_retry(self, detail):
+        """前置检测失败 → 暂停等待用户处理(用户 2026-10-15): 在设备上排除故障后
+        点「重试前置」从失败项继续; 点「取消运行」结束本次执行。
+        ★ 弹窗期间执行线程阻塞在应答事件上(设备保持现状, 即"暂停排除故障")。"""
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Warning)
+        box.setWindowTitle("前置检测未通过")
+        box.setText("前置检测有失败项, 执行已暂停")
+        box.setInformativeText(
+            f"{detail}\n\n"
+            "请先在设备/APP 上排除故障(保持当前界面), 然后选择:")
+        retry = box.addButton("重试前置", QMessageBox.AcceptRole)
+        box.addButton("取消运行", QMessageBox.RejectRole)
+        box.setDefaultButton(retry)
+        box.exec()                     # 模态: 居中于主窗口并置顶
+        if self.worker:
+            self.worker.resolve_precondition_retry(box.clickedButton() is retry)
+
     def preview_compare_area(self, region_text):
         """预览对比范围(用户 2026-10-14): 连当前设备截屏 → 按范围画标注图 → 弹窗。
         范围非法/设备未连接都转警告框, 不打断编辑。"""
@@ -4230,6 +4254,8 @@ class MainWindow(QMainWindow):
         self.worker.case_finished.connect(
             lambda fp, name, ok: self.set_case_state(fp, "passed" if ok else "failed"))
         self.worker.precondition_failed.connect(self.on_precondition_failed)
+        # ★ 前置失败弹窗(用户 2026-10-15): 重试/取消 —— 用户在设备上排除故障后选择
+        self.worker.precondition_retry.connect(self.on_precondition_retry)
         # ★ 开始执行即在结果表里留痕(浅蓝开始行)—— 以前第一条步骤完成前
         #   表格一片空白,用户不知道跑没跑起来(用户反馈)
         self._append_result_row(

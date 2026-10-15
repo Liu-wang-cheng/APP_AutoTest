@@ -247,9 +247,9 @@ def test_swipe_start_end_split_fields(runner):
 def test_swipe_direction_marks_path(runner, monkeypatch):
     """方向名滑动(left 等)也走标注: 证据槽被填, 坐标按窗口尺寸展开"""
     runner.d = _SeqDev()
-    runner._execute({"desc": "左滑", "swipe": "left"})
+    res = runner._execute({"desc": "左滑", "swipe": "left"})
     assert any(o[0] == "shot" for o in runner.d.ops), "方向滑动也要默认截图"
-    assert runner._pre_click_shot, "证据槽应记录路径标注图"
+    assert res == runner.d.ops[0][1], "滑动前的标注图就是本步证据(采用后槽已消费)"
 
 
 def test_swipe_legacy_full_string_still_works(runner):
@@ -277,6 +277,38 @@ def test_sleep_step_screenshots_before_waiting(runner):
     assert kinds[0] == "shot" and "wait" in kinds, runner.d.ops
     assert kinds.index("shot") < kinds.index("wait"),         f"截图必须在等待开始前: {runner.d.ops} {waits}"
     assert res == runner.d.ops[0][1], "等待前那张就是本步证据截图"
+
+
+# ── if 子步骤证据归属(用户 2026-10-15: 子步骤截图显示错乱) ──
+
+def test_if_substep_evidence_not_inherited(runner):
+    """★ 分支子步骤的截图各归各(用户 2026-10-15: "if 分支子步骤的截图在执行结果
+    和报告中显示不正确"): 点击子步骤拍的照片, 不得被后续断言子步骤、乃至父 if 行
+    当成自己的继承下去。"""
+    runner.d = _SeqDev()
+    ok = runner.run_steps([
+        {"desc": "分支", "if": "确认",
+         "then": [{"desc": "点A", "click": [1, 2]},
+                  {"desc": "断言B", "assert": "永远不会出现", "timeout": 0.1}],
+         "else": []}])
+    assert ok is False
+    rows = {r["desc"]: r.get("screenshot", "") for r in runner.results}
+    click_shot = rows.get("[条件成立] 点A")
+    assert click_shot, f"点击子步骤应有自己的截图: {rows}"
+    assert rows.get("[条件成立] 断言B", "x") != click_shot,         "断言子步骤不得继承点击子步骤的截图"
+    assert rows.get("分支", "x") != click_shot,         "父 if 行不得继承子步骤的截图"
+
+
+def test_failed_row_error_has_timestamp(runner):
+    """★ 失败信息带发生时间(用户 2026-10-15): 报告/执行结果的 error 列要能看出
+    "什么时候失败的" —— 与 [FAIL诊断] 日志同一时刻口径。"""
+    import re
+    runner._execute({"desc": "等一下", "wait": 0.01})
+    ok = runner.run_steps([{"desc": "断言失败步", "assert": "不会有这个文本",
+                            "timeout": 0.1}])
+    assert ok is False
+    err = runner.results[-1]["error"]
+    assert re.match(r"^\[\d{2}:\d{2}:\d{2}\] ", err), err
 
 
 def test_click_coordinates(runner):

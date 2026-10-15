@@ -63,6 +63,13 @@ class ExcelReport:
         if app_version:
             self._device_info["app_version"] = app_version
 
+    def set_case_priority(self, case_name, priority):
+        """记录用例优先级(汇总页"优先级"列, 用户 2026-10-15: 界面设置的优先级
+        要写进报告) —— 用例还没入册时先建页(与 add_result 同一入口语义)"""
+        if case_name not in self._cases:
+            self._cases[case_name] = self._create_case_sheet(case_name)
+        self._cases[case_name]["priority"] = str(priority or "")
+
     def add_result(self, case_name, passed, error="", screenshot=""):
         if case_name not in self._cases:
             self._cases[case_name] = self._create_case_sheet(case_name)
@@ -203,8 +210,9 @@ class ExcelReport:
             total, passed, failed = case["total"], case["passed"], case["failed"]
             # ★ 带日期: 长跑(比如连续几十小时、跨零点)时只写 HH:MM:SS 会分不清是哪天
             end_txt = case["ended"].strftime("%m-%d %H:%M:%S") if case.get("ended") else ""
-            for ci, val in enumerate([seq, case_name, "", "", total, passed, failed,
-                                      end_txt], 1):
+            for ci, val in enumerate([seq, case_name,
+                                      case.get("priority") or "", "",
+                                      total, passed, failed, end_txt], 1):
                 cell = ws.cell(row=r, column=ci, value=val)
                 cell.font = self.NORMAL_FONT
                 cell.alignment = Alignment(horizontal="center", vertical="center")

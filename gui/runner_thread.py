@@ -5,6 +5,7 @@
 import logging
 import os
 import re
+import threading
 import time
 
 import yaml
@@ -80,6 +81,7 @@ class RunWorker(QThread):
     case_started = Signal(str, str)   # 单条用例开始(文件路径, 用例名)→ 用例列表状态灯
     case_finished = Signal(str, str, bool)  # 单条用例结束(路径, 用例名, 是否通过)
     precondition_failed = Signal(str)  # 前置检查未通过(阻断详情)→ GUI 弹窗提醒
+    precondition_retry = Signal(str)   # 前置失败 → GUI 弹窗(重试/取消, 用户 2026-10-15)
 
     def __init__(self, device_id, case_files, preconditions, repeat=1, parent=None,
                  pre_by_group=None, device_name=""):
@@ -101,6 +103,8 @@ class RunWorker(QThread):
         self.runner = None
         self._stop_requested = False
         self._pause_requested = False   # 暂停请求(2026-10-13): 前置阶段按下, 进用例补生效
+        self._retry_event = None        # 前置失败弹窗的应答(2026-10-15): 重试/取消
+        self._user_cancelled_pre = False
 
     def request_stop(self):
         """界面停止按钮调用: 置位停止标志,前置等待与当前步骤尽快退出"""
@@ -116,6 +120,12 @@ class RunWorker(QThread):
         if self.runner:
             self.runner.pause()
         self.status.emit("⏸ 已请求暂停 —— 当前步骤跑完后挂起(设备保持现状), 点「继续」接着跑")
+
+    def resolve_precondition_retry(self, retry):
+        """GUI 前置失败弹窗的应答(用户 2026-10-15): retry=True 从失败项继续, False 取消"""
+        self._user_cancelled_pre = not retry
+        if self._retry_event:
+            self._retry_event.set()
 
     def request_resume(self):
         self._pause_requested = False
@@ -263,6 +273,9 @@ class RunWorker(QThread):
                     #   一张表(用例名-1 / 用例名-2 …), 不再把几轮结果堆在同一张表里;
                     #   顺带也解决"同一个用例文件里有多个用例时共用一张表"。
                     sheet = case_sheet_name(case_key, rnd + 1)
+                    # ★ 汇总页"优先级"列写真实值(用户 2026-10-15: 界面设置的优先级
+                    #   没写进报告 —— 以前该列恒为空)
+                    report.set_case_priority(sheet, str(case.get("priority") or ""))
                     # ★ 截图目录与表键**解耦**(审查 2026-10-12): 目录带运行标签
                     #   (「用例名_r<标签>_第N次」), 封顶清理按运行整组循环覆盖
                     run_dir = _shot_dir_name(case_key, rnd + 1, self._run_tag)
@@ -298,16 +311,50 @@ class RunWorker(QThread):
                         # ★ 前置的内部步骤截图也进本轮目录(审查 2026-10-12): 否则它退回
                         #   用前置名当目录, 每轮写同一路径互相覆盖, 且封顶清理永远不收
                         shot_subdir=run_dir)
-                    # ★ 任一前置项未通过 → 阻断:本轮不再执行任何用例(用户要求)
-                    #   带失败原因(如故障整段原文, 2026-10-13), 不再只有项名
+                    # ★ 前置失败不再直接结束(用户 2026-10-15): 暂停等待用户在设备上
+                    #   排除故障, 弹窗选「重试前置」(只重跑失败的那几项)或「取消运行」;
+                    #   重试后仍有失败 → 再次弹窗, 循环直到通过/取消
                     failed = [(f"{r['desc']}({r['reason']})" if r.get("reason")
                                else r["desc"]) for r in pre_results if not r["ok"]]
-                    if failed:
+                    while failed:
                         detail = "、".join(failed)
-                        self.log_line.emit(f"[前置] 未通过,阻断本轮执行: {detail}")
-                        self.precondition_failed.emit(detail)
-                        self.finished_run.emit(False, f"前置检查未通过: {detail}")
-                        return
+                        self.log_line.emit(f"[前置] 未通过,已暂停等待处理: {detail}")
+                        # ★ 事件与取消标志必须在 emit **之前**就绪 —— GUI 的应答
+                        #   (直连时)在 emit 调用内同步到达, 之后再创建/重置会把它丢掉
+                        #   (实测: 测试里直连应答后死等, 真机弹窗点重试无响应)
+                        self._user_cancelled_pre = False
+                        self._retry_event = threading.Event()
+                        self.precondition_retry.emit(detail)
+                        while not self._retry_event.wait(0.2):
+                            if self._stop_requested:
+                                break
+                        if self._stop_requested or self._user_cancelled_pre:
+                            self.log_line.emit("[前置] 用户取消运行")
+                            self.finished_run.emit(False, f"前置检查未通过(用户取消): {detail}")
+                            return
+                        # **从第一个失败项开始继续**(用户 2026-10-15 更正: 不是只跑
+                        # 失败项 —— 失败项之后的前置可能依赖前面的状态, 一并重跑);
+                        # 已通过的前面项不重复。失败结果的 key=pre<序号> 对应 items 下标
+                        first_failed = next((int(r["key"][3:]) for r in pre_results
+                                             if not r["ok"]
+                                             and r["key"].startswith("pre")
+                                             and r["key"][3:].isdigit()), None)
+                        retry_items = items[first_failed:]                             if first_failed is not None else []
+                        self.status.emit(f"重试前置(从第 {first_failed + 1} 项起, "
+                                         f"共 {len(retry_items)} 项)…")
+                        pre_results = session.prepare_items(
+                            d, cfg, retry_items,
+                            on_progress=self.status.emit,
+                            should_cancel=lambda: self._stop_requested,
+                            on_item_done=lambda r, m=sheet, sd=run_dir:
+                            self._emit_pre_result(d, m, report, r, shot_dir=sd),
+                            on_step_start=lambda desc, attempt=1:
+                            self.step_started.emit(
+                                {"desc": f"前置-{desc}", "attempt": attempt,
+                                 "case": self._exec_label}),
+                            shot_subdir=run_dir)
+                        failed = [(f"{r['desc']}({r['reason']})" if r.get("reason")
+                                   else r["desc"]) for r in pre_results if not r["ok"]]
                     if self._stop_requested:
                         break
 

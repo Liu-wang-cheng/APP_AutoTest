@@ -1342,18 +1342,23 @@ def test_runworker_precondition_failure_blocks(qapp, monkeypatch, tmp_path):
                         {"type": "charging", "enabled": True},
                         {"type": "map_load", "enabled": True},
                         {"type": "battery", "enabled": True}], 1)
-    steps, done, pre_fail = [], [], []
+    steps, done, pre_retry = [], [], []
     worker.step_done.connect(lambda r: steps.append(dict(r)))
     worker.finished_run.connect(lambda ok, msg: done.append((ok, msg)))
-    worker.precondition_failed.connect(lambda detail: pre_fail.append(detail))
+    # ★ 前置失败 → 弹窗信号(用户 2026-10-15): 测试里直接应答"取消"
+    from PySide6.QtCore import Qt as _Qt
+    worker.precondition_retry.connect(
+        lambda detail: (pre_retry.append(detail),
+                        worker.resolve_precondition_retry(False)),
+        _Qt.DirectConnection)      # 同步跑 run(): 主线程被占, 队列投递永不到达
     worker.run()
 
-    # 前置 4 行落表(2 FAIL),但用例步骤一行都没有(阻断)
+    # 前置 4 行落表(2 FAIL), 用例步骤一行都没有(用户取消运行)
     assert len([s for s in steps if s["desc"].startswith("前置-")]) == 4
-    assert not [s for s in steps if not s["desc"].startswith("前置-")], "阻断后不得执行用例步骤"
-    assert pre_fail == ["等待充电、电量门槛≥50%"], "阻断信号应带未通过项详情"
+    assert not [s for s in steps if not s["desc"].startswith("前置-")],         "取消后不得执行用例步骤"
+    assert pre_retry == ["等待充电(重试后仍失败)、电量门槛≥50%"] or         pre_retry == ["等待充电、电量门槛≥50%"], f"弹窗信号应带失败项详情: {pre_retry}"
     assert done and not done[0][0] and "前置检查未通过" in done[0][1]
-    assert report_path.exists(), "阻断时已执行部分(前置行)也要保住报告"
+    assert report_path.exists(), "取消时已执行部分(前置行)也要保住报告"
 
 
 def test_on_precondition_failed_resets_lamps(win, monkeypatch):
