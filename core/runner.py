@@ -1030,7 +1030,7 @@ class ActionRunner:
         # ★ sleep 步骤的 pre_shot 即便带显式 screenshot 键也采用 —— 等待前后画面
         #   相同, 没必要再等 180s 重拍一张(2026-10-14 用户: 等待不应延迟截图)
         if pre_shot and ("screenshot" not in step or
-                         (main and main[0] == "sleep")):
+                         (main and main[0] in ("sleep", "if", "if not"))):
             # 点击/等待证据已在**动作前**拍好并标注(2026-10-13/14) —— 直接采用,
             #   不再动作后再拍一张(那时页面已经变了)
             screenshot = pre_shot

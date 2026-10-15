@@ -81,6 +81,24 @@ def test_status_words_dialog_saves_to_config_and_runtime(win, monkeypatch, tmp_p
     assert "new_idle" in session._status_words["idle"], session._status_words
 
 
+def test_if_parent_row_appears_before_substeps(win):
+    """★ if 父行必须排在子步骤**之前**(用户 2026-10-15: "if 判断的步骤会在子步骤
+    后面…执行结果顺序也是"): 子步骤(sub=True)追加新行, 不占用父 if 的"执行中"占位。"""
+    win.result_table.setRowCount(0)
+    # 1) if 步骤开始 → 占位行
+    win.on_step_started({"desc": "判断是否需要清洁", "attempt": 1})
+    # 2) 子步骤结果(执行中陆续到达)
+    win.on_step_done({"desc": "[条件成立] 点开始清扫", "passed": True, "error": "",
+                      "screenshot": "", "sub": True})
+    win.on_step_done({"desc": "[条件成立] 等一下", "passed": True, "error": "",
+                      "screenshot": "", "sub": True})
+    # 3) 父 if 自己的结果(最后到达)
+    win.on_step_done({"desc": "判断是否需要清洁", "passed": True, "error": "",
+                      "screenshot": ""})
+    texts = [win.result_table.item(r, 2).text() for r in range(win.result_table.rowCount())]
+    assert texts == ["判断是否需要清洁", "[条件成立] 点开始清扫", "[条件成立] 等一下"],         f"父 if 行必须在子步骤之前: {texts}"
+
+
 def test_pause_button_toggles_and_resets(win):
     """★ 暂停按钮: 运行时启用, 点击在 ⏸/▶ 间切换, 结束后复位并禁用(2026-10-13)"""
     class _W:

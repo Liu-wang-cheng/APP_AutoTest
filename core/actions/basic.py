@@ -12,6 +12,7 @@ click 值支持四种形态:
 ★ 坐标在 click/long_click/swipe 里都同时认列表与字符串 —— 曾经只认列表, 于是界面上
   写的 "x,y" 会掉进"按文本找元素"的分支, 轮询到超时报错(用户实测「点击坐标点不动」)。
 """
+import os
 import re
 import time
 
@@ -381,6 +382,21 @@ def do_if_impl(runner, step, negate):
     log.info(f"[if{'(not)' if negate else ''}] 条件{'成立' if passed else '不成立'}"
              f"({condition!r}) → {what}")
 
+    # ★ if 步骤自己的证据在**判定完、跑分支之前**拍(用户 2026-10-15: "截图也是在子
+    #   步骤后面截图的"): 后置块在分支跑完后才拍, 那时画面已被子步骤改过, 还会被
+    #   标上最后一个子步骤的点击标记 —— 证据应记录"判定那一刻的页面"。
+    #   经证据槽, _execute 后置块直接采用(见其中 if/if not 的采用条件)。
+    if not getattr(runner, "_pre_click_shot", None) and \
+            (getattr(runner, "click_shots", False) or
+             getattr(runner, "always_screenshot", False)):
+        try:
+            path = runner._step_shot_path(getattr(runner, "_cur_step_desc", ""))
+            os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+            runner.d.screenshot(path)
+            runner._pre_click_shot = path
+        except Exception as e:
+            log.warning(f"[截图] if 判定前截图失败(不影响判定): {type(e).__name__}: {e}")
+
     if passed:
         _run_branch(runner, then_branch, "条件成立")
     else:
@@ -420,9 +436,14 @@ def _run_branch(runner, steps, label=""):
         ss = ""
         try:
             ss = runner._execute(s) or ""
-            sub = {"desc": desc, "passed": True, "error": "", "screenshot": ss}
+            # ★ sub=True: 界面上**追加新行**而不占用父 if 的"执行中"占位 ——
+            #   否则父行会被第一个子步骤顶掉, 最后又追加到子步骤后面(用户 2026-10-15:
+            #   "if 判断的步骤会在子步骤后面…执行结果顺序也是")
+            sub = {"desc": desc, "passed": True, "error": "", "screenshot": ss,
+                   "sub": True}
         except Exception as e:
-            sub = {"desc": desc, "passed": False, "error": str(e), "screenshot": ss}
+            sub = {"desc": desc, "passed": False, "error": str(e), "screenshot": ss,
+                   "sub": True}
             err = e
         # ★ 子步骤结果**即时**推 GUI(用户 2026-10-15: "子步骤在 if 全部结束后才显示")
         runner._emit_sub(sub)

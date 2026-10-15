@@ -4329,6 +4329,15 @@ class MainWindow(QMainWindow):
         self.tabs.setCurrentIndex(0)
 
     def on_step_done(self, result):
+        # ★ if 子步骤(sub=True)一律**追加新行**, 不占用父 if 的"执行中"占位 ——
+        #   否则父行会被第一个子步骤顶掉、最后追加到子步骤后面(用户 2026-10-15)
+        if result.get("sub"):
+            row = self.result_table.rowCount()
+            self.result_table.insertRow(row)
+            self._fill_result_row(row, result)
+            self.result_table.resizeRowsToContents()
+            self.result_table.scrollToBottom()
+            return
         row = getattr(self, "_running_row", None)
         if row is None or row >= self.result_table.rowCount():
             row = self.result_table.rowCount()   # 没有对应的"开始"事件(如前置项) → 直接追加
