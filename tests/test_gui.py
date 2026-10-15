@@ -147,6 +147,56 @@ def test_stopped_preconditions_are_not_shown(qapp, monkeypatch, tmp_path):
     assert descs == ["前置-重启 APP"], f"未执行的前置项不该出现: {descs}"
 
 
+def test_case_screenshot_trim_uses_case_key(qapp, monkeypatch, tmp_path):
+    """★ 用例截图封顶必须传**用例键**(用户 2026-10-15: "用例截图的循环清理我似乎并没有
+    看到在清理"): 目录名已是「用例_r<标签>_第N次」, 调用点若还按旧的 "-第N次" 解析
+    用例键, 得到的串永远匹配不上目录 → 一个都不删。"""
+    import types
+
+    import uiautomator2 as u2
+
+    from core import bootstrap
+    from core.excel_report import ExcelReport
+    from gui import runner_thread as rt
+
+    case_file = _write_case(tmp_path, "组甲", "a.yaml", "冒烟")
+    monkeypatch.setattr(u2, "connect",
+                        lambda dev: types.SimpleNamespace(implicitly_wait=lambda t: None))
+    monkeypatch.setattr(rt, "ExcelReport",
+                        lambda: ExcelReport(path=str(tmp_path / "r.xlsx")))
+    monkeypatch.setattr(rt.session, "get_battery_level", lambda d_: 50)
+    monkeypatch.setattr(rt, "load_config",
+                        lambda: {"runner": {"step_interval": 0}, "app": {"package": "p"},
+                                 "target_device": "SE3L"})
+    # 前置用桩(否则真跑 restart 会因假设备缺接口而异常, 走不到封顶那步)
+    monkeypatch.setattr(rt.session, "prepare_items", _fake_prepare_items([]))
+    seen = []
+    monkeypatch.setattr(bootstrap, "trim_case_screenshots",
+                        lambda shots, case_name="", keep=None:
+                        (seen.append(case_name), (0, 0))[1])
+
+    w = rt.RunWorker("fake-dev", [case_file], [{"type": "restart", "enabled": True}], 1)
+    w.run()
+    assert seen, "没有调用用例截图封顶"
+    assert all(n == "冒烟" for n in seen),         f"传的应是用例键「冒烟」, 实际 {seen}(旧格式解析会得到整串目录名 → 永远不匹配)"
+
+
+def test_sub_row_updates_in_place_by_sub_id(win):
+    """★ 同一 sub_id 的子步骤事件要**原地更新**那一行(用户 2026-10-15): 嵌套 if 这类
+    容器型子步骤先推「执行中」占位(保证子步骤排它后面)、跑完再推结果 —— 不按 sub_id
+    去重就会多出一行「内层if」。"""
+    win.result_table.setRowCount(0)
+    win._sub_rows = {}
+    win.on_step_done({"desc": "[条件成立] 内层if", "sub": True, "sub_id": 7,
+                      "running": True, "passed": None, "error": "", "screenshot": ""})
+    n1 = win.result_table.rowCount()
+    assert win.result_table.item(win._sub_rows[7], 3).text() == "执行中"
+    win.on_step_done({"desc": "[条件成立] 内层if", "sub": True, "sub_id": 7,
+                      "passed": True, "error": "", "screenshot": ""})
+    assert win.result_table.rowCount() == n1, "同一 sub_id 不该新增行"
+    assert win.result_table.item(win._sub_rows[7], 3).text() == "PASS"
+
+
 def test_stopped_rows_render_neutral(win):
     """★ 被停止打断的行显示中性「⏹ 已停止」而不是红色 FAIL(用户 2026-10-15:
     "正常的测试步骤也要检查下有没有这些问题") —— 前置修完后, 正常步骤同样要中性。"""

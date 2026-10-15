@@ -451,7 +451,11 @@ class RunWorker(QThread):
                             os.path.join(BASE_DIR, "Test_cases",
                                          _vs.current_app_group() or "未分组",
                                          "screenshots"),
-                            case_name=run_dir.rsplit("-第", 1)[0])
+                            # ★ 必须传**用例键**(= _shot_case_of 的返回值):
+                            #   目录名已是「用例_r<运行标签>_第N次」, 再按旧的
+                            #   "-第N次" 去 rsplit 会得到整串 → 永远匹配不上目录 →
+                            #   逐个用例的封顶**一个都不删**(用户 2026-10-15 实测发现)
+                            case_name=case_key)
                     except Exception:
                         pass
 

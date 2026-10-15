@@ -366,4 +366,6 @@ def do_sleep(runner, step):
         raise ValueError(f"延时等待的秒数不是数字: {seconds!r}")
     if seconds > 0:
         log.info(f"[sleep] 等待 {seconds:g} 秒")
-        runner._sleep(seconds)
+        t0 = time.time()
+        runner._sleep(seconds)          # 中途被停止会抛 UserStopped(不打印结束行)
+        log.info(f"[sleep] 等待结束(实际 {time.time() - t0:.1f} 秒)")

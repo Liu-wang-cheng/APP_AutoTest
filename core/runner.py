@@ -133,6 +133,8 @@ class ActionRunner:
         self.on_step_start = None
         #: 暂停状态回调(2026-10-15): 挂起/恢复时通知界面把当前步骤行标「⏸ 暂停中」
         self.on_pause_state = None
+        self._sub_seq = 0        # 子步骤行序号(界面按它在原地更新嵌套容器的行)
+        self._if_depth = 0       # if 嵌套深度: 只有**最外层** if 结束后统一落账
         self.trace = TraceRecorder(case_name, config.get("trace_limit", 8))
         self.router = VisionRouter(config)
         self._locators = self._load_locators()
@@ -728,9 +730,13 @@ class ActionRunner:
         #   后一轮把前一轮覆盖掉(用户 2026-10-12 实测报的正是这个)。
         #   没给(单元测试/旧调用)时退回用例名。
         sub = getattr(self, "shot_subdir", "") or self.case_name or "case"
+        # ★ 文件名前缀(2026-10-15): 前置的自定义步骤与用例步骤**共用同一个运行目录**,
+        #   两边都是 stepNN_描述.png —— 序号与描述恰好相同时会互相覆盖。前置侧给
+        #   "前置" 前缀, 同目录不冲突(文件仍随本轮一起被循环清理)。
+        file_prefix = getattr(self, "shot_prefix", "")
         path = (f"Test_cases/{_vision.current_app_group() or '未分组'}/"
                 f"screenshots/{sub}/"
-                f"step{idx:02d}_{safe_desc}.png")
+                f"{file_prefix}step{idx:02d}_{safe_desc}.png")
         # screenshots/ 开头的路径补全 Test_img/ 前缀(reports/ 等其他路径原样)
         if path.startswith("screenshots/"):
             path = os.path.join(BASE_DIR, "Test_img", path)
@@ -897,7 +903,9 @@ class ActionRunner:
                     self._append_result({"desc": desc, "passed": True, "error": "",
                                          "screenshot": screenshot})
                     self.trace.capture(self.d, desc, True)
-                    if getattr(self, "_pending_sub_results", None):
+                    # ★ 仅**最外层** if 结束后落账(嵌套的交给外层, 顺序才对);
+                    #   嵌套时把列表留给孩子, 由外层统一按序追加(2026-10-15)
+                    if getattr(self, "_if_depth", 0) == 0 and                             getattr(self, "_pending_sub_results", None):
                         for sub in self._pending_sub_results:
                             self._append_result(sub, fire=False)
                         self._pending_sub_results = None
@@ -953,7 +961,7 @@ class ActionRunner:
                 if not (self.stopped or isinstance(last_err, UserStopped)):
                     self.trace.capture(self.d, desc, False)
                     self.trace.dump(self.d, i)
-                if getattr(self, "_pending_sub_results", None):
+                if getattr(self, "_if_depth", 0) == 0 and                         getattr(self, "_pending_sub_results", None):
                     for sub in self._pending_sub_results:
                         self._append_result(sub, fire=False)
                     self._pending_sub_results = None

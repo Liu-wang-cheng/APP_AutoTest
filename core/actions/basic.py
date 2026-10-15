@@ -397,10 +397,23 @@ def do_if_impl(runner, step, negate):
         except Exception as e:
             log.warning(f"[截图] if 判定前截图失败(不影响判定): {type(e).__name__}: {e}")
 
-    if passed:
-        _run_branch(runner, then_branch, "条件成立")
-    else:
-        _run_branch(runner, else_branch, "条件不成立")
+    runner._if_depth = getattr(runner, "_if_depth", 0) + 1
+    if runner._if_depth == 1:
+        # ★ **最外层** if 每次调用都重新开始攒账(含带 retry 的第二次尝试) —— 上一次
+        #   走 else 留下的失败子行不得混进本轮(否则整体通过却留下 FAIL 行, Excel 会把
+        #   该用例标 FAIL); 内层(嵌套 if)则**共享**父层的列表, 顺序才正确(2026-10-15)
+        runner._pending_sub_results = []
+    _t0 = time.time()
+    try:
+        if passed:
+            _run_branch(runner, then_branch, "条件成立")
+        else:
+            _run_branch(runner, else_branch, "条件不成立")
+    finally:
+        runner._if_depth = max(0, getattr(runner, "_if_depth", 1) - 1)
+        # ★ 分支完毕留痕(用户 2026-10-15): 只有"判定 + 分支首步"两行看不出先后 ——
+        #   补这行就把"判定→(分支, 可能含长等待)→完毕"括起来了
+        log.info(f"[if] {condition!r} 分支执行完毕(耗时 {time.time() - _t0:.1f} 秒)")
 
 
 def _run_branch(runner, steps, label=""):
@@ -410,20 +423,28 @@ def _run_branch(runner, steps, label=""):
       ★ 用户 2026-10-12: "if 分支下 then/else 子分支执行的步骤没有在测试步骤中标注一下,
         不好区分" —— 结果表/报告里子步骤原来和普通步骤长得一样, 看不出属于哪个分支。
 
-    ★ 子结果进 `_pending_sub_results`, 由 `_execute` 追加到结果表; 子步骤失败直接抛,
-      由主循环按重试/失败流程处理。
-    ★ **空分支必须清掉 `_pending_sub_results`**(原来的注释):
-      if 步骤带 retry 时, 第 1 次走 A 分支失败会往里面塞失败子行; 重试走了 B 分支(或空分支)
-      时, 残留的子行会被 `_execute` 当成"本次结果"追加进结果表 → 幽灵 FAIL 行。
-      后果不只是显示: `report.add_result(module, False, ...)` 让该用例 failed>=1,
-      Excel 汇总于是把这条**整体通过**的用例标成 FAIL。
+    ★ 子结果进 `_pending_sub_results`, 由**最外层 if** 的 `_execute` 统一按序落账
+      (嵌套 if 共享同一列表, 见下); 子步骤失败直接抛, 由主循环按重试/失败流程处理。
+    ★ 嵌套 if(用户 2026-10-15 审查发现两个真 bug):
+      · 以前每层都 `= []` 重置 —— 内层会把**外层已攒的子结果清掉**, 结果里直接少行
+        (A 步消失);
+      · 容器型子步骤(嵌套 if 本身)以前在**跑完**才登记 —— 它的子步骤会排在它前面。
+      现在: 列表只在为 None 时新建(嵌套沿用父层, 顺序天然正确); 容器子步骤**先登记
+      行**(sub_id + running) 再跑, 跑完就地更新(界面按 sub_id 原地改, 不重复插行)。
+    ★ 空分支什么都不做(不动列表) —— 带 retry 的 if 上一轮的子行已由失败路径落账并清空,
+      不会漏进本轮。
     """
     if not steps:
-        runner._pending_sub_results = None
         return
-    runner._pending_sub_results = []
+    pending = getattr(runner, "_pending_sub_results", None)
+    if pending is None:
+        pending = runner._pending_sub_results = []       # 最外层 if 新建
     prefix = f"[{label}] " if label else ""
     parent_desc = getattr(runner, "_cur_step_desc", "")
+    # ★ 父步骤(if)在**判定那一刻**拍的证据要跨分支保住(用户 2026-10-15: "if判断的
+    #   步骤截图也是延迟180s之后的"): 下面每个子步骤都会清证据槽以隔离归属, 不先存
+    #   一份的话父步骤那张会被清掉 —— 后置块只好等分支(可能含 180s 等待)跑完再重拍。
+    parent_shot = getattr(runner, "_pre_click_shot", None)
     for s in steps:
         desc = prefix + str(s.get("desc", runner._step_desc(s)))
         # ★ 子步骤的证据归属(用户 2026-10-15: "if 子步骤的截图显示不正确"):
@@ -432,6 +453,15 @@ def _run_branch(runner, steps, label=""):
         #     断言子步骤、乃至父 if 行**当成自己的**继承下去(截图错乱的根因)。
         runner._cur_step_desc = desc
         runner._pre_click_shot = None
+        # 容器型子步骤(嵌套 if): 先登记并推一行「执行中」, 跑完就地更新 —— 否则它的
+        # 子步骤会排在它前面(用户 2026-10-15 同类顺序问题)
+        entry = None
+        if reg.primary_action_key(s) in ("if", "if not"):
+            runner._sub_seq += 1
+            entry = {"desc": desc, "sub": True, "sub_id": runner._sub_seq,
+                     "running": True, "passed": None, "error": "", "screenshot": ""}
+            pending.append(entry)
+            runner._emit_sub(dict(entry))
         err = None
         ss = ""
         try:
@@ -446,9 +476,17 @@ def _run_branch(runner, steps, label=""):
                    "sub": True}
             err = e
         # ★ 子步骤结果**即时**推 GUI(用户 2026-10-15: "子步骤在 if 全部结束后才显示")
-        runner._emit_sub(sub)
-        runner._pending_sub_results.append(sub)
+        if entry is not None:                # 容器: 就地更新(界面按 sub_id 原地改)
+            entry.update(sub)
+            entry.pop("running", None)
+            runner._emit_sub(dict(entry))
+        else:
+            runner._sub_seq += 1
+            sub["sub_id"] = runner._sub_seq
+            pending.append(sub)
+            runner._emit_sub(dict(sub))
         if err is not None:
             raise err   # 失败子步骤: 已推给界面, 这里继续抛给主循环走失败流程
         time.sleep(runner.interval)
     runner._cur_step_desc = parent_desc      # 还原父 if 的描述(后续后置块用它)
+    runner._pre_click_shot = parent_shot     # 还原父步骤证据(子步骤不得继承, 父也不得丢)

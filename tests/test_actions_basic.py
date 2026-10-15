@@ -296,6 +296,47 @@ def test_sleep_step_screenshots_before_waiting(runner):
 
 # ── if 子步骤证据归属(用户 2026-10-15: 子步骤截图显示错乱) ──
 
+def test_nested_if_keeps_all_rows_and_order(runner):
+    """★ 嵌套 if(用户 2026-10-15 审查发现两个真 bug):
+    · 外层已攒的子结果**不能被内层清掉** —— 以前 A 步直接从结果/报告里消失;
+    · 容器型子步骤(内层 if 自己)**排在它的子步骤之前**。"""
+    runner.d = _SeqDev()
+    runner.run_steps([{"desc": "外层if", "if": "确认",
+                       "then": [{"desc": "A步", "wait": 0.01},
+                                {"desc": "内层if", "if": "确认",
+                                 "then": [{"desc": "B步", "wait": 0.01}]},
+                                {"desc": "C步", "wait": 0.01}]}])
+    descs = [r["desc"] for r in runner.results]
+    assert descs == ["外层if", "[条件成立] A步", "[条件成立] 内层if",
+                     "[条件成立] B步", "[条件成立] C步"], descs
+
+
+def test_if_screenshot_taken_before_branch_wait(runner):
+    """★ if 步骤的截图在**判定那一刻**, 不被分支里的长等待拖后
+    (用户 2026-10-15 真机日志: "if判断的步骤截图也是延迟180s之后的")。
+
+    根因: 分支内每个子步骤都会清证据槽(隔离子步骤归属) —— 把父 if 判定前那张也
+    清掉了, 后置块只好等分支(含 180s 等待)跑完重拍。现在分支前后保存/还原父证据。
+    """
+    ops = []
+    dev = _SeqDev()
+    orig_shot = dev.screenshot
+
+    def _shot(path=None, format=None):
+        if path:
+            ops.append("shot")
+        return orig_shot(path, format)
+    dev.screenshot = _shot
+    runner.d = dev
+    runner.click_shots = True
+    runner.always_screenshot = True
+    real_sleep = _REAL_SLEEP
+    runner._sleep = lambda s: (ops.append("wait"), real_sleep(runner, s))[1]
+    runner._execute({"desc": "判断是否清洗拖布", "if": "确认", "screenshot": True,
+                     "then": [{"desc": "等待180秒", "sleep": 0.3}]})
+    assert ops.index("shot") < ops.index("wait"),         f"截图必须在分支等待之前: {ops}"
+
+
 def test_if_substep_evidence_not_inherited(runner):
     """★ 分支子步骤的截图各归各(用户 2026-10-15: "if 分支子步骤的截图在执行结果
     和报告中显示不正确"): 点击子步骤拍的照片, 不得被后续断言子步骤、乃至父 if 行
@@ -484,7 +525,8 @@ def test_if_runs_then_branch_when_condition_holds(runner):
                      "then": [{"desc": "成立时做", "click": [10, 20]}],
                      "else": [{"desc": "不该走", "click": [99, 99]}]})
     assert runner.d.clicked_at == (10, 20), runner.d.clicked_at
-    assert [r["desc"] for r in runner._pending_sub_results] == ["[条件成立] 成立时做"]
+    # 直调 _execute 不落账, 列表累积(落账在最外层 if 结束的 run_steps) → 看最后一条
+    assert runner._pending_sub_results[-1]["desc"] == "[条件成立] 成立时做"
 
 
 def test_if_runs_else_branch_when_condition_fails(runner):
@@ -493,7 +535,7 @@ def test_if_runs_else_branch_when_condition_fails(runner):
                      "then": [{"desc": "不该走", "click": [10, 20]}],
                      "else": [{"desc": "不成立时做", "click": [77, 88]}]})
     assert runner.d.clicked_at == (77, 88), runner.d.clicked_at
-    assert [r["desc"] for r in runner._pending_sub_results] == ["[条件不成立] 不成立时做"]
+    assert runner._pending_sub_results[-1]["desc"] == "[条件不成立] 不成立时做"
 
 
 @pytest.mark.parametrize("key,cond", [("if", "确认"), ("if not", "不存在的文本")])
@@ -505,7 +547,10 @@ def test_if_without_then_still_skips(runner, key, cond):
     step = {key: cond, "else": [{"desc": "不该走", "click": [99, 99]}]}
     runner._execute(step)
     assert runner.d.clicked_at is None
-    assert runner._pending_sub_results is None, "空分支必须清掉子结果(否则重试会留下幽灵行)"
+    # ★ 空分支**不新增**子结果(2026-10-15 改共享列表后); 幽灵行防线移到"每次重试前
+    #   列表已被上一轮落账清空", 见 _run_branch 注释
+    assert not [r for r in (runner._pending_sub_results or [])
+                if r["desc"].startswith("[")], runner._pending_sub_results
 
 
 def test_if_not_then_branch_uses_negated_condition(runner):
@@ -513,7 +558,7 @@ def test_if_not_then_branch_uses_negated_condition(runner):
     runner._execute({"if not": "不存在的文本",
                      "then": [{"desc": "取反后成立", "click": [33, 44]}]})
     assert runner.d.clicked_at == (33, 44), runner.d.clicked_at
-    assert [r["desc"] for r in runner._pending_sub_results] == ["[条件成立] 取反后成立"]
+    assert runner._pending_sub_results[-1]["desc"] == "[条件成立] 取反后成立"
 
 
 def test_if_then_branch_failure_propagates(runner):
@@ -798,12 +843,12 @@ def test_branch_substeps_are_labelled_in_results(runner):
     runner._execute({"if": "不存在的文本",
                      "then": [{"desc": "不该走", "click": [10, 20]}],
                      "else": [{"desc": "不成立时点一下", "click": [77, 88]}]})
-    assert [r["desc"] for r in runner._pending_sub_results] == ["[条件不成立] 不成立时点一下"], \
+    assert runner._pending_sub_results[-1]["desc"] == "[条件不成立] 不成立时点一下", \
         runner._pending_sub_results
     assert runner.d.clicked_at == (77, 88)
 
     # if not 同样按"取反后"的分支标注
     runner._execute({"if not": "不存在的文本",
                      "then": [{"desc": "取反后成立", "click": [33, 44]}]})
-    assert [r["desc"] for r in runner._pending_sub_results] == ["[条件成立] 取反后成立"], \
+    assert runner._pending_sub_results[-1]["desc"] == "[条件成立] 取反后成立", \
         runner._pending_sub_results

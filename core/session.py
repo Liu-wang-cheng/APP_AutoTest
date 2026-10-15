@@ -962,6 +962,7 @@ def _run_one(d, cfg, item, on_progress, should_cancel, collect=None,
                               cancel_check=should_cancel)
         if shot_subdir:
             runner.shot_subdir = shot_subdir   # 截图进本轮的「用例名-第N次」目录(见上)
+            runner.shot_prefix = "前置"        # 与用例步骤同目录, 靠前缀避免同名覆盖
         # ★ 每一步都留截图(用户 2026-10-13: "还有一些前置的自定义步骤没有截图"):
         #   以前只有点击类/显式 screenshot 的步骤才截, wait/assert/if 这些子步骤
         #   什么都没有 —— 与"前置也默认截图"的初衷(2.0.6)相悖。

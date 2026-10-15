@@ -549,6 +549,18 @@ def test_add_precondition_menu_lists_all_types(qapp, monkeypatch, tmp_path):
 
 # ── 前置条件可以写「用例步骤」(用户要求: 和添加测试步骤一样) ──
 
+def test_precondition_shots_get_prefix(tmp_path):
+    """★ 前置自定义步骤的截图带「前置」文件名前缀(用户 2026-10-15: 与用例步骤同目录,
+    都是 stepNN_描述.png 的话, 序号+描述恰好相同时会互相覆盖)。"""
+    items = [{"type": "steps", "name": "自定义步骤", "enabled": True,
+              "steps": [{"desc": "等一下", "wait": 0.05}]}]
+    dev = _ShotDev()
+    res = session.prepare_items(dev, {"runner": {"step_interval": 0}}, items,
+                                shot_subdir="甲用例_r20260101_090000_第1次")
+    shot = res[0]["sub"][0].get("screenshot", "")
+    assert shot and os.path.basename(shot).startswith("前置step"), shot
+
+
 def test_precondition_steps_carry_elapsed(tmp_path):
     """★ 前置子步骤也要有耗时(用户 2026-10-13: "前置执行时的if子步骤为何没有算耗时")。
 

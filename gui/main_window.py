@@ -4233,6 +4233,7 @@ class MainWindow(QMainWindow):
         repeat = self.repeat_spin.value()
         self.result_table.setRowCount(0)
         self._running_row = None
+        self._sub_rows = {}          # 子步骤行索引(sub_id → 行号), 开跑时清空
         self._set_preview_placeholder("单击结果行显示对应截图\n点击图片可放大查看")
 
         # ★ Qt 标准所有权(审查 2026-10-12 #23): worker 挂到窗口下 + run() 返回后
@@ -4384,9 +4385,20 @@ class MainWindow(QMainWindow):
         # ★ if 子步骤(sub=True)一律**追加新行**, 不占用父 if 的"执行中"占位 ——
         #   否则父行会被第一个子步骤顶掉、最后追加到子步骤后面(用户 2026-10-15)
         if result.get("sub"):
-            row = self.result_table.rowCount()
-            self.result_table.insertRow(row)
-            self._fill_result_row(row, result)
+            # ★ 按 sub_id 就地更新(用户 2026-10-15): 嵌套 if 这类**容器型子步骤**会先
+            #   推一行「执行中」(保证它的子步骤排在它后面), 跑完再推一次 —— 必须原地
+            #   改写而不是再插一行。没有 sub_id 的(旧路径)照旧追加。
+            sid = result.get("sub_id")
+            rows = getattr(self, "_sub_rows", None)
+            if rows is None:
+                rows = self._sub_rows = {}
+            row = rows.get(sid) if sid is not None else None
+            if row is None or row >= self.result_table.rowCount():
+                row = self.result_table.rowCount()
+                self.result_table.insertRow(row)
+                if sid is not None:
+                    rows[sid] = row
+            self._fill_result_row(row, result, running=bool(result.get("running")))
             self.result_table.resizeRowsToContents()
             self.result_table.scrollToBottom()
             return
