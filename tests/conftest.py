@@ -300,6 +300,23 @@ def _reset_status_words():
     session.reset_status_words()
 
 
+@pytest.fixture(autouse=True)
+def _reset_template_app_group():
+    """★ APP 组上下文在每个测试前后还原(结构整理 2026-10-15 —— 补上此前漏掉的一处全局)。
+
+    `core.vision._template_app_group` 是**模块级全局**: 界面/引擎在跑用例前会
+    `set_template_app_group(组名)`, 而测试里谁 set 了就一直留给下一个测试 ——
+    实测踩到: test_preconditions 把组设成「组A」后, 后面 test_actions_basic 的
+    截图断言里路径变成了 `Test_cases/组A/...`(它按"未分组"断言), 全量跑红、单跑绿。
+
+    与 _reset_status_words 同一类问题、同一种修法: 前后都还原, 谁也别留给谁。
+    """
+    from core import vision
+    vision.set_template_app_group("")
+    yield
+    vision.set_template_app_group("")
+
+
 @pytest.fixture(scope="session", autouse=True)
 def _isolate_log_file(tmp_path_factory):
     """测试期日志写到临时文件, 不污染用户的 reports/test.log。

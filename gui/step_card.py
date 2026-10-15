@@ -343,6 +343,12 @@ class StepCard(QFrame):
         adv_grid.setHorizontalSpacing(10)
         adv_grid.setVerticalSpacing(5)
         adv_fields = [f for f in schema.GENERIC_FIELDS if f["key"] != "desc"]
+        # ★ if/if not 步骤的 `timeout` 语义是**检测次数**(两轮×五次=10, 上限 120, 见
+        #   basic._if_checks)而不是秒 —— 名字是历史包袱, 但标签要如实(用户 2026-10-15:
+        #   "把遗留项优化一下")。纯文案, 引擎语义一字未动。
+        if action and action["key"] in ("if", "if not"):
+            adv_fields = [dict(f, label="检测次数", hint="默认 10 = 两轮×每轮五次; 上限 120")
+                          if f["key"] == "timeout" else f for f in adv_fields]
         # ★ 点击类动作: "自动截图"**强制开启且不可关闭**(用户要求 2026-10-11:
         #   "点击操作默认要截图, 不可以关闭") —— 报告里必须能看到"当时点在哪"。
         force_shot = bool(action) and reg.is_click_action(action["key"])

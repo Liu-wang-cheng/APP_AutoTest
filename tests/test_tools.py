@@ -124,3 +124,20 @@ def test_app_entry_also_guards_stdout_encoding():
                    "check_render.py"):
         text = open(os.path.join(ROOT, "tools", script), encoding="utf-8").read()
         assert "force_utf8_stdout" in text, f"tools/{script} 没有做输出编码兜底"
+
+
+def test_每个工具脚本都在_tools_README_里登记():
+    """★ 结构守护(2026-10-15): tools/ 下不许再出现"0 引用又没人知道用途"的脚本。
+
+    背景: 结构调整时发现 6 个脚本全仓 0 引用(既没进 CI/build.bat, 也没在文档里出现),
+    谁也说不清哪个还在用 —— 于是新建 tools/README.md 把 13 个脚本分成"自动流程调用"与
+    "手动排查用"两节。这条守护保证: 新增脚本必须顺手登记一行, 老的也不会被悄悄删掉。
+    """
+    readme = open(os.path.join(ROOT, "tools", "README.md"), encoding="utf-8").read()
+    scripts = sorted(f for f in os.listdir(os.path.join(ROOT, "tools"))
+                     if f.endswith(".py"))
+    assert scripts, "tools/ 下没有脚本?"
+    missing = [f for f in scripts if f not in readme]
+    assert not missing, (
+        f"这些脚本没在 tools/README.md 里登记用途: {missing} —— "
+        "请在对应小节补一行(自动流程调用 / 手动排查用)")

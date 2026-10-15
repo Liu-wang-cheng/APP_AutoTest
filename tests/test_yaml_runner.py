@@ -127,7 +127,7 @@ def test_yaml_case(device, report, module, case_name, steps, priority, case_wait
     # ★ 失败截图追加到报告: 用引擎失败那一刻留下的**那一张**(用户 2026-10-15: "失败截图
     #   统一存用例失败时的那一张, 并且和测试步骤截图放同一个目录") —— 它就在本轮截图目录里,
     #   要么是失败步骤自己的证据图, 要么是补拍的 失败截图.png; 不再另存 debug/failures。
-    if not passed and cfg["runner"].get("screenshot_on_fail", True):
+    if not passed:
         shot = next((r.get("screenshot") for r in reversed(runner.results)
                      if not r.get("passed") and r.get("screenshot")), "")
         if shot:

@@ -353,7 +353,9 @@ def step_summary(step):
     if step.get("retry"):
         badges.append(f"↻{step['retry']}")
     if step.get("timeout"):
-        badges.append(f"⏱{step['timeout']}s")
+        # ★ if 的 timeout 是"检测次数"不是秒(见 basic._if_checks) —— 徽标单位跟着动作走
+        _unit = "次" if action_key in ("if", "if not") else "s"
+        badges.append(f"⏱{step['timeout']}{_unit}")
     if badges:
         main += "  " + " ".join(badges)
     return main

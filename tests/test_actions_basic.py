@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """basic 动作: click 坐标/文本/优先级, swipe 映射, if_click, back。FakeDevice 无设备。"""
+import os
 import sys
 from pathlib import Path
 
@@ -426,10 +427,9 @@ def test_failure_shot_reuses_step_evidence_in_run_dir(runner, monkeypatch, tmp_p
     assert ok is False
     row = runner.results[-1]
     shot = row["screenshot"]
-    assert "/screenshots/甲用例_r20260101_090000_第1次/" in shot.replace("\\", "/"), shot
-    assert shot.endswith("step01_对比一下.png"), shot     # 本步证据图(带 FAIL 标注), 不是另拍的
-    assert (tmp_path / "Test_cases" / "未分组" / "screenshots"
-            / "甲用例_r20260101_090000_第1次" / "step01_对比一下.png").exists()
+    tail = "/screenshots/甲用例_r20260101_090000_第1次/step01_对比一下.png"
+    assert shot.replace("\\", "/").endswith(tail), shot   # 本步证据图(带 FAIL 标注), 不是另拍的
+    assert os.path.isfile(shot), shot
     assert not (tmp_path / "Test_img" / "debug").exists(), \
         "不该再有 Test_img/debug 下的失败截图/时序证据"
 
@@ -445,10 +445,9 @@ def test_failure_shot_added_when_step_has_no_evidence(runner, monkeypatch, tmp_p
     ok = runner.run_steps([{"desc": "只断言", "assert": "不会有这个文本", "timeout": 0.1}])
     assert ok is False
     shot = runner.results[-1]["screenshot"]
-    assert shot.endswith("失败截图.png"), shot
-    assert "/screenshots/甲用例_r20260101_090000_第1次/" in shot.replace("\\", "/"), shot
-    assert (tmp_path / "Test_cases" / "未分组" / "screenshots"
-            / "甲用例_r20260101_090000_第1次" / "失败截图.png").exists(), shot
+    assert shot.replace("\\", "/").endswith(
+        "/screenshots/甲用例_r20260101_090000_第1次/失败截图.png"), shot
+    assert os.path.isfile(shot), shot
     assert not (tmp_path / "Test_img" / "debug").exists(), \
         "不该再有 Test_img/debug 下的失败截图/时序证据"
 

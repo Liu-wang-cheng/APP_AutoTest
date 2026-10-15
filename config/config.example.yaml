@@ -5,6 +5,9 @@ app:
   name: 涂鸦智能          # 被测APP名(包名自动检测依据,中英文均可)
   package: com.tuya.smartiot
   main_activity: com.smart.ThingSplashActivity
+  # 模板文件前缀(如 涂鸦 → 模板存成 涂鸦_开始清扫.png; 换 APP 只改这里+换模板, 用例不动)。
+  # 留空 = 模板名不加前缀(与不写这个键等价); 也可按 APP 组放 Test_cases/<组>/templates/
+  template_prefix: ""
 
 # APP 内要进入的设备页面名称(前置阶段自动点击进入),留空则不进设备页
 target_device: SE3L
@@ -19,7 +22,6 @@ runner:
   step_interval: 3        # 每步间隔秒
   default_timeout: 30     # assert 超时(0 = 无限等待)
   click_timeout: 10       # click 超时
-  screenshot_on_fail: true
   # trace_limit: 8        # 失败回溯保留的步数
   # ★ 故障/空闲哨兵(2026-10-13): 文本等待与断言轮询时, 页面出现故障词 → 直接报错
   #   (报错和日志带**整段原文**); 出现空闲词 → 直接判不成立, 不再傻等满超时。
@@ -52,3 +54,7 @@ update:
   #   - name: ghfast
   #     base_url: "https://ghfast.top/https://raw.githubusercontent.com/{repo}/main"
   #     download_prefix: "https://ghfast.top/"
+
+# 前置条件(全局兜底列表): 各 APP 组的前置在 Test_preconditions/<组>.yaml(界面里编辑),
+# 这份是**没有组配置时**的兜底, 也可直接写在这里。留空 = 未配置(调用方用内置默认)。
+preconditions: []
