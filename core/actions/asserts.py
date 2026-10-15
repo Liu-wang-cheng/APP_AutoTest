@@ -10,7 +10,6 @@ from PIL import Image
 
 from core import registry as reg
 from core.driver import BASE_DIR, split_texts
-from core.actions.basic import parse_xy
 from core.logger import get_logger
 
 log = get_logger()
@@ -167,10 +166,8 @@ def preview_region(frame, region):
     d = os.path.join(BASE_DIR, "Test_img", "debug", "compare_preview")
     os.makedirs(d, exist_ok=True)
     path = os.path.join(d, time.strftime("%H%M%S") + "_预览.png")
-    ok, buf = cv2.imencode(".png", vis)
-    if ok:
-        with open(path, "wb") as f:
-            f.write(buf.tobytes())
+    from core import imgio
+    imgio.imwrite(path, vis)        # 中文路径安全的写图(统一走 core/imgio)
     # ★ 预览图到上限就循环覆盖(用户 2026-10-15: "对比范围预览图的数量是不是也没做限制"):
     #   每点一次「预览范围」存一张, 以前只在启动时按"每目录 200 个"兜底 —— 一次编辑
     #   会话连点几十次就攒几十张, 而图当场就在弹窗里看过了。删最旧的, 只留最新几张。
@@ -197,10 +194,10 @@ def compare_screen(runner, baseline, threshold=0.6, inverse=False, region=None):
     check_threshold(threshold, inverse)
     screen = runner.d.screenshot(format="opencv")
     cur = cv2.cvtColor(screen, cv2.COLOR_BGR2GRAY)
-    # 基准图与 screenshot 步骤的保存规则一致: screenshots/ 前缀补 Test_img/
-    if not os.path.isabs(baseline):
-        prefix = "Test_img" if baseline.startswith("screenshots/") else ""
-        baseline = os.path.join(BASE_DIR, prefix, baseline)
+    # 基准图与 screenshot 步骤的保存规则一致 —— 统一走 core.paths(结构整理 2026-10-15:
+    # 这条" screenshots/ 前缀补 Test_img/"规则原先在这里、runner 里各写了一遍)
+    from core import paths as _paths
+    baseline = _paths.resolve_path(baseline)
     try:
         ref = np.array(Image.open(baseline).convert("L"))
     except Exception as e:
@@ -228,12 +225,9 @@ def compare_screen(runner, baseline, threshold=0.6, inverse=False, region=None):
             #   否则会被重拍成一张**没有标注**的图, 对比结果就看不到了
             vis = screen.copy()     # 标注底图用**彩色**BGR(灰度图上矩形/文字没有颜色)
             path = runner._step_shot_path(getattr(runner, "_cur_step_desc", "") or "compare")
-            os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-            ok, out = cv2.imencode(".png", vis)
-            if not ok:
+            from core import imgio
+            if not imgio.imwrite(path, vis):      # 中文路径安全的写图
                 return
-            with open(path, "wb") as f:
-                f.write(out.tobytes())
 
             def _draw(img):
                 _draw_region_annotation(

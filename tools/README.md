@@ -1,0 +1,35 @@
+# tools/ 一览
+
+两类脚本:**自动流程里的**(改了要连带跑测试)和**手动排查用的**(平时不动)。
+结构整理 2026-10-15: 之前有 6 个脚本全仓 0 引用, 谁也说不清哪个还在用 —— 这里一次写清。
+
+## 一、自动流程调用(改这些要跑 `pytest tests/test_tools.py tests/test_release.py`)
+
+| 脚本 | 谁在用 | 作用 |
+|---|---|---|
+| `verify_package.py` | `build.bat` | 打包后校验产物完整性(exe / _internal / 关键数据文件在不在) |
+| `release.py` | `build.bat`、`docs/RELEASE.md` | 发版: 版本一致性闸门 → 走 CI → 传 GitHub Release → 更新 version.json → 打 tag → 校验下载链路 |
+| `verify_release.py` | 上面 release 的收尾 | 站在**用户视角**验证: 取清单 → sha256 → 资产 → zip 头 |
+| `check_compat.py` | 测试参数化调用 | 兼容性检查(依赖/接口/配置项) |
+| `check_render.py` | 测试参数化调用 | 离屏渲染 GUI, 确认界面能起来 |
+| `verify_update_download.py` | 测试参数化调用 | 校验更新包下载链路 |
+
+## 二、手动排查用(不参与自动流程, 但要留着 —— 真机调模板/调用例时会用)
+
+| 脚本 | 什么场景用 |
+|---|---|
+| `dump_screen_texts.py` | 真机: 把当前屏幕的无障碍树文本 + OCR 文本全打出来(写用例/定断言前先看页面上到底有什么) |
+| `recapture_template.py` | 真机: 从当前屏幕裁模板图(`Test_cases/<组>/templates/`) |
+| `check_templates.py` | 离线: 扫用例引用的模板图是否都存在(改名/挪目录后快速自查) |
+| `validate_cases.py` | 离线: 用例 YAML 静态校验(键名/取值/阈值范围), 也可以 `python tools/validate_cases.py` 单独跑 |
+| `check_env.py` | 离线: 运行环境自检(Python/依赖/ADB/设备) |
+| `check_update_e2e.py` | 手动: 起本地假更新源, 端到端走一遍"检查更新 → 下载 → 校验" |
+| `rehearse_autoupdate.py` | 手动: 用真实安装目录彩排一次自动更新(替换/回滚), **不碰线上** |
+
+## 三、约定
+
+- 新脚本请在上面对应小节登记一行, 不要让它变成"0 引用的神秘文件";
+- 只在"自动流程"小节里的脚本才允许被 CI / build.bat 依赖;
+- 工具脚本**只调用 core 的公开 API**(不要 `from core.xxx import _private`), 唯一例外见
+  `check_compat.py` / `check_render.py` / `validate_cases.py` 对 `gui.schema` 的引用 ——
+  它们本来就是"校验 GUI"的工具, 方向合理。

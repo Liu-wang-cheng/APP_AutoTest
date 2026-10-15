@@ -14,7 +14,7 @@ from core import registry as reg
 from core import ocr
 import core.actions  # noqa: F401  导入即注册全部动作(见 core/actions/__init__.py)
 from core.driver import BASE_DIR, split_texts
-from core.session import (text_present, text_present_detail, warm_webview,  # noqa: E501  判断统一入口 + WebView 预热
+from core.session import (text_present_detail, warm_webview,  # noqa: E501  判断统一入口 + WebView 预热
                           scan_status_words, set_status_words, FaultStateError)
 from core.logger import get_logger
 from vlm.backend import VisionRouter
@@ -655,21 +655,13 @@ class ActionRunner:
     #   —— 带标记的步骤截图是唯一证据,见 _mark_last_click_on()。
 
     def _annotate_shot(self, path, draw):
-        """在已落盘的截图上作标注(中文路径安全读写); 失败不影响证据本身"""
-        try:
-            import cv2
-            import numpy as np
-            buf = np.fromfile(path, dtype=np.uint8)   # 中文路径须用 imdecode
-            img = cv2.imdecode(buf, cv2.IMREAD_COLOR)
-            if img is None:
-                return
-            draw(img)
-            ok, out = cv2.imencode(".png", img)
-            if ok:
-                with open(path, "wb") as f:
-                    f.write(out.tobytes())
-        except Exception:
-            pass
+        """在已落盘的截图上作标注(中文路径安全读写); 失败不影响证据本身
+
+        ★ 读写统一走 core/imgio(结构整理 2026-10-15): 这段 imdecode/imencode 原先在
+          本文件里逐行重复了两份(_mark_last_click_on 里还有一份)。
+        """
+        from core import imgio
+        imgio.annotate(path, draw)
 
     def _draw_swipe_marker(self, img, sx, sy, ex, ey):
         """滑动路径: 起点**实心圆**(出发) + 青色**箭头线**指向终点(区分点击的红圈)"""
@@ -709,8 +701,8 @@ class ActionRunner:
 
     def _step_shot_path(self, step_desc=""):
         """步骤截图的标准路径: Test_cases/<组>/screenshots/<shot_subdir>/stepNN_<desc>.png"""
-        from core import vision as _vision
-        safe_desc = re.sub(r'[\\/:*?"<>|\s]+', "_", str(step_desc))[:30]
+        from core import paths as _paths
+        safe_desc = _paths.safe_name(step_desc, 30)
         idx = len(self.results) + 1
         # ★ 目录名要能区分**第几次执行**: 用 shot_subdir(worker 传的"用例名-第N次"),
         #   否则同一个用例跑多轮时, 每轮的 step01_xxx.png 是**同一个路径** ——
@@ -721,15 +713,8 @@ class ActionRunner:
         #   两边都是 stepNN_描述.png —— 序号与描述恰好相同时会互相覆盖。前置侧给
         #   "前置" 前缀, 同目录不冲突(文件仍随本轮一起被循环清理)。
         file_prefix = getattr(self, "shot_prefix", "")
-        path = (f"Test_cases/{_vision.current_app_group() or '未分组'}/"
-                f"screenshots/{sub}/"
-                f"{file_prefix}step{idx:02d}_{safe_desc}.png")
-        # screenshots/ 开头的路径补全 Test_img/ 前缀(reports/ 等其他路径原样)
-        if path.startswith("screenshots/"):
-            path = os.path.join(BASE_DIR, "Test_img", path)
-        elif not os.path.isabs(path):
-            path = os.path.join(BASE_DIR, path)
-        return path
+        return os.path.join(_paths.shot_dir(sub),
+                            f"{file_prefix}step{idx:02d}_{safe_desc}.png")
 
     #: 用例失败时那张截图的固定文件名(和步骤截图同目录)
     FAIL_SHOT_NAME = "失败截图.png"
@@ -801,20 +786,9 @@ class ActionRunner:
         lc = getattr(self, "last_click", None)
         if not lc or not path:
             return
+        from core import imgio
         try:
-            import cv2
-            import numpy as np
-            buf = np.fromfile(path, dtype=np.uint8)   # 中文路径须用 imdecode
-            img = cv2.imdecode(buf, cv2.IMREAD_COLOR)
-            if img is None:
-                return
-            self._draw_click_marker(img, lc[0], lc[1])
-            ok, out = cv2.imencode(".png", img)
-            if ok:
-                with open(path, "wb") as f:
-                    f.write(out.tobytes())
-        except Exception:
-            pass
+            imgio.annotate(path, lambda img: self._draw_click_marker(img, lc[0], lc[1]))
         finally:
             self.last_click = None
 
@@ -1105,11 +1079,9 @@ class ActionRunner:
             else:
                 # ★ 开关模式(True): 截图进 APP 组目录(用户要求: 和用例/模板放一起)
                 path = self._step_shot_path(step.get("desc") or "")
-            # screenshots/ 开头的路径补全 Test_img/ 前缀(reports/ 等其他路径原样)
-            if path.startswith("screenshots/"):
-                path = os.path.join(BASE_DIR, "Test_img", path)
-            elif not os.path.isabs(path):
-                path = os.path.join(BASE_DIR, path)
+            # screenshots/ 开头补 Test_img/、其余相对路径补 BASE_DIR —— 统一走 core.paths
+            from core import paths as _paths
+            path = _paths.resolve_path(path)
             try:
                 os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
                 if click_step or "screenshot" in step:

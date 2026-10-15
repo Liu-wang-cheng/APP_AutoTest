@@ -265,18 +265,6 @@ def _base_url_of(mirror):
     return str(getattr(mirror, "base_url", "") or "")
 
 
-def _name_of(mirror):
-    if isinstance(mirror, dict):
-        return str(mirror.get("name") or _base_url_of(mirror))
-    return str(getattr(mirror, "name", "") or _base_url_of(mirror))
-
-
-def _prefix_of(mirror):
-    if isinstance(mirror, dict):
-        return str(mirror.get("download_prefix") or "")
-    return str(getattr(mirror, "download_prefix", "") or "")
-
-
 def is_direct_github(base_url):
     """是否 GitHub 直连(权威无缓存)。
 

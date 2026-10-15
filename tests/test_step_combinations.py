@@ -182,7 +182,7 @@ def test_wait_for_alone_still_runs(monkeypatch):
 def test_card_summary_and_engine_pick_the_same_action(step):
     from gui import main_window as mw
     engine = reg.primary_action_key(step)
-    shown = S.primary_action_key(step)
+    shown = S.display_action_key(step)
     if engine:
         assert shown == engine, f"卡片挑的 {shown} != 引擎执行的 {engine}"
     # 卡片 chip 与摘要也走同一判据

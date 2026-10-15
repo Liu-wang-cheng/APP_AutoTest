@@ -2,7 +2,6 @@
 
 线程内不碰任何控件,统一走 Qt 信号跨线程刷新界面。
 """
-import logging
 import os
 import re
 import threading
@@ -13,7 +12,7 @@ from PySide6.QtCore import QThread, Signal
 
 from core import session
 from core.runner import ActionRunner, UserStopped
-from core.driver import BASE_DIR, load_config
+from core.driver import load_config
 from core.excel_report import ExcelReport, case_sheet_name
 from core.logger import get_logger
 
@@ -43,21 +42,6 @@ def resolve_group_preconditions(pre_by_group, group, fallback):
       实测: ZZZ 组界面显示 0 条前置, 实际跑了 1 条(可能是重启 APP / 等充电这类重动作)。
     """
     return pre_by_group[group] if group in (pre_by_group or {}) else fallback
-
-
-class _QtLogHandler(logging.Handler):
-    """把 vacuum_test 日志流转发到 Qt 信号(跨线程自动排队)"""
-
-    def __init__(self, emit_fn):
-        super().__init__(logging.INFO)
-        self.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s", "%H:%M:%S"))
-        self._emit_fn = emit_fn
-
-    def emit(self, record):
-        try:
-            self._emit_fn(self.format(record))
-        except Exception:
-            pass
 
 
 def _shot_dir_name(case_key, run_no, run_tag):
@@ -204,14 +188,16 @@ class RunWorker(QThread):
                              "elapsed": sr.get("elapsed")})
 
     def _pre_screenshot(self, d, sheet, desc):
-        """给一条前置项截一张图(尽力而为, 失败只告警) —— 返回路径或空串"""
+        """给一条前置项截一张图(尽力而为, 失败只告警) —— 返回路径或空串
+
+        ★ 目录与文件名清洗都走 core.paths(结构整理 2026-10-15): 这里原是第二套
+          路径拼接 + 第二套文件名清洗(字符黑名单法, 截 40 字), 与 runner 的正则法
+          对同一个描述会给出**不同的文件名**。
+        """
         try:
-            from core import vision as _vision
-            bad = set("\\/:*?\"<>|")
-            safe = "".join(c for c in str(desc) if c not in bad)[:40]
-            path = os.path.join(BASE_DIR, "Test_cases",
-                                _vision.current_app_group() or "未分组", "screenshots",
-                                str(sheet), f"前置_{safe}.png")
+            from core import paths as _paths
+            path = os.path.join(_paths.shot_dir(sheet),
+                                f"前置_{_paths.safe_name(desc)}.png")
             os.makedirs(os.path.dirname(path), exist_ok=True)
             d.screenshot(path)
             return path
@@ -439,11 +425,9 @@ class RunWorker(QThread):
                     #   一旦首轮开始前就停止, case_name 未赋值直接 NameError(被吞);
                     #   defer 按用例键去重(bootstrap 里同名只排一次)。
                     try:
-                        from core import bootstrap as _bs, vision as _vs
+                        from core import bootstrap as _bs, paths as _paths
                         _bs.trim_case_screenshots(
-                            os.path.join(BASE_DIR, "Test_cases",
-                                         _vs.current_app_group() or "未分组",
-                                         "screenshots"),
+                            _paths.group_screenshots_dir(),
                             # ★ 必须传**用例键**(= _shot_case_of 的返回值):
                             #   目录名已是「用例_r<运行标签>_第N次」, 再按旧的
                             #   "-第N次" 去 rsplit 会得到整串 → 永远匹配不上目录 →

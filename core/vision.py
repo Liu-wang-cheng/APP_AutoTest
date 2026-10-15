@@ -59,11 +59,6 @@ def group_templates_dir(group):
     return os.path.join(group_case_dir(group), "templates")
 
 
-def group_screenshots_dir(group):
-    """组截图目录: Test_cases/<组>/screenshots/"""
-    return os.path.join(group_case_dir(group), "screenshots")
-
-
 def set_template_app_group(group):
     """设置当前 APP 组(执行开始时调用): 模板/截图都取组目录"""
     global _template_app_group

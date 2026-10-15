@@ -195,17 +195,6 @@ _UNITS = (
 _NUM_HEAD = re.compile(r"^\s*(\d[\d,]*(?:\.\d+)?)\s*(.*)$")
 
 
-def _to_float(text):
-    """'1,300' / '25' → float(去千分位); 不是纯数字返回 None"""
-    m = re.match(r"^\s*(\d[\d,]*(?:\.\d+)?)\s*$", str(text or ""))
-    if not m:
-        return None
-    try:
-        return float(m.group(1).replace(",", ""))
-    except ValueError:
-        return None
-
-
 def _row_of(nodes, box, tol=28):
     """与 box 同一行的文本(垂直中心相差不超过 tol)"""
     cy = (box[1] + box[3]) / 2

@@ -42,10 +42,10 @@ BASE_DIR_MODULES = (
     "core.actions.asserts",
     "core.actions.map_ops",
     "core.excel_report",
+    "core.paths",
     "core.runner",
     "core.vision",
     "gui.main_window",
-    "gui.runner_thread",
 )
 
 

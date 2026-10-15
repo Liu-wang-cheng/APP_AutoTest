@@ -412,8 +412,8 @@ def test_failure_shot_reuses_step_evidence_in_run_dir(runner, monkeypatch, tmp_p
     """
     import cv2
     import numpy as np
-    import core.runner as runner_mod
-    monkeypatch.setattr(runner_mod, "BASE_DIR", str(tmp_path))
+    import core.paths as _paths
+    monkeypatch.setattr(_paths, "BASE_DIR", str(tmp_path))
     runner.shot_subdir = "甲用例_r20260101_090000_第1次"
     runner.d = _FrameDev()
 
@@ -437,8 +437,8 @@ def test_failure_shot_reuses_step_evidence_in_run_dir(runner, monkeypatch, tmp_p
 def test_failure_shot_added_when_step_has_no_evidence(runner, monkeypatch, tmp_path):
     """★ 纯断言类步骤失败时**补拍一张**, 名字固定 `失败截图.png`, 位置同样在本轮截图目录
     —— 保证"失败时一定有一张图", 且和步骤截图在一起(不再有时序证据/逐步失败图)。"""
-    import core.runner as runner_mod
-    monkeypatch.setattr(runner_mod, "BASE_DIR", str(tmp_path))
+    import core.paths as _paths
+    monkeypatch.setattr(_paths, "BASE_DIR", str(tmp_path))
     runner.shot_subdir = "甲用例_r20260101_090000_第1次"
     runner.d = _FrameDev()
 

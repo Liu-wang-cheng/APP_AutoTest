@@ -68,7 +68,6 @@ def begin_run():
 #: 结束后先等这么久, 期间没有新运行才真正补做 —— 用户跑完马上又点「执行」的话,
 #: 清理会再次让路(待办保留, 下次 end_run 再排)。改小可加速测试。
 FLUSH_IDLE_DELAY = 120.0
-_flush_timer = None
 
 
 def end_run(token=None):
@@ -93,18 +92,17 @@ def _schedule_idle_flush():
     宽限期内新运行开始, 定时器到点时 is_busy → 直接跳过(待办保留, 下次 end_run
     再排); 真空闲才 flush。多个定时器并发无害(_flush_now 自身串行 + 查闸门)。
     """
-    global _flush_timer
+    # ★ 不记录计时器句柄(结构整理 2026-10-15): 原先这里存了个模块级 `_flush_timer`,
+    #   但没有任何地方读它, 而 `_idle_flush_fire` 里那句 `_flush_timer = None` 还漏了
+    #   global(写的是局部变量) —— 留着只会让人以为"能查/能取消这个计时器"。真需要
+    #   收尾, 看的是 _flushing(见 reset 的等待逻辑)。
     t = threading.Timer(FLUSH_IDLE_DELAY, _idle_flush_fire)
     t.daemon = True
     t.name = "idle-cleanup-wait"
-    with _lock:
-        _flush_timer = t
     t.start()
 
 
 def _idle_flush_fire():
-    with _lock:
-        _flush_timer = None
     if not _active:
         _flush_in_thread()
     # 忙(宽限期内又开始运行) → 待办原样保留, 下一次 end_run 再排

@@ -499,14 +499,6 @@ def _clamp_streak(n):
     return max(1, min(n, 10))
 
 
-def get_status_streaks():
-    """返回 (fault_streak, idle_streak) — GUI 弹窗预填/工具栏展示用"""
-    return (
-        _status_words.get("fault_streak", DEFAULT_FAULT_STREAK),
-        _status_words.get("idle_streak", DEFAULT_IDLE_STREAK),
-    )
-
-
 def reset_status_words():
     """把状态词与 streak 全部还原成内置默认(测试 conftest 用, 防测试间状态污染)"""
     _status_words.clear()

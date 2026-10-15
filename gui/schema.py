@@ -299,27 +299,27 @@ def validate_step(step):
     return errors
 
 
-def primary_action_key(step):
-    """这一步**会被执行**的动作键 —— 卡片 chip 与摘要都用它, 保证显示=实际执行。
+def display_action_key(step):
+    """这一步在**界面上**该显示成哪个动作键 —— 卡片 chip 与摘要都用它。
 
-    ★ 判据必须与引擎一致(core.registry 的优先级顺序)。曾经这里(以及卡片)取的是
-      dict 里第一个键, 而引擎按优先级取 —— `{assert: .., click: ..}` 会显示"断言"
-      却执行"点击"(2026-10-11 实测)。
-    ★ grab/match 只在 schema 里(引擎不把它们当主动作), 所以引擎判据返回空时按键序兜底。
+    ★ 与引擎判据的关系(结构整理 2026-10-15): 引擎侧是
+      `core.registry.primary_action_key` —— 只看**注册过的主动作**(grab/match 之类
+      并存键不算)。这里**先问引擎**, 引擎答不上来(schema 里有、引擎不当主动作的键,
+      如只有 `grab: 面积` 的一步)才按键序在 schema 里兜底, 好让这一步在卡片上
+      仍认得出来。
+    ★ 曾经这个函数与引擎那个**同名**(都叫 primary_action_key), 语义却不同 ——
+      引错一个就会显示"断言"而实际执行"点击"(2026-10-11 实测)。故改名区分。
     """
-    try:
-        from core import registry as reg          # 局部导入: schema 也要能单独被工具导入
-        keys = reg.main_action_keys(step)
-        if keys:
-            return keys[0]
-    except Exception:
-        pass
+    from core import registry as reg          # 局部导入: schema 也要能单独被工具导入
+    key = reg.primary_action_key(step)
+    if key:
+        return key
     return next((k for k in step if k in ACTION_BY_KEY), None)
 
 
 def step_summary(step):
     """生成步骤卡片的一行摘要(优先显示步骤说明 desc)"""
-    action_key = primary_action_key(step)
+    action_key = display_action_key(step)
     if action_key is None:
         if "wait" in step and len(step) <= 2:
             return f"延时等待 {step['wait']:g}s"

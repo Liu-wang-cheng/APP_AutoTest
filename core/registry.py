@@ -8,10 +8,6 @@ runner._execute 找「第一个命中的动作键」执行。新增动作只需�
 from dataclasses import dataclass
 from typing import Callable
 
-# 无参数动作键: GUI 序列化时保证标量 true(引擎按 True 语义处理)
-FIXED_BOOL_DEFAULTS = {"back", "room_zones", "split_zone", "merge_zones",
-                       "latest_record", "wait_loading"}
-
 
 @dataclass
 class Action:
