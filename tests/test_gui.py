@@ -99,6 +99,71 @@ def test_if_parent_row_appears_before_substeps(win):
     assert texts == ["判断是否需要清洁", "[条件成立] 点开始清扫", "[条件成立] 等一下"],         f"父 if 行必须在子步骤之前: {texts}"
 
 
+def test_stopped_preconditions_are_not_shown(qapp, monkeypatch, tmp_path):
+    """★ 停止时**未执行到**的前置项不显示(用户 2026-10-15: "停止后后续测试项不是不
+    应该显示出来吗"): 会话层仍记录 skipped 供内部判断, 但结果表/报告不落行。"""
+    import types
+
+    import uiautomator2 as u2
+
+    from core.excel_report import ExcelReport
+    from gui import runner_thread as rt
+    from gui.runner_thread import RunWorker
+
+    d = tmp_path / "Test_cases" / "组甲"
+    d.mkdir(parents=True)
+    case_file = d / "a.yaml"
+    case_file.write_text("module: 组甲\ncases:\n  - name: 冒烟\n    steps:\n"
+                         "      - desc: 等一下\n        wait: 0.1\n", encoding="utf-8")
+    monkeypatch.setattr(u2, "connect",
+                        lambda dev: types.SimpleNamespace(implicitly_wait=lambda t: None))
+    monkeypatch.setattr(rt.session, "restart_app", lambda *a, **k: None)
+    monkeypatch.setattr(rt.session, "get_battery_level", lambda d_: 50)
+    monkeypatch.setattr(rt, "load_config",
+                        lambda: {"runner": {"step_interval": 0}, "app": {"package": "p"},
+                                 "target_device": "SE3L"})
+    report_path = tmp_path / "rep.xlsx"
+    monkeypatch.setattr(rt, "ExcelReport", lambda: ExcelReport(path=str(report_path)))
+
+    def _prep(d_, cfg_, items, on_progress=None, should_cancel=None,
+              on_item_done=None, shot_subdir=None, on_step_start=None):
+        out = [{"key": "pre0", "desc": "重启 APP", "ok": True, "elapsed": 0.1, "sub": []}]
+        on_item_done(out[0])
+        # 用户此刻点了停止 → 剩余项被标 skipped(会话层行为)
+        for i in (1, 2):
+            r = {"key": f"pre{i}", "desc": f"没跑到的项{i}", "ok": False,
+                 "elapsed": 0.0, "sub": [], "skipped": True}
+            on_item_done(r)                 # 回调照发, 但界面/报告都不该落行
+            out.append(r)
+        return out
+    monkeypatch.setattr(rt.session, "prepare_items", _prep)
+
+    steps = []
+    w = RunWorker("fake-dev", [str(case_file)],
+                  [{"type": "restart", "enabled": True}], 1)
+    w.step_done.connect(lambda r: steps.append(dict(r)))
+    w.run()
+    descs = [s["desc"] for s in steps if str(s["desc"]).startswith("前置-")]
+    assert descs == ["前置-重启 APP"], f"未执行的前置项不该出现: {descs}"
+
+
+def test_stopped_rows_render_neutral(win):
+    """★ 被停止打断的行显示中性「⏹ 已停止」而不是红色 FAIL(用户 2026-10-15:
+    "正常的测试步骤也要检查下有没有这些问题") —— 前置修完后, 正常步骤同样要中性。"""
+    win.result_table.setRowCount(0)
+    win.on_step_done({"desc": "长断言", "passed": False, "stopped": True,
+                      "error": "用户手动停止执行", "screenshot": ""})
+    row = win.result_table.rowCount() - 1
+    it = win.result_table.item(row, 3)
+    assert it.text() == "⏹ 已停止", it.text()
+    assert it.foreground().color().name() == "#64748b", it.foreground().color().name()
+    # 真失败仍是红色 FAIL
+    win.on_step_done({"desc": "真失败", "passed": False, "error": "断言超时",
+                      "screenshot": ""})
+    row = win.result_table.rowCount() - 1
+    assert win.result_table.item(row, 3).text() == "FAIL"
+
+
 def test_pause_marks_running_step_row(win):
     """★ 暂停 → 当前步骤行显示「⏸ 暂停中」, 恢复后还原「执行中」(用户 2026-10-15)。"""
     win.result_table.setRowCount(0)

@@ -215,6 +215,21 @@ def test_wait_for_timeout_extends_by_pause(runner, monkeypatch):
     assert t.is_alive(),         f"3s 超时 + 每轮挂起 2s 顺延, 3s 墙钟内不该抛: {errors}"
 
 
+def test_stopped_step_row_is_marked_stopped(runner):
+    """★ 被停止打断的步骤行带 stopped 标记(界面据此显示中性「⏹ 已停止」, 用户
+    2026-10-15: 正常测试步骤也要检查同类问题) —— 未执行的后续步骤则**不落表**。"""
+    seen = []
+    runner.on_result = lambda res: (seen.append(dict(res)),
+                                   runner.stop() if res["desc"] == "第一步" else None)
+    ok = runner.run_steps([{"desc": "第一步", "wait": 0.01},
+                           {"desc": "第二步(不该执行)", "wait": 0.01}])
+    assert ok is False
+    descs = [r["desc"] for r in seen]
+    assert "第二步(不该执行)" not in descs, f"未执行的步骤不该落表: {descs}"
+    stopped = [r for r in seen if r.get("stopped")]
+    assert stopped, f"被停止打断的行要带 stopped 标记: {seen}"
+
+
 def test_stop_wins_over_pause(runner):
     """挂起中点停止 → 立即 UserStopped(停止优先于暂停)"""
     from core.runner import UserStopped

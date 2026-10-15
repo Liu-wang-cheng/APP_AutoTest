@@ -162,10 +162,13 @@ class RunWorker(QThread):
                 batt = -1
             if batt >= 0:
                 desc += f"(当前电量 {batt}%)"
+        if r.get("skipped"):
+            # ★ 未执行的前置项**不落任何行**(用户 2026-10-15: "停止后后续测试项不是
+            #   不应该显示出来吗") —— 它既没跑、也不是失败, 出现在结果表/报告里只会
+            #   让人误以为出过问题。会话层仍保留 skipped 记录供内部判断(阻断/重试)。
+            return
         if r["ok"]:
             err = ""
-        elif r.get("skipped"):
-            err = "已停止, 未执行"      # 中性(用户 2026-10-15) —— 不是失败
         else:
             err = r.get("reason") or "前置未通过(超时或失败)"
         sub = r.get("sub") or []

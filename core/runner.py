@@ -944,7 +944,11 @@ class ActionRunner:
                     #   看出"什么时候失败的") —— 结果表与报告的 error 列同源
                     err_text = f"[{time.strftime('%H:%M:%S')}] {last_err}"
                 self._append_result({"desc": desc, "passed": False, "error": err_text,
-                                     "screenshot": screenshot})
+                                     "screenshot": screenshot,
+                                     # ★ 用户停止不算"失败"(用户 2026-10-15: 前置那些
+                                     #   未执行项显示成 FAIL 之后, 正常步骤同样要中性)
+                                     "stopped": bool(self.stopped or
+                                                     isinstance(last_err, UserStopped))})
                 # 真实失败才留时序证据;用户主动停止没有诊断价值
                 if not (self.stopped or isinstance(last_err, UserStopped)):
                     self.trace.capture(self.d, desc, False)
@@ -969,11 +973,13 @@ class ActionRunner:
                             else (0 if is_last else self.interval))
             except UserStopped:
                 self._append_result({"desc": "用户手动停止", "passed": False,
-                                     "error": "用户手动停止执行", "screenshot": ""})
+                                     "error": "用户手动停止执行", "screenshot": "",
+                                     "stopped": True})
                 return False
         if self.stopped:
             self._append_result({"desc": "用户手动停止", "passed": False,
-                                 "error": "用户手动停止执行", "screenshot": ""})
+                                 "error": "用户手动停止执行", "screenshot": "",
+                                 "stopped": True})
             return False
         return True
 

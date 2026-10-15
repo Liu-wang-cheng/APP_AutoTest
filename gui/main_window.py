@@ -4407,6 +4407,11 @@ class MainWindow(QMainWindow):
         if running:
             state = "执行中" if attempt <= 1 else f"执行中(第{attempt}次)"
             color = QColor("#d97706")            # 执行中: 橙色
+        elif result.get("stopped"):
+            # ★ 用户停止打断的步骤显示中性「⏹ 已停止」(用户 2026-10-15: 停止不是失败,
+            #   红色 FAIL 会让人以为这一步跑砸了)
+            state = "⏹ 已停止"
+            color = QColor("#64748b")
         elif passed is None:
             # ★ 中性态(用户 2026-10-15): 用户停止时"还没轮到的前置项"没执行过,
             #   显示成 FAIL 会让人以为它们失败了
