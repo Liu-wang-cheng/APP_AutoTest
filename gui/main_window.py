@@ -4257,6 +4257,8 @@ class MainWindow(QMainWindow):
         self.worker.precondition_failed.connect(self.on_precondition_failed)
         # ★ 前置失败弹窗(用户 2026-10-15): 重试/取消 —— 用户在设备上排除故障后选择
         self.worker.precondition_retry.connect(self.on_precondition_retry)
+        # ★ 暂停 → 当前步骤行显示「⏸ 暂停中」(用户 2026-10-15)
+        self.worker.step_paused.connect(self.on_step_paused)
         # ★ 开始执行即在结果表里留痕(浅蓝开始行)—— 以前第一条步骤完成前
         #   表格一片空白,用户不知道跑没跑起来(用户反馈)
         self._append_result_row(
@@ -4329,6 +4331,55 @@ class MainWindow(QMainWindow):
         self.result_table.scrollToBottom()
         self.tabs.setCurrentIndex(0)
 
+    def on_step_paused(self, paused):
+        """暂停/恢复 → 结果表把**当前步骤行**标「⏸ 暂停中」(用户 2026-10-15)。
+
+        · 步骤执行中暂停: 就地改「执行中」那一行(记下原文, 恢复时还原);
+        · 步骤**之间**暂停(上一行已完成, 没有"执行中"行): 追加一条中性「已暂停」行,
+          恢复时删掉 —— 删行后若下方已有新行(_running_row 指向它), 行号要跟着上移。
+        """
+        row = getattr(self, "_running_row", None)
+        if paused:
+            if row is not None and row < self.result_table.rowCount():
+                it = self.result_table.item(row, 3)
+                if it is not None:
+                    self._pause_prev = (row, it.text(),
+                                        it.foreground().color().name())
+                    it.setText("⏸ 暂停中")
+                    it.setForeground(QColor("#64748b"))
+                    return
+            r = self.result_table.rowCount()
+            self.result_table.insertRow(r)
+            for col, text in enumerate(("—", "", "（步骤间暂停）", "⏸ 暂停中", "", "")):
+                it = QTableWidgetItem(text)
+                it.setBackground(QColor("#eef2f7"))
+                if col in (0, 3, 4):
+                    it.setTextAlignment(Qt.AlignCenter)
+                self.result_table.setItem(r, col, it)
+            self._running_row = None
+            self._pause_row = r
+            self.result_table.resizeRowsToContents()
+            self.result_table.scrollToBottom()
+            return
+        # 恢复
+        prev = getattr(self, "_pause_prev", None)
+        if prev:
+            r, text, color = prev
+            if r < self.result_table.rowCount():
+                it = self.result_table.item(r, 3)
+                if it is not None and it.text() == "⏸ 暂停中":
+                    it.setText(text)
+                    it.setForeground(QColor(color))
+            self._pause_prev = None
+        r = getattr(self, "_pause_row", None)
+        if r is not None:
+            self.result_table.removeRow(r)
+            self._pause_row = None
+            # ★ 删行后下方的行号上移: _running_row 若指向它, 必须跟着减一 ——
+            #   否则后续 step_done 会写错行(暂停期间恰好跨到下一步时会踩到)
+            if self._running_row is not None and self._running_row > r:
+                self._running_row -= 1
+
     def on_step_done(self, result):
         # ★ if 子步骤(sub=True)一律**追加新行**, 不占用父 if 的"执行中"占位 ——
         #   否则父行会被第一个子步骤顶掉、最后追加到子步骤后面(用户 2026-10-15)
@@ -4356,6 +4407,11 @@ class MainWindow(QMainWindow):
         if running:
             state = "执行中" if attempt <= 1 else f"执行中(第{attempt}次)"
             color = QColor("#d97706")            # 执行中: 橙色
+        elif passed is None:
+            # ★ 中性态(用户 2026-10-15): 用户停止时"还没轮到的前置项"没执行过,
+            #   显示成 FAIL 会让人以为它们失败了
+            state = "⏹ 未执行"
+            color = QColor("#64748b")
         else:
             state = "PASS" if passed else "FAIL"
             color = QColor("#16a34a") if passed else QColor("#dc2626")
@@ -4436,6 +4492,8 @@ class MainWindow(QMainWindow):
                 it.setTextAlignment(Qt.AlignCenter)
             self.result_table.setItem(row, col, it)
         self._running_row = None        # 分隔/总结行之后不该再往旧行里写
+        self._pause_row = None           # 步骤间暂停时追加的中性行(2026-10-15)
+        self._pause_prev = None          # 暂停时被改写的「执行中」行原文, 恢复时还原
         self.result_table.scrollToBottom()
         self.tabs.setCurrentIndex(0)
 

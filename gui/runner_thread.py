@@ -82,6 +82,7 @@ class RunWorker(QThread):
     case_finished = Signal(str, str, bool)  # 单条用例结束(路径, 用例名, 是否通过)
     precondition_failed = Signal(str)  # 前置检查未通过(阻断详情)→ GUI 弹窗提醒
     precondition_retry = Signal(str)   # 前置失败 → GUI 弹窗(重试/取消, 用户 2026-10-15)
+    step_paused = Signal(bool)         # 步骤暂停/恢复(True=暂停中) → 结果表标「⏸ 暂停中」
 
     def __init__(self, device_id, case_files, preconditions, repeat=1, parent=None,
                  pre_by_group=None, device_name=""):
@@ -161,7 +162,12 @@ class RunWorker(QThread):
                 batt = -1
             if batt >= 0:
                 desc += f"(当前电量 {batt}%)"
-        err = "" if r["ok"] else (r.get("reason") or "前置未通过(超时或失败)")
+        if r["ok"]:
+            err = ""
+        elif r.get("skipped"):
+            err = "已停止, 未执行"      # 中性(用户 2026-10-15) —— 不是失败
+        else:
+            err = r.get("reason") or "前置未通过(超时或失败)"
         sub = r.get("sub") or []
         shot = ""
         if not sub:
@@ -175,7 +181,10 @@ class RunWorker(QThread):
             report.add_result(sheet, r["ok"], err, shot)
         except Exception as e:
             log.warning(f"[report] 前置结果写入报告失败(忽略, 不影响执行): {e}")
-        self._emit_step({"desc": desc, "passed": r["ok"], "error": err,
+        self._emit_step({"desc": desc,
+                         # 未执行 → passed=None: 界面按中性「⏹ 未执行」渲染
+                         "passed": None if r.get("skipped") else r["ok"],
+                         "error": err,
                          "screenshot": shot, "elapsed": r.get("elapsed")})
         # 自定义步骤型前置: 内部每一步也各占一行(带自己的截图与耗时)
         for i, sr in enumerate(sub):
@@ -315,8 +324,9 @@ class RunWorker(QThread):
                     #   排除故障, 弹窗选「重试前置」(只重跑失败的那几项)或「取消运行」;
                     #   重试后仍有失败 → 再次弹窗, 循环直到通过/取消
                     failed = [(f"{r['desc']}({r['reason']})" if r.get("reason")
-                               else r["desc"]) for r in pre_results if not r["ok"]]
-                    while failed:
+                               else r["desc"]) for r in pre_results
+                              if not r["ok"] and not r.get("skipped")]
+                    while failed and not self._stop_requested:
                         detail = "、".join(failed)
                         self.log_line.emit(f"[前置] 未通过,已暂停等待处理: {detail}")
                         # ★ 事件与取消标志必须在 emit **之前**就绪 —— GUI 的应答
@@ -389,6 +399,8 @@ class RunWorker(QThread):
 
                     runner.shot_subdir = run_dir     # 截图进 screenshots/<用例名-第N次>/
                     runner.on_step_start = on_step_start
+                    # ★ 暂停状态 → 结果表把当前步骤行标「⏸ 暂停中」(用户 2026-10-15)
+                    runner.on_pause_state = self.step_paused.emit
                     runner.on_result = on_result
                     self.runner = runner
                     self._apply_pause()      # 前置阶段按下的暂停 → 本用例步骤间生效

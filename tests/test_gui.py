@@ -99,6 +99,33 @@ def test_if_parent_row_appears_before_substeps(win):
     assert texts == ["判断是否需要清洁", "[条件成立] 点开始清扫", "[条件成立] 等一下"],         f"父 if 行必须在子步骤之前: {texts}"
 
 
+def test_pause_marks_running_step_row(win):
+    """★ 暂停 → 当前步骤行显示「⏸ 暂停中」, 恢复后还原「执行中」(用户 2026-10-15)。"""
+    win.result_table.setRowCount(0)
+    win.on_step_started({"desc": "长断言", "attempt": 1})
+    row = win._running_row
+    assert win.result_table.item(row, 3).text() == "执行中"
+    win.on_step_paused(True)
+    assert win.result_table.item(row, 3).text() == "⏸ 暂停中",         win.result_table.item(row, 3).text()
+    win.on_step_paused(False)
+    assert win.result_table.item(row, 3).text() == "执行中",         "恢复后应还原「执行中」"
+
+
+def test_pause_between_steps_appends_and_removes_row(win):
+    """★ 步骤**之间**暂停(没有"执行中"行)→ 追加中性「已暂停」行, 恢复时删掉;
+    且删行后 _running_row 要跟着上移(否则后续结果写错行)。"""
+    win.result_table.setRowCount(0)
+    win._running_row = None                  # 上一步已完成
+    win.on_step_paused(True)
+    r = win._pause_row
+    assert r is not None and win.result_table.item(r, 3).text() == "⏸ 暂停中"
+    # 恢复前恰有一步开始(模拟跨步): _running_row 指向暂停行**下方**
+    win._running_row = r + 1
+    win.on_step_paused(False)
+    assert win._pause_row is None
+    assert win._running_row == r, "删行后 _running_row 必须上移一行"
+
+
 def test_pause_button_toggles_and_resets(win):
     """★ 暂停按钮: 运行时启用, 点击在 ⏸/▶ 间切换, 结束后复位并禁用(2026-10-13)"""
     class _W:

@@ -1025,11 +1025,15 @@ def prepare_items(d, cfg, items, on_progress=None, should_cancel=None,
     """
     results = []
 
-    def _finish(idx, desc, ok, elapsed=0.0, sub=None, reason=None):
+    def _finish(idx, desc, ok, elapsed=0.0, sub=None, reason=None, skipped=False):
         r = {"key": f"pre{idx}", "desc": desc, "ok": bool(ok), "elapsed": elapsed,
              "sub": list(sub or [])}
         if reason:
             r["reason"] = reason     # 失败原因(如故障原文) → 结果表/报告/阻断详情可见
+        if skipped:
+            # ★ "未执行" ≠ "失败"(用户 2026-10-15: 点停止后剩下的前置项全显示 FAIL):
+            #   用户停止时还没轮到的项根本没跑, 结果表按**中性**显示, 也不计入阻断
+            r["skipped"] = True
         results.append(r)
         if on_item_done:
             try:
@@ -1043,7 +1047,7 @@ def prepare_items(d, cfg, items, on_progress=None, should_cancel=None,
             continue
         desc = _item_label(item)
         if should_cancel and should_cancel():
-            _finish(i, desc, False)
+            _finish(i, desc, False, skipped=True)   # 未执行(用户停止), 不是失败
             continue
         t0 = time.time()
         sub = []

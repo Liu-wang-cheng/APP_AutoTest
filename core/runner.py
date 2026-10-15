@@ -131,6 +131,8 @@ class ActionRunner:
         #: 步骤**开始**回调: fn(desc, attempt) —— GUI 靠它先插一行「执行中」,
         #  跑完再由 on_result 就地改成 PASS/FAIL(用户要求 2026-10-12)
         self.on_step_start = None
+        #: 暂停状态回调(2026-10-15): 挂起/恢复时通知界面把当前步骤行标「⏸ 暂停中」
+        self.on_pause_state = None
         self.trace = TraceRecorder(case_name, config.get("trace_limit", 8))
         self.router = VisionRouter(config)
         self._locators = self._load_locators()
@@ -239,12 +241,25 @@ class ActionRunner:
         """
         if not self._paused:
             return 0.0
+        self._notify_pause(True)
         t0 = time.time()
-        while self._paused:
-            if self.stopped:
-                raise UserStopped("用户手动停止")
-            time.sleep(0.2)
+        try:
+            while self._paused:
+                if self.stopped:
+                    raise UserStopped("用户手动停止")
+                time.sleep(0.2)
+        finally:
+            self._notify_pause(False)     # 恢复(或抛错)都要还原界面状态
         return time.time() - t0
+
+    def _notify_pause(self, paused):
+        """通知界面暂停状态(用户 2026-10-15: "点击暂停时用例步骤需要显示暂停中")"""
+        cb = getattr(self, "on_pause_state", None)
+        if cb:
+            try:
+                cb(paused)
+            except Exception as e:        # 界面回调异常不能影响执行
+                log.debug(f"[on_pause_state] 回调异常: {e}")
 
     # ── 设备 ──
     def _ensure_device(self):
