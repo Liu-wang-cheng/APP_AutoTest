@@ -21,6 +21,7 @@
 | `dump_screen_texts.py` | 真机: 把当前屏幕的无障碍树文本 + OCR 文本全打出来(写用例/定断言前先看页面上到底有什么) |
 | `recapture_template.py` | 真机: 从当前屏幕裁模板图(`Test_cases/<组>/templates/`) |
 | `check_templates.py` | 离线: 扫用例引用的模板图是否都存在(改名/挪目录后快速自查) |
+| `ocr_crop_preview.py` | 真机: 把"OCR 要不要裁掉顶部区域"的效果画在真实截图上(全图 vs 裁剪后的识别结果逐行对比 + 标注图) |
 | `validate_cases.py` | 离线: 用例 YAML 静态校验(键名/取值/阈值范围), 也可以 `python tools/validate_cases.py` 单独跑 |
 | `check_env.py` | 离线: 运行环境自检(Python/依赖/ADB/设备) |
 | `check_update_e2e.py` | 手动: 起本地假更新源, 端到端走一遍"检查更新 → 下载 → 校验" |
