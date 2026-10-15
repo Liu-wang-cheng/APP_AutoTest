@@ -260,6 +260,25 @@ def test_swipe_legacy_full_string_still_works(runner):
     assert swipes == [("swipe", 100, 500, 100, 1500)], runner.d.ops
 
 
+def test_sleep_step_screenshots_before_waiting(runner):
+    """★ 延时等待步骤的证据在**等待开始前**拍(用户 2026-10-14: 设置 180s 延迟,
+    截图也等了 180s —— 等待本身没有画面变化, 证据应记录"开始等待时的状态")"""
+    runner.always_screenshot = True    # 前置/默认截图场合(生产: 前置 runner 恒 True)
+    runner.d = _SeqDev()
+    waits = []
+    orig = runner._sleep
+
+    def _rec(s):
+        waits.append(("wait", s))
+        return orig(s)
+    runner._sleep = _rec
+    res = runner._execute({"desc": "等180秒", "sleep": 180})
+    kinds = [o[0] for o in runner.d.ops] + [w[0] for w in waits]
+    assert kinds[0] == "shot" and "wait" in kinds, runner.d.ops
+    assert kinds.index("shot") < kinds.index("wait"),         f"截图必须在等待开始前: {runner.d.ops} {waits}"
+    assert res == runner.d.ops[0][1], "等待前那张就是本步证据截图"
+
+
 def test_click_coordinates(runner):
     runner._execute({"click": [531, 1900]})
     assert runner.d.clicked_at == (531, 1900)

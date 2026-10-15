@@ -502,7 +502,8 @@ def make_action_menu(parent, on_pick):
 
 
 
-def _make_field_widget(field, value, steps=None, exclude_index=None):
+def _make_field_widget(field, value, steps=None, exclude_index=None,
+                       preconditions=None):
     """按 schema 字段类型建控件,返回 (widget, 取值getter)。
     steps/exclude_index: stepshot 类型(基准图选步骤下拉)用的上下文"""
     t = field["type"]
@@ -542,6 +543,7 @@ def _make_field_widget(field, value, steps=None, exclude_index=None):
         return combo, combo.currentText
     if t == "stepshot":
         # 基准图下拉: 选项 = 当前用例中开启了自动截图的其他步骤(用户要求)
+        # + 2026-10-14: 子步骤(if 分支里点过/截过图的) + 前置项的截图
         combo = _FitCombo()                 # 宽度自适应: "步骤N: 描述" 可能较长
         options = []
         for i, st in enumerate(steps or []):
@@ -554,6 +556,24 @@ def _make_field_widget(field, value, steps=None, exclude_index=None):
                 continue
             desc = st.get("desc") or "(无描述)"
             options.append((f"step:{i + 1}", f"步骤{i + 1}: {desc}"))
+            # ★ 子步骤(用户 2026-10-14): then/else 里点过/截过图的也算 ——
+            #   值用 shot:<描述>, 执行端按结果表描述匹配(忽略分支前缀)
+            for branch in ("then", "else"):
+                for j, sub in enumerate(st.get(branch) or []):
+                    if not (sub.get("screenshot") or
+                            reg.is_click_action(reg.primary_action_key(sub))):
+                        continue
+                    sub_desc = sub.get("desc") or "(无描述)"
+                    mark = "成立" if branch == "then" else "不成立"
+                    options.append((f"shot:{sub_desc}",
+                                    f"↳ 步骤{i + 1}[条件{mark}]子{j + 1}: {sub_desc}"))
+        # ★ 前置项截图(用户 2026-10-14): 前置先于用例执行, 是很常用的对比基准
+        for pre in preconditions or []:
+            if not pre.get("enabled", True):
+                continue
+            from core.session import _item_label as _il
+            label = _il(pre)
+            options.append((f"pre:{label}", f"前置: {label}"))
         for v, label in options:
             combo.addItem(label, v)
         if value and value not in [v for v, _ in options]:
@@ -894,7 +914,9 @@ class StepCard(QFrame):
         grid.setColumnStretch(1, 1)         # 控件列吃剩余空间(控件靠左, 不居中)
         w, getter = _make_field_widget(field, self.step.get(field["key"]),
                                        steps=self.main.steps,
-                                       exclude_index=self.index)
+                                       exclude_index=self.index,
+                                       preconditions=getattr(self.main,
+                                                             "preconditions", None))
         if field["key"] == "compare_area":
             # ★ 预览对比范围(用户 2026-10-14): 点一下连当前设备截屏, 按本框现值
             #   画标注图弹窗 —— 范围合不合理, 不用跑用例就能确认。
@@ -3969,6 +3991,9 @@ class MainWindow(QMainWindow):
         self.result_table.setColumnWidth(4, 64)
         self.result_table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.result_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        # ★ 步骤/错误信息**自动换行**(用户 2026-10-15: "一行显示不全") —— 长步骤名
+        #   与多行错误在列宽内折行, 行高随内容(resizeRowsToContents 在每次填行后调)
+        self.result_table.setWordWrap(True)
         self.result_table.verticalHeader().setVisible(False)
         self.result_table.cellDoubleClicked.connect(self.on_result_row)
         self.result_table.itemSelectionChanged.connect(self._on_result_selection)
@@ -4273,6 +4298,7 @@ class MainWindow(QMainWindow):
             self.result_table.insertRow(row)
         self._fill_result_row(row, result, running=True)
         self._running_row = row
+        self.result_table.resizeRowsToContents()
         self.result_table.scrollToBottom()
         self.tabs.setCurrentIndex(0)
 
@@ -4283,6 +4309,7 @@ class MainWindow(QMainWindow):
             self.result_table.insertRow(row)
         self._fill_result_row(row, result)       # ★ 有"执行中"行时就地改成 PASS/FAIL
         self._running_row = None
+        self.result_table.resizeRowsToContents()
         self.result_table.scrollToBottom()
 
     def _fill_result_row(self, row, result, running=False):

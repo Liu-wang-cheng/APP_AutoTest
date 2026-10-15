@@ -272,6 +272,7 @@ def do_wait_loading(runner, step):
         # ★ 判断走 runner._text_present —— 树稀疏时"看不到加载提示"是假象,
         #   只读无障碍树会把"还在加载"误判成"已加载完"; 轮次传下去, OCR 仍按 5 轮一次
         if not runner._text_present(*_LOADING_TEXTS, round_no=n):
+            log.info(f"[wait_loading] 加载提示已消失(第 {n} 轮确认)")
             return
         end += runner._sleep(1) or 0    # 暂停挂起 → 超时顺延(2026-10-14 审查)
     log.warning(f"[wait_loading] {timeout}s 后加载提示仍在,继续执行")

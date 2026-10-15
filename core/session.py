@@ -286,7 +286,16 @@ def ensure_charging(d, timeout=1200, on_progress=None, should_cancel=None,
     """
     charging = is_charging(d, ready_text)
     if charging:
-        log.info("[前置] 设备处于充电状态")
+        # ★ 命中信息(用户 2026-10-15): 多判定词时看得出按哪个判的(与断言留痕同思路)。
+        #   判定仍以 is_charging 为准(测试桩接口不动); 这里只为日志补细节, 失败忽略。
+        try:
+            texts = _split_texts(ready_text) or _split_texts(DEFAULT_CHARGING_TEXT)
+            xml = warm_webview(d)
+            hit, _src, raw, _pos = text_present_detail(d, texts, xml=xml)
+        except Exception:
+            hit, raw = None, ""
+        log.info("[前置] 设备处于充电状态"
+                 + (f": 命中「{hit}」← {raw!r}" if hit else ""))
         return True
     tpl = (recharge_tpl or "").strip() or "开始回充.png"
     text = (recharge_text or "").strip()
@@ -778,7 +787,10 @@ def ensure_text_check(d, wait_text="", absent_text="", timeout=60,
         # ★ 故障哨兵命中会从这里抛 FaultStateError —— 由 prepare_items 接住,
         #   把**整段故障原文**记成该前置项的失败原因(进结果表与报告)
         if _ok(xml):
-            log.info(f"[前置] {label}: 条件已满足")
+            # ★ 命中信息(用户 2026-10-15): 等待出现时写明按哪个文本判的
+            hit = _any_present(d, waits, xml=xml) if waits else None
+            extra = f": 命中「{hit}」" if hit else ""
+            log.info(f"[前置] {label}: 条件已满足{extra}")
             return True
         if should_cancel and should_cancel():
             log.info(f"[前置] {label}: 收到停止请求")

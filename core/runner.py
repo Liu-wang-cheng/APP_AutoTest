@@ -964,6 +964,19 @@ class ActionRunner:
                 f"一步里有多个动作: {', '.join(main)} —— 引擎只会执行优先级最高的一个"
                 f"({main[0]}), 其余的会被静默丢掉; 请把它们拆成多个步骤")
         if main:
+            # ★ 延时等待类步骤: 证据在**等待开始前**拍(用户 2026-10-14: 等待 180s
+            #   的步骤截图也等了 180s —— 等待本身没有画面变化, 证据应记录"开始
+            #   等待时的状态"; 拍完再等, 证据槽让后置块采用)
+            if main[0] == "sleep" and (self.always_screenshot or "screenshot" in step) \
+                    and not getattr(self, "_pre_click_shot", None):
+                try:
+                    path = self._step_shot_path(self._cur_step_desc)
+                    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+                    self.d.screenshot(path)
+                    self._pre_click_shot = path
+                except Exception as e:
+                    log.warning(f"[截图] 等待前截图失败(不影响等待): "
+                                f"{type(e).__name__}: {e}")
             reg.ACTIONS[main[0]].fn(self, step)
             executed_key = main[0]
         # 2. 数据抓取/对比(与主动作共存于一步)
@@ -1000,9 +1013,12 @@ class ActionRunner:
         click_step = (self.click_shots
                       and reg.is_click_action(reg.primary_action_key(step)))
         pre_shot = getattr(self, "_pre_click_shot", None)
-        if pre_shot and "screenshot" not in step:
-            # ★ 点击证据已在**点击前**拍好并标注(2026-10-13) —— 直接采用,
-            #   不再点击后再拍一张(那时页面已经变了)
+        # ★ sleep 步骤的 pre_shot 即便带显式 screenshot 键也采用 —— 等待前后画面
+        #   相同, 没必要再等 180s 重拍一张(2026-10-14 用户: 等待不应延迟截图)
+        if pre_shot and ("screenshot" not in step or
+                         (main and main[0] == "sleep")):
+            # 点击/等待证据已在**动作前**拍好并标注(2026-10-13/14) —— 直接采用,
+            #   不再动作后再拍一张(那时页面已经变了)
             screenshot = pre_shot
         elif "screenshot" in step or click_step or self.always_screenshot:
             sv = step.get("screenshot")

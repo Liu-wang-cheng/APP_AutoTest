@@ -231,3 +231,42 @@ def test_compare_area_annotates_evidence(tmp_path):
     # 范围矩形边框画在 10%~90% 位置: 100x200 帧 → x=10..90, y=20..180, 边框色 (0,200,255) BGR
     assert tuple(img[20, 50]) == (0, 200, 255), tuple(img[20, 50])
     assert tuple(img[180, 50]) == (0, 200, 255), tuple(img[180, 50])
+
+
+# ── 基准引用扩展(用户 2026-10-14): shot:<子步骤描述> / pre:<前置描述> ──
+
+def test_resolve_baseline_shot_form(tmp_path):
+    """shot:<描述> → 执行结果里**最后一条**描述匹配的截图 —— 支持 if 分支里的
+    子步骤(执行端描述带「[条件成立] 」前缀, 匹配时忽略)"""
+    from core.actions.asserts import _resolve_baseline
+
+    class _R:
+        results = [
+            {"desc": "步骤1", "screenshot": "a.png"},
+            {"desc": "[条件成立] 点菜单", "screenshot": "b.png"},
+            {"desc": "[条件成立] 点菜单", "screenshot": "c.png"},   # 重试: 取最后一条
+        ]
+    assert _resolve_baseline(_R(), "shot:点菜单") == "c.png"
+    assert _resolve_baseline(_R(), "shot:步骤1") == "a.png"
+
+
+def test_resolve_baseline_pre_form(tmp_path, monkeypatch):
+    """pre:<前置描述> → 本轮截图目录的 前置_<描述>.png(前置先于用例执行,
+    不在 runner.results 里, 走文件定位)"""
+    import os
+    from core.actions.asserts import _resolve_baseline
+    from core import vision
+    from core.actions.asserts import BASE_DIR as _BD
+    run_dir = os.path.join(str(_BD), "Test_cases", "组甲", "screenshots",
+                           "甲用例_r20260101_090000_第1次")
+    os.makedirs(run_dir)
+    open(os.path.join(run_dir, "前置_已进入设备页.png"), "wb").write(b"png")
+    monkeypatch.setattr(vision, "current_app_group", lambda: "组甲")
+
+    class _R:
+        shot_subdir = "甲用例_r20260101_090000_第1次"   # 叶子目录名(与 _pre_screenshot 一致)
+        results = []
+    got = _resolve_baseline(_R(), "pre:已进入设备页")
+    assert got.endswith("前置_已进入设备页.png") and os.path.exists(got), got
+    with pytest.raises(RuntimeError, match="前置"):
+        _resolve_baseline(_R(), "pre:不存在的前置")

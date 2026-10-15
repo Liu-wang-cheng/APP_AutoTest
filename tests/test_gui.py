@@ -1811,7 +1811,9 @@ def test_compare_baseline_step_dropdown(qapp, monkeypatch, tmp_path):
         combo = card.widgets.get("compare")
         assert isinstance(combo, QComboBox), "基准图应为下拉选择"
         data = [combo.itemData(i) for i in range(combo.count())]
-        assert data == ["step:1", "step:3"], f"选项应为开启截图的步骤: {data}"
+        # 步骤截图选项在前; 2026-10-14: 前置项截图也进基准候选(pre:<前置名>)
+        assert data[:2] == ["step:1", "step:3"], f"步骤截图选项: {data}"
+        assert any(v.startswith("pre:") for v in data), data
         combo.setCurrentIndex(1)         # 选 步骤3
         w._sync_header() if hasattr(w, "_sync_header") else None
         assert w.steps[3]["compare"] == "step:3"

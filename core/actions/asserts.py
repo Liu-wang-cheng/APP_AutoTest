@@ -282,8 +282,15 @@ def _assert_any(runner, texts, images, timeout):
 
 
 def _resolve_baseline(runner, value):
-    """基准图值解析: step:N 引用 → 第 N 步执行结果的截图路径;
-    其他值原样返回(旧用例的手动路径)"""
+    """基准图值解析:
+    · step:N      → 第 N 步执行结果的截图(旧写法, 顶层步骤序号)
+    · shot:<描述> → 执行结果里**最后一条**描述匹配的截图 —— 支持子步骤
+                    (if 分支里点过/截过图的步骤, 用户 2026-10-14;
+                     匹配忽略分支前缀「[条件成立] 」)
+    · pre:<描述>  → **前置项**的截图(前置先于用例执行, 不在 runner.results 里,
+                    按 本轮截图目录/前置_<描述>.png 定位, 用户 2026-10-14)
+    · 其他值      → 原样返回(旧用例的手动路径/文件名)
+    """
     if isinstance(value, str) and value.startswith("step:"):
         n = int(value[5:])
         res = runner.results[n - 1] if 0 < n <= len(runner.results) else None
@@ -291,6 +298,27 @@ def _resolve_baseline(runner, value):
             raise RuntimeError(
                 f"对比基准指向步骤{n}, 但该步没有截图(未开启截图或尚未执行)")
         return res["screenshot"]
+    if isinstance(value, str) and value.startswith("shot:"):
+        want = value[5:].strip()
+        for res in reversed(runner.results):
+            desc = str(res.get("desc", ""))
+            if desc == want or desc.endswith(f"] {want}") or desc.endswith(want):
+                if res.get("screenshot"):
+                    return res["screenshot"]
+        raise RuntimeError(
+            f"对比基准指向子步骤「{want}」, 但执行结果里没有它的截图(未执行到/未开启截图)")
+    if isinstance(value, str) and value.startswith("pre:"):
+        want = value[4:].strip()
+        from core import vision as _vision
+        safe = "".join(c for c in str(want) if c not in '\\/:*?"<>|')[:40]
+        path = (f"Test_cases/{_vision.current_app_group() or '未分组'}/"
+                f"screenshots/{getattr(runner, 'shot_subdir', '') or 'case'}/"
+                f"前置_{safe}.png")
+        path = os.path.join(BASE_DIR, path) if not os.path.isabs(path) else path
+        if not os.path.exists(path):
+            raise RuntimeError(
+                f"对比基准指向前置「{want}」, 但本轮没有它的截图: {path}")
+        return path
     return value
 
 
