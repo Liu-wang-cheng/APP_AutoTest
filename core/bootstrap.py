@@ -313,9 +313,9 @@ def prune_debug_artifacts(app_dir=None, keep_per_dir=DEBUG_KEEP_PER_DIR,
 
     返回 (删掉的文件数, 释放的字节数)。任何异常都吞掉 —— 清理绝不能影响启动。
 
-    ★ 为什么要它: 模板点击标记(每次模板点击一张)、失败截图、失败前时序证据都落在
-      Test_img/debug/ 下; 跑几个月能堆到几个 GB, 而它们只是**排查用**的中间产物。
-      测试期有 conftest 每轮清, 打包版没有 —— 这里补上。
+    ★ 为什么要它: 对比范围预览图这类排查产物落在 Test_img/debug/ 下; 跑几个月能堆到
+      几个 GB, 而它们只是**排查用**的中间产物。测试期有 conftest 每轮清, 打包版没有
+      —— 这里补上。(失败截图不在这里: 它在用例自己的截图目录里, 随用例截图一起循环。)
     """
     root = _app_root(app_dir)
     if not root:

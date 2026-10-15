@@ -44,7 +44,6 @@ Auto_test/
 │   │   ├── map_ops.py       room_zones/room_click/merge_zones/split_zone
 │   │   └── timer_ops.py     set_time(OCR滚轮)/add_timer/latest_record
 │   ├── vision.py            SIFT 模板匹配(默认视觉后端)
-│   ├── trace.py             失败时序证据(内存 N 步 / 失败落盘)
 │   ├── session.py           前置准备(重启APP/充电/地图/电量)
 │   ├── app_detect.py        设备发现 / 包名自动检测
 │   └── excel_report.py      Excel 报告
