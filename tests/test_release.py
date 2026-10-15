@@ -589,3 +589,23 @@ def test_committed_version_json_points_at_our_repo():
     assert repo and repo in url, f"下载地址指向的不是本仓库({repo}): {url}"
     assert re.fullmatch(r"[0-9a-f]{64}", str(d.get("sha256", ""))), d.get("sha256")
     assert d.get("release_notes"), "发布说明不能是空的"
+
+
+def test_no_tuple_timeout_in_urlopen():
+    """★ 守护: urlopen 的 timeout 不能传元组(2026-10-15 实测崩溃)。
+
+    urllib 的 timeout 只接受**单个数字**(socket per-op 超时); requests 才收
+    (连接, 读取) 元组。release.py 的 upload_asset 曾直接传 `timeout=(10, 60)`
+    —— 首次发版不走那条 DELETE 分支所以没暴露, 重发同一版本删旧 asset 时
+    建连即 TypeError: 'tuple' object cannot be interpreted as an integer。
+    """
+    import re as _re
+    from pathlib import Path as _P
+    root = _P(__file__).resolve().parent.parent
+    bad = []
+    for f in (root / "tools").glob("*.py"):
+        src = f.read_text(encoding="utf-8")
+        for m in _re.finditer(r"urlopen\([^)]*timeout\s*=\s*\(", src):
+            line = src[:m.start()].count("\n") + 1
+            bad.append(f"{f.name}:{line}")
+    assert not bad, f"urlopen 传了元组 timeout(会 TypeError, 见 _request_json 注释): {bad}"

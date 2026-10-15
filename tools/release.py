@@ -391,7 +391,11 @@ def upload_asset(repo, token, release_id, path, name, attempts=3):
             req = urllib.request.Request(
                 f"{API}/repos/{repo}/releases/assets/{a['id']}", method="DELETE",
                 headers={"Authorization": f"token {token}", "User-Agent": UA})
-            urllib.request.urlopen(req, timeout=(10, 60))
+            # ★ timeout 必须是**单个数字**(见 _request_json 的注释: urllib 不像
+            #   requests 接受 (连接, 读取) 元组, 传元组建连即 TypeError) ——
+            #   2026-10-15 重发同版本时踩到: 首次发布没有同名 asset 不走这里, 第二次
+            #   要删旧 asset 才暴露。
+            urllib.request.urlopen(req, timeout=60)
             print(f"  [DEL] 旧 asset {name} 已删除")
     url = (f"{UPLOAD}/repos/{repo}/releases/{release_id}/assets"
            f"?name={quote(name)}")
