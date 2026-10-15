@@ -45,8 +45,19 @@ def test_app_group_global_is_isolated_between_tests():
 
 
 def test_config_example_covers_real_config_keys():
-    """★ 示例配置必须覆盖真实配置的每个键(否则新用户生成的 config 缺项)"""
+    """★ 示例配置必须覆盖真实配置的每个键(否则新用户生成的 config 缺项)
+
+    ★ CI 上跳过(2026-10-15 实测): `config/config.yaml` 是**用户数据、被 gitignore**,
+      全新 checkout 里不存在 —— 第一版没判存在性, 于是 CI 直接 FileNotFoundError,
+      整个发版闸门被一条守护测试卡住。真配置在的机器(你自己的开发机)照常守护:
+      新增配置项时你本地那份一定在, 漏写示例当场就会红。
+    """
     import yaml
+
+    real_path = ROOT / "config" / "config.yaml"
+    if not real_path.is_file():
+        import pytest
+        pytest.skip("本地没有真实的 config.yaml(CI 全新 checkout / 首次克隆), 无从比对")
 
     def _keys(d, prefix=""):
         out = set()
@@ -56,7 +67,7 @@ def test_config_example_covers_real_config_keys():
                 out |= _keys(v, prefix + str(k) + ".")
         return out
 
-    real = yaml.safe_load((ROOT / "config" / "config.yaml").read_text(encoding="utf-8"))
+    real = yaml.safe_load(real_path.read_text(encoding="utf-8"))
     example = yaml.safe_load(
         (ROOT / "config" / "config.example.yaml").read_text(encoding="utf-8"))
     missing = _keys(real) - _keys(example)
