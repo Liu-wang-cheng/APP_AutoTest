@@ -783,6 +783,102 @@ def test_screenshots_are_split_per_execution(runner):
     assert "screenshots/甲用例-第2次/" in second, second
 
 
+# ── 命中留痕: 多值条件要写清"按哪个候选判的"(用户 2026-10-15) ──
+
+def _capture_logs(logger, fn, *a, **k):
+    """跑 fn 并收集它写进 logger 的日志文本(与 test_preconditions 同款做法)"""
+    import logging
+    recs = []
+
+    class _H(logging.Handler):
+        def emit(self, record):
+            recs.append(record.getMessage())
+
+    h = _H(level=logging.INFO)
+    logger.addHandler(h)
+    old = logger.level
+    logger.setLevel(logging.INFO)
+    try:
+        fn(*a, **k)
+    finally:
+        logger.removeHandler(h)
+        logger.setLevel(old)
+    return recs
+
+
+def test_if_log_shows_which_candidate_hit(runner):
+    """★ `[if] 条件成立('今天,已取消,结尾')` 要写出**命中的是哪个**(用户 2026-10-15:
+    "这里也没显示命中的内容") —— 多值条件只打整串, 出了分歧只能一格格猜。"""
+    import core.actions.basic as basic
+    runner.d = FakeDevice(present=("今天,已取消",))     # 节点文本整段包含「今天」
+    recs = _capture_logs(basic.log, runner._execute,
+                         {"desc": "判断", "if": "今天,已取消,结尾", "then": []})
+    line = [m for m in recs if m.startswith("[if]")]
+    assert line, recs
+    assert "命中「今天」" in line[0], line[0]
+    assert "今天,已取消" in line[0], "还要能看出是页面上哪段原文命中的"
+
+
+def test_if_not_log_shows_candidate_when_present(runner):
+    """`if not` 判不成立(= 文本确实出现)时, 同样要写出命中的候选"""
+    import core.actions.basic as basic
+    runner.d = FakeDevice(present=("今天",))
+    recs = _capture_logs(basic.log, runner._execute,
+                         {"desc": "判断", "if not": "今天,已取消", "else": []})
+    line = [m for m in recs if m.startswith("[if(not)]")]
+    assert line and "命中「今天」" in line[0], line or recs
+
+
+def test_if_image_condition_log_has_no_stale_hit(runner, tmp_path):
+    """图片条件的日志**不能**串上一步文本条件的命中(命中详情是每次都重算的)"""
+    import cv2
+    import numpy as np
+    import core.actions.basic as basic
+    runner.d = FakeDevice(present=("今天",))
+    runner._execute({"desc": "先文本", "if": "今天", "then": []})    # 留下命中详情
+    runner.d = _FrameDev()
+    tpl = tmp_path / "不存在于页面.png"                 # 真图, 但页面上匹配不到
+    tpl.write_bytes(cv2.imencode(
+        ".png", np.full((40, 40, 3), 30, dtype=np.uint8))[1].tobytes())
+    recs = _capture_logs(basic.log, runner._execute,
+                         {"desc": "后图片", "if": str(tpl), "else": []})
+    line = [m for m in recs if m.startswith("[if]")]
+    assert line and "命中" not in line[0], line
+
+
+def test_if_num_condition_logs_measured_value(runner, monkeypatch):
+    """数值条件要写出**实测值**(用户 2026-10-15 同一问题的数值版): 否则
+    "电量 > 50 不成立"看不出当时到底读到了多少 / 还是压根没读到"""
+    import core.actions.basic as basic
+    import core.actions.data_ops as data_ops
+    runner.d = FakeDevice(present=("电量 43%",))
+    # 直接桩掉取值(本用例只验日志留痕, 取值算法自己有测试)
+    monkeypatch.setattr(data_ops, "extract_value", lambda *a, **k: "43")
+    recs = _capture_logs(basic.log, runner._execute,
+                         {"desc": "判断", "if": "电量 > 50", "then": []})
+    line = [m for m in recs if m.startswith("[if]")]
+    assert line and "实测 '43'" in line[0], line or recs
+
+    # 读不到该字段时也要说清(而不是留一片空白)
+    def _boom(*a, **k):
+        raise ValueError("页面上没有「电量」")
+    monkeypatch.setattr(data_ops, "extract_value", _boom)
+    recs = _capture_logs(basic.log, runner._execute,
+                         {"desc": "判断", "if": "电量 > 50", "then": []})
+    line = [m for m in recs if m.startswith("[if]")]
+    assert line and "该字段读不到" in line[0], line or recs
+
+
+def test_wait_for_log_shows_which_candidate_hit(runner):
+    """wait_for 的多值候选同样要写出命中的是哪个"""
+    import core.actions.basic as basic
+    runner.d = FakeDevice(present=("已取消",))
+    recs = _capture_logs(basic.log, runner._execute,
+                         {"desc": "等", "wait_for": "今天,已取消", "timeout": 2})
+    line = [m for m in recs if m.startswith("[wait_for] 等到文本")]
+    assert line and "命中「已取消」" in line[0], line or recs
+
+
 # ── if 条件的检测节奏: 两轮 × 每轮五次(= 10 次), 第 5/10 次走 OCR 兜底(用户 2026-10-12) ──
 
 def test_if_condition_checks_ten_times_by_default(runner):
@@ -820,21 +916,25 @@ def test_if_text_condition_really_polls_rounds_times(runner, monkeypatch):
 
     monkeypatch.setattr(runner, "_poll_sleep", _poll)
     # 第 10 次(最后一次)才出现 → 仍应判"成立", 且恰好查 10 次、只睡 9 次
-    monkeypatch.setattr(cr, "text_present",
-                        lambda d, texts, round_no=None:
-                        (seq.__setitem__("n", seq["n"] + 1), seq["n"] >= 10)[1])
+    # ★ 桩的是 text_present_detail: _text_present 现在用它(为了留下"命中「…」"详情)
+    monkeypatch.setattr(cr, "text_present_detail",
+                        lambda d, texts, xml=None, round_no=None:
+                        (seq.__setitem__("n", seq["n"] + 1),
+                         ("确认", "text", "确认", None) if seq["n"] >= 10
+                         else (None, "", "", None))[1])
     assert runner._text_present("确认", rounds=10) is True
     assert seq["n"] == 10, seq
+    assert runner._last_text_hit == ("确认", "text", "确认"), runner._last_text_hit
     assert len(seq["sleeps"]) == 9, seq          # 末次已定局, 不再白睡(审查 2026-10-12)
 
     # 一直不出现 → 恰好 10 次, 不多不少; OCR 兜底轮次落在 5/10(round_no = 次数)
     seq["n"] = 0
     seq["sleeps"] = []
     seen_rn = []
-    monkeypatch.setattr(cr, "text_present",
-                        lambda d, texts, round_no=None:
+    monkeypatch.setattr(cr, "text_present_detail",
+                        lambda d, texts, xml=None, round_no=None:
                         (seq.__setitem__("n", seq["n"] + 1),
-                         seen_rn.append(round_no), False)[2])
+                         seen_rn.append(round_no), (None, "", "", None))[2])
     assert runner._text_present("确认", rounds=10) is False
     assert seq["n"] == 10 and len(seq["sleeps"]) == 9, seq
     assert seen_rn == list(range(1, 11)), seen_rn

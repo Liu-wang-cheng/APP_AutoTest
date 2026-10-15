@@ -671,6 +671,30 @@ def text_present_detail(d, texts, xml=None, round_no=None):
     return None, "", "", None
 
 
+#: 命中来源 → 日志里的中文名(用户 2026-10-11: 光写"命中了"看不出**是谁顶的**)
+HIT_SOURCES = {"text": "节点文本",
+               "desc": "无障碍描述(看不见的控件)",
+               "ocr": "截图识别(OCR)"}
+
+
+def hit_suffix(hit):
+    """命中详情 → 日志后缀, 如 `命中「今天」← 来自节点文本: '今天,已取消'`。
+
+    用户 2026-10-15: 多值条件("今天,已取消,结尾")的日志只打了整串条件,
+    看不出**按哪个候选判的** —— if / wait_for / 断言多值 统一补这一句。
+
+    hit: `(命中的候选, 来源, 命中的原文)` 或 None(没命中)。
+    命中来源就是候选本身(节点文本恰好等于候选)时只写「候选」, 不啰嗦。
+    """
+    if not hit:
+        return ""
+    value, src, raw = hit
+    if src == "text" and raw == value:
+        return f"命中「{value}」"
+    where = HIT_SOURCES.get(src, src)
+    return f"命中「{value}」← 来自{where}: {raw!r}"
+
+
 def text_present(d, texts, xml=None, round_no=None):
     """页面上有没有这些文本 —— **判断类统一入口**(原生优先, 树稀疏时 OCR 兜底)。
 

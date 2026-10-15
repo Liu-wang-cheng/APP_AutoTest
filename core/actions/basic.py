@@ -246,8 +246,11 @@ def do_wait_for(runner, step):
                 return
         else:
             # ★ 判断走 runner._text_present: 原生优先 + 树稀疏时 OCR 兜底
+            # ★ 多值(逗号分隔)要写清命中的是哪个(用户 2026-10-15, 与 if 同一问题)
             if runner._text_present(*(split_texts(value) or [value]), round_no=n + 1):
-                log.info(f"[wait_for] 等到文本(任一): {value}")
+                from core.session import hit_suffix
+                log.info(f"[wait_for] 等到文本(任一): {value}"
+                         f" → {hit_suffix(getattr(runner, '_last_text_hit', None))}")
                 return
         n += 1
         if end is not None:                  # timeout=0(无限等): 无 deadline 可顺延
@@ -323,6 +326,7 @@ def do_if_impl(runner, step, negate):
     passed = False
 
     checks = _if_checks(step)
+    num_seen = {"v": None, "read": False}    # 数值条件的实测值(留痕, 用户 2026-10-15)
     for op, fn in runner._NUM_OPS.items():
         if op in condition:
             keyword, expected = condition.split(op, 1)
@@ -332,7 +336,9 @@ def do_if_impl(runner, step, negate):
                 try:
                     val = extract_value(runner, runner._get_all_nodes(), keyword.strip())
                 except ValueError:
+                    num_seen["read"] = False
                     return False
+                num_seen["v"] = num_seen["read"] = val
                 try:
                     return bool(fn(float(val), float(expected.strip())))
                 except (TypeError, ValueError):
@@ -379,8 +385,20 @@ def do_if_impl(runner, step, negate):
         what = f"执行 then({len(then_branch)} 步)" if then_branch else "跳过(没有 then 子步骤)"
     else:
         what = f"执行 else({len(else_branch)} 步)" if else_branch else "跳过(没有 else 子步骤)"
+    # ★ 多值条件要写清**按哪个候选判的**(用户 2026-10-15: "条件成立('今天,已取消,结尾')
+    #   这里也没显示命中的内容"): 光看整串条件, 出了分歧只能一格格猜。命中详情由
+    #   runner._text_present 留下; 图片/id 条件不产生**(也不读旧的)**, 免得串味。
+    #   数值条件同理: 写出**实测值**, 否则"电量 > 50 不成立"看不出当时读到了多少。
+    from core.session import hit_suffix
+    is_num = any(op in condition for op in runner._NUM_OPS)
+    if is_num:
+        extra = (f" 实测 {num_seen['v']!r}" if num_seen["read"] else " 该字段读不到")
+    elif not runner._is_image(condition) and ":id/" not in condition:
+        extra = " " + hit_suffix(getattr(runner, "_last_text_hit", None))
+    else:
+        extra = ""
     log.info(f"[if{'(not)' if negate else ''}] 条件{'成立' if passed else '不成立'}"
-             f"({condition!r}) → {what}")
+             f"({condition!r}{extra}) → {what}")
 
     # ★ if 步骤自己的证据在**判定完、跑分支之前**拍(用户 2026-10-15: "截图也是在子
     #   步骤后面截图的"): 后置块在分支跑完后才拍, 那时画面已被子步骤改过, 还会被

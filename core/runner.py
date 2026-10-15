@@ -400,8 +400,12 @@ class ActionRunner:
                   OCR 兜底只在第 5/10/15… 轮触发(见 ocr.OCR_EVERY_N_ROUNDS)。
         rounds: 给了就**按次数**轮询(查这么多次就收手, 不看时间) —— if 条件用它实现
                 "两轮 × 每轮五次"的固定节奏(用户 2026-10-12 定)。
+        ★ 命中详情留在 `self._last_text_hit`(= (命中的候选, 来源, 命中的原文)) ——
+          多值条件("今天,已取消,结尾")光看条件串看不出**按哪个判的**(用户 2026-10-15);
+          if / wait_for / 断言多值 都拿它补上"命中「…」"。每次判断都重算, 不留旧的。
         """
         wanted = [t for t in texts if t]
+        self._last_text_hit = None
         if not wanted:
             return False
         end = time.time() + timeout if timeout else None
@@ -425,7 +429,9 @@ class ActionRunner:
                     rn = n
                 else:
                     rn = None
-            if text_present(self.d, wanted, round_no=rn):
+            hit, _where, _raw, _pos = text_present_detail(self.d, wanted, round_no=rn)
+            if hit:
+                self._last_text_hit = (hit, _where, _raw)     # ★ 供调用方写"命中「…」"
                 return True
             if rounds is not None:
                 if n < rounds:
@@ -873,8 +879,9 @@ class ActionRunner:
             hit, src, raw, pos = text_present_detail(self.d, values, xml=xml,
                                                      round_no=check_count + 1)
             if hit:
-                where = {"text": "节点文本", "desc": "无障碍描述(看不见的控件)",
-                         "ocr": "截图识别(OCR)"}.get(src, src)
+                # 来源中文名与 if/wait_for 共用一张表(见 session.HIT_SOURCES)
+                from core.session import HIT_SOURCES
+                where = HIT_SOURCES.get(src, src)
                 log.info(f"[断言] 命中「{hit}」← 来自{where}: {raw!r}"
                          + (f" @ {pos}" if pos else ""))
                 return

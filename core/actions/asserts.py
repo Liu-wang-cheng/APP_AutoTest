@@ -297,7 +297,10 @@ def _assert_any(runner, texts, images, timeout):
     n = 0
     while True:
         if texts and runner._text_present(*texts, round_no=n + 1):
-            log.info(f"[断言] 命中文本(任一): {texts}")
+            # ★ 多值断言要写清命中的是哪个(用户 2026-10-15: 与 if 条件同一处问题)
+            from core.session import hit_suffix
+            log.info(f"[断言] 命中文本(任一): {texts}"
+                     f" → {hit_suffix(getattr(runner, '_last_text_hit', None))}")
             return
         for name in images:
             screen = runner.d.screenshot(format="opencv")
