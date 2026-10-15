@@ -16,6 +16,7 @@ import core.actions  # noqa: F401  导入即注册全部动作(见 core/actions/
 from core.driver import BASE_DIR, split_texts
 from core.session import (text_present_detail, warm_webview,  # noqa: E501  判断统一入口 + WebView 预热
                           scan_status_words, set_status_words, FaultStateError)
+from core.sentinel import ignore_packages as _ignore_packages,     set_ignore_packages as _set_ignore_packages
 from core.logger import get_logger
 from vlm.backend import VisionRouter
 
@@ -91,6 +92,10 @@ class ActionRunner:
         self.d = device
         self._device_id = getattr(device, "serial", None)
         self.case_name = case_name
+        # ★ 文本判断要排除**手机系统 UI**的文本(状态栏/通知栏): 否则"手机在充电"会把
+        #   "确保设备在充电"判成通过(用户 2026-10-15 实测)。默认排系统 UI 包, 可用
+        #   config runner.text_ignore_packages 追加(逗号分隔)。
+        _set_ignore_packages(config.get("text_ignore_packages"))
         # ★ 故障/空闲哨兵词表: 用 config runner 段的 fault_texts / idle_texts 覆盖
         #   (不配则用内置默认, 见 core/session.py)
         set_status_words(config.get("fault_texts"), config.get("idle_texts"),
@@ -837,6 +842,18 @@ class ActionRunner:
                     if not self._element_visible(el):
                         # 未渲染的隐藏节点不算"看到了"(见 _element_visible) —— 继续等下一个候选
                         log.info(f"[断言] 命中的「{v}」是未渲染的隐藏节点, 不计: "
+                                 f"{self._element_desc(el)}")
+                        continue
+                    try:
+                        _pkg = (el.info or {}).get("packageName") or ""
+                    except Exception:
+                        _pkg = ""      # 元素已失效/桩设备没有 info: 当"不知道包名", 不过滤
+                    if _pkg in _ignore_packages():
+                        # ★ 手机系统 UI(状态栏/通知栏)里的文本不算数(用户 2026-10-15):
+                        #   u2 的 textContains 是**全屏**查询, 会搜到手机自己的状态栏/通知栏
+                        #   —— "手机在充电"曾把"确保设备在充电"这条前置判成通过。
+                        #   与 visible_nodes 的过滤同一判据(见 core/sentinel)。
+                        log.info(f"[断言] 命中的「{v}」来自手机系统 UI「{_pkg}」, 不计: "
                                  f"{self._element_desc(el)}")
                         continue
                     # ★ 必须写清**命中了什么**: 断言是 textContains + content-desc 兜底,

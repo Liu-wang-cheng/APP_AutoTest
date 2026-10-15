@@ -17,8 +17,39 @@ from core.driver import split_texts as _split_texts   # 多值拆分: 与断言/
 
 
 _NODE_RE = re.compile(r"<node\b[^>]*>")
-_NODE_ATTR_RE = re.compile(r'\b(text|content-desc|bounds)="([^"]*)"')
+_NODE_ATTR_RE = re.compile(r'\b(text|content-desc|bounds|package)="([^"]*)"')
 _ZERO_BOUNDS = re.compile(r"^\[0,0\]\[0,0\]$")
+
+#: **手机系统 UI** 的包名 —— 文本判断一律忽略它们(用户 2026-10-15 实测报的 bug):
+#: 层级 dump 里除了被测 APP, 还带着**手机自己的**状态栏/通知栏(com.android.systemui)。
+#: 后果很实在: 手机插着 USB 在充电 → 状态栏/通知里有「正在充电」→ 而"确保设备在充电"
+#: 这条前置找的就是「充电」⇒ **机器人没在充电也判通过**(拿手机的电量状态顶了机器人的)。
+#: 同类风险: 系统通知里的「检查更新」(命中故障词「检查」)、锁屏「等待中」(命中空闲词)。
+#: 想再排除别的包(如某个常驻通知的 APP), 见 set_ignore_packages()。
+SYSTEM_UI_PACKAGES = ("com.android.systemui",)
+_ignore_packages = set(SYSTEM_UI_PACKAGES)
+
+
+def set_ignore_packages(packages):
+    """覆盖"忽略哪些包的文本"(config.yaml 的 runner.text_ignore_packages; 传 None/空=用默认)
+
+    配置项存在的意义: 各手机/模拟器的系统 UI 包名不总是一样(有的 ROM 还有自家的
+    com.miui.systemui 之类), 或者某个常驻通知 APP 老在页面上挂着干扰词 —— 不用改代码就能排掉。
+    """
+    global _ignore_packages
+    if packages is None:
+        _ignore_packages = set(SYSTEM_UI_PACKAGES)
+        return
+    if isinstance(packages, str):
+        packages = [p for p in re.split(r"[,，、;\s]+", packages) if p]
+    merged = set(SYSTEM_UI_PACKAGES)
+    merged.update(str(p).strip() for p in (packages or []) if str(p).strip())
+    _ignore_packages = merged
+
+
+def ignore_packages():
+    """当前忽略的包名集合(测试/排查用)"""
+    return set(_ignore_packages)
 
 
 def visible_nodes(xml):
@@ -30,10 +61,16 @@ def visible_nodes(xml):
       留下的"…已完成"文案)。看不见的东西不该算"看到了"。
       判据: `bounds="[0,0][0,0]"`(Android 对未渲染/GONE 的节点就是这么报的) ⇒ 跳过。
       没有 bounds 属性的节点**保持原样**(宁可不误杀 —— 有些精简层级不带 bounds)。
+    ★ 再排除**手机系统 UI** 的包(2026-10-15 用户报的真 bug): dump 里除了被测 APP 还带着
+      手机自己的状态栏/通知栏 —— "手机在充电"会被"确保设备在充电"这条前置当成机器人
+      在充电判通过。见 SYSTEM_UI_PACKAGES。
+      同样: 没有 package 属性的节点保持原样(精简层级不带 package, 不能一刀切杀掉)。
     """
     out = []
     for tag in _NODE_RE.findall(xml):
         attrs = dict(_NODE_ATTR_RE.findall(tag))
+        if attrs.get("package") in _ignore_packages:
+            continue                         # 手机系统 UI(状态栏/通知栏)的话不算数
         b = attrs.get("bounds")
         if b and _ZERO_BOUNDS.match(b):
             continue                         # 未渲染 → 视觉上不存在
