@@ -270,3 +270,37 @@ def test_resolve_baseline_pre_form(tmp_path, monkeypatch):
     assert got.endswith("前置_已进入设备页.png") and os.path.exists(got), got
     with pytest.raises(RuntimeError, match="前置"):
         _resolve_baseline(_R(), "pre:不存在的前置")
+
+
+def test_compare_fail_also_saves_evidence_with_verdict(tmp_path):
+    """★ 对比**失败也要留证据图**(2026-10-15): 以前只在通过时标注落盘 —— 失败时
+    最有排查价值的那张反而没有。图上带 FAIL 结论、矩形转红。"""
+    import cv2
+    import numpy as np
+    from core.actions.asserts import compare_screen
+
+    frame = np.full((200, 100, 3), 120, dtype=np.uint8)
+    base = frame.copy()
+    base[100:, :] = (250, 250, 250)          # 下半截然不同 → 相似度远低于阈值
+    runner = _Runner(frame, tmp_path)
+    base_path = _write_baseline(tmp_path, base)
+    with pytest.raises(AssertionError):
+        compare_screen(runner, base_path, threshold=0.99, region="0%,0% 100%,100%")
+    shot = runner._pre_click_shot
+    assert shot, "失败时也必须留下证据图"
+    img = _imread_any(shot)
+    # 失败: 矩形用红色 (0,0,235) —— 取顶边像素验证
+    assert tuple(img[0, 50]) == (0, 0, 235), tuple(img[0, 50])
+
+
+def test_compare_pass_evidence_has_green_box(tmp_path):
+    """通过: 矩形保持亮黄 (0,200,255), 且图上写入 PASS 结论(不等于失败色)"""
+    import numpy as np
+    from core.actions.asserts import compare_screen
+
+    frame = np.full((200, 100, 3), 120, dtype=np.uint8)
+    runner = _Runner(frame, tmp_path)
+    base_path = _write_baseline(tmp_path, frame.copy())
+    compare_screen(runner, base_path, threshold=0.9, region="0%,0% 100%,100%")
+    img = _imread_any(runner._pre_click_shot)
+    assert tuple(img[0, 50]) == (0, 200, 255), tuple(img[0, 50])

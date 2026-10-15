@@ -116,15 +116,22 @@ def _resolve_region(runner, region, shape):
     return x1, y1, x2, y2, f"{x1},{y1}-{x2},{y2}(像素)"
 
 
-def _draw_region_annotation(img, x1, y1, x2, y2, pct_txt, sim_line=None):
+def _draw_region_annotation(img, x1, y1, x2, y2, pct_txt, sim_line=None,
+                             verdict=None):
     """对比范围标注(共用): 范围矩形 + 两行大字(相似度/阈值 + 范围百分比)。
 
     半透明深色底衬 + 黑描边亮黄字 —— 任何底色(绿色横幅/浅色页面)都可读。
     sim_line: "sim 97.2% / thr 80%" 这类; None = 只画范围(预览模式)。
+    verdict: "PASS"/"FAIL" —— 结论行(用户 2026-10-15: 图上要一眼看出对比结果);
+      FAIL 时矩形转红(与点击标记的红圈同色系, 一屏内不必读字)。
     """
-    cv2.rectangle(img, (x1, y1), (x2 - 1, y2 - 1), (0, 200, 255), 3)
+    ok = verdict != "FAIL"
+    box_color = (0, 200, 255) if ok else (0, 0, 235)
+    cv2.rectangle(img, (x1, y1), (x2 - 1, y2 - 1), box_color, 3)
     line1 = sim_line or ""
     line2 = f"area {pct_txt}"
+    if verdict:
+        line2 = f"{verdict} | {line2}"
     ty1 = y1 - 60 if y1 >= 110 else y1 + 56
     ty2 = y1 - 20 if y1 >= 110 else y1 + 100
     tx = x1 + 10
@@ -135,15 +142,16 @@ def _draw_region_annotation(img, x1, y1, x2, y2, pct_txt, sim_line=None):
         overlay = img.copy()
         cv2.rectangle(overlay, (sx1, sy1), (sx2, sy2), (25, 25, 25), -1)
         cv2.addWeighted(overlay, 0.45, img, 0.55, 0, img)
+    ink = (0, 220, 255) if ok else (80, 80, 255)
     if line1:
         cv2.putText(img, line1, (tx, ty1), cv2.FONT_HERSHEY_SIMPLEX, 1.4,
                     (0, 0, 0), 6, cv2.LINE_AA)
         cv2.putText(img, line1, (tx, ty1), cv2.FONT_HERSHEY_SIMPLEX, 1.4,
-                    (0, 220, 255), 3, cv2.LINE_AA)
+                    ink, 3, cv2.LINE_AA)
     cv2.putText(img, line2, (tx, ty2), cv2.FONT_HERSHEY_SIMPLEX, 1.4,
                 (0, 0, 0), 6, cv2.LINE_AA)
     cv2.putText(img, line2, (tx, ty2), cv2.FONT_HERSHEY_SIMPLEX, 1.4,
-                (0, 220, 255), 3, cv2.LINE_AA)
+                ink, 3, cv2.LINE_AA)
 
 
 def preview_region(frame, region):
@@ -198,38 +206,49 @@ def compare_screen(runner, baseline, threshold=0.6, inverse=False, region=None):
     similarity = 1 - np.count_nonzero(diff > 25) / diff.size
     rng_txt = f"(范围 {pct_txt} → 像素 {x1},{y1}-{x2},{y2})" if region else ""
     msg = f"相似度 {similarity:.1%} {rng_txt}".strip()
-    if inverse:
-        # diff 模式:相似度 < 阈值(即有差异)则通过;默认 0.99 = 变化超 1% 算通过
-        if similarity > threshold:
-            raise AssertionError(f"{msg},几乎无变化")
-    else:
-        if similarity < threshold:
-            raise AssertionError(f"{msg},低于阈值 {threshold:.0%}")
-    # ★ 通过也要留痕: 只记失败的话, 报告里看不出"比对到底比了多少、阈值多少"
-    log.info(f"[截图比对] {msg},阈值 {threshold:.0%} → 通过")
-    runner._last_compare_msg = msg
-    # ★ 标注 + 证据落盘(2026-10-14): 范围矩形 + 相似度/阈值写在比对帧上,
-    #   作为本步的截图证据(经证据槽, _execute 后置块让路)。不在步骤上下文
-    #   (单元测试直调/显式 screenshot 键)时跳过落盘, 只算数。
-    try:
-        if runner._cur_step is not None and "screenshot" not in (runner._cur_step or {}):
-            vis = screen.copy()         # 标注底图用**彩色**BGR(灰度图上矩形/文字没有颜色)
+
+    def _save_evidence(verdict):
+        """标注 + 证据落盘(2026-10-14/15): 范围矩形 + 相似度/阈值 + **结果
+        PASS/FAIL**(用户 2026-10-15: 图上要显示对比结果; FAIL 时矩形与文字转红);
+        作为本步截图证据(经证据槽, _execute 后置块让路)。不在步骤上下文
+        (单元测试直调/显式 screenshot 键)时跳过落盘, 只算数。"""
+        try:
+            if runner._cur_step is None or "screenshot" in (runner._cur_step or {}):
+                return
+            vis = screen.copy()     # 标注底图用**彩色**BGR(灰度图上矩形/文字没有颜色)
             path = runner._step_shot_path(getattr(runner, "_cur_step_desc", "") or "compare")
             os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
             ok, out = cv2.imencode(".png", vis)
-            if ok:
-                with open(path, "wb") as f:
-                    f.write(out.tobytes())
+            if not ok:
+                return
+            with open(path, "wb") as f:
+                f.write(out.tobytes())
 
-                def _draw(img):
-                    # ★ 两行大字(2026-10-14 用户: 字体大一些 + 要有范围百分比),
-                    #   半透明深色底衬 + 黑描边 —— 见 _draw_region_annotation
-                    _draw_region_annotation(img, x1, y1, x2, y2, pct_txt,
-                                            sim_line=f"sim {similarity:.1%} / thr {threshold:.0%}")
-                runner._annotate_shot(path, _draw)
-                runner._pre_click_shot = path
-    except Exception as e:
-        log.debug(f"[截图比对] 证据标注失败(不影响比对结果): {e}")
+            def _draw(img):
+                _draw_region_annotation(
+                    img, x1, y1, x2, y2, pct_txt,
+                    sim_line=f"sim {similarity:.1%} / thr {threshold:.0%}",
+                    verdict=verdict)
+            runner._annotate_shot(path, _draw)
+            runner._pre_click_shot = path
+        except Exception as e:
+            log.debug(f"[截图比对] 证据标注失败(不影响比对结果): {e}")
+
+    if inverse:
+        # diff 模式:相似度 < 阈值(即有差异)则通过;默认 0.99 = 变化超 1% 算通过
+        if similarity > threshold:
+            _save_evidence("FAIL")      # ★ 失败也留证据图(以前只留通过那张)
+            log.error(f"[截图比对] {msg},阈值 {threshold:.0%} → 失败(几乎无变化)")
+            raise AssertionError(f"{msg},几乎无变化")
+    else:
+        if similarity < threshold:
+            _save_evidence("FAIL")
+            log.error(f"[截图比对] {msg},阈值 {threshold:.0%} → 失败(低于阈值)")
+            raise AssertionError(f"{msg},低于阈值 {threshold:.0%}")
+    # ★ 通过也要留痕: 只记失败的话, 报告里看不出"比对到底比了多少、阈值多少"
+    _save_evidence("PASS")
+    log.info(f"[截图比对] {msg},阈值 {threshold:.0%} → 通过")
+    runner._last_compare_msg = msg
 
 
 @reg.action("assert", priority=10)
