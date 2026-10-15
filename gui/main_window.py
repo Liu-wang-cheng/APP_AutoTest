@@ -552,7 +552,8 @@ def _make_field_widget(field, value, steps=None, exclude_index=None,
             # ★ "这一步会有截图" = 勾了自动截图 **或**它是点击类动作(点击强制截图, 见
             #   core.registry.is_click_action) —— 判据要与执行端一致, 否则点击步骤明明
             #   会产出截图, 却在下拉里挑不到(用户要求 2026-10-11)。
-            if not (st.get("screenshot") or reg.is_click_action(reg.primary_action_key(st))):
+            if not (st.get("screenshot")
+                    or reg.is_shot_action(reg.primary_action_key(st))):
                 continue
             desc = st.get("desc") or "(无描述)"
             options.append((f"step:{i + 1}", f"步骤{i + 1}: {desc}"))

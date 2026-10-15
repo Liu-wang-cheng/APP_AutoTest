@@ -213,8 +213,11 @@ def compare_screen(runner, baseline, threshold=0.6, inverse=False, region=None):
         作为本步截图证据(经证据槽, _execute 后置块让路)。不在步骤上下文
         (单元测试直调/显式 screenshot 键)时跳过落盘, 只算数。"""
         try:
-            if runner._cur_step is None or "screenshot" in (runner._cur_step or {}):
-                return
+            if runner._cur_step is None:
+                return          # 不在步骤上下文(单元测试直调) → 只算数不落盘
+            # ★ 步骤写了 screenshot 键也照样落标注图(用户 2026-10-15): 后置块
+            #   见到本图会直接采用(见 runner._execute 的 compare/diff 分支) ——
+            #   否则会被重拍成一张**没有标注**的图, 对比结果就看不到了
             vis = screen.copy()     # 标注底图用**彩色**BGR(灰度图上矩形/文字没有颜色)
             path = runner._step_shot_path(getattr(runner, "_cur_step_desc", "") or "compare")
             os.makedirs(os.path.dirname(path) or ".", exist_ok=True)

@@ -304,3 +304,81 @@ def test_compare_pass_evidence_has_green_box(tmp_path):
     compare_screen(runner, base_path, threshold=0.9, region="0%,0% 100%,100%")
     img = _imread_any(runner._pre_click_shot)
     assert tuple(img[0, 50]) == (0, 200, 255), tuple(img[0, 50])
+
+
+def test_compare_is_default_screenshot_step(tmp_path):
+    """★ 对比步骤**默认截图**(用户 2026-10-15): 未勾截图、未写 screenshot 键,
+    结果里也必须有截图 —— 而且是**带标注**的那张(范围矩形+相似度+PASS)。"""
+    import os
+    import shutil
+    import numpy as np
+    import core.actions.asserts as A
+    from core.runner import ActionRunner
+
+    frame = np.full((200, 100, 3), 120, dtype=np.uint8)
+    base = tmp_path / "b.png"
+    import cv2
+    ok, buf = cv2.imencode(".png", frame)
+    base.write_bytes(buf.tobytes())
+
+    class _Dev:
+        serial = "fake"
+
+        @property
+        def info(self):
+            # ★ 必须有: runner._ensure_device 轻量调 d.info 探活 —— 缺它就走
+            #   3 次重连 × sleep(3) + u2.connect 失败 ≈ 9s/步(排查过一次, 别再加回)
+            return {"displayWidth": 100, "displayHeight": 200}
+
+        def screenshot(self, path=None, format=None):
+            if path:
+                ok, b = cv2.imencode(".png", frame)
+                open(path, "wb").write(b.tobytes())
+                return path
+            return frame
+
+    r = ActionRunner(_Dev(), {"step_interval": 0}, case_name="t")
+    r.results = []
+    r.run_steps([{"desc": "对比一下", "compare": str(base), "threshold": 0.5,
+                  "compare_area": "0%,0% 100%,100%"}])
+    got = r.results[0]["screenshot"]
+    assert got, f"对比步骤必须默认产出截图: {r.results[0]}"
+    img = _imread_any(got)
+    # 标注: 顶边有范围矩形(亮黄), 说明用的是标注图而不是裸截图
+    assert tuple(img[0, 50]) == (0, 200, 255), tuple(img[0, 50])
+
+
+def test_compare_with_explicit_screenshot_key_still_annotated(tmp_path):
+    """★ 步骤写了 screenshot: true 时也不能丢标注(用户 2026-10-15): 以前后置块会
+    重拍一张**没有标注**的图, 对比结果就看不到了。"""
+    import cv2
+    import numpy as np
+    from core.runner import ActionRunner
+
+    frame = np.full((200, 100, 3), 120, dtype=np.uint8)
+    base = tmp_path / "b2.png"
+    ok, buf = cv2.imencode(".png", frame)
+    base.write_bytes(buf.tobytes())
+
+    class _Dev:
+        serial = "fake"
+
+        @property
+        def info(self):
+            # ★ 必须有: runner._ensure_device 轻量调 d.info 探活 —— 缺它就走
+            #   3 次重连 × sleep(3) + u2.connect 失败 ≈ 9s/步(排查过一次, 别再加回)
+            return {"displayWidth": 100, "displayHeight": 200}
+
+        def screenshot(self, path=None, format=None):
+            if path:
+                ok, b = cv2.imencode(".png", frame)
+                open(path, "wb").write(b.tobytes())
+                return path
+            return frame
+
+    r = ActionRunner(_Dev(), {"step_interval": 0}, case_name="t")
+    r.results = []
+    r.run_steps([{"desc": "对比", "compare": str(base), "threshold": 0.5,
+                  "screenshot": True, "compare_area": "0%,0% 100%,100%"}])
+    img = _imread_any(r.results[0]["screenshot"])
+    assert tuple(img[0, 50]) == (0, 200, 255), "写了 screenshot 键也要用标注图"

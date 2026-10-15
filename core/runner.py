@@ -1024,20 +1024,24 @@ class ActionRunner:
         # ★ 点击类动作**强制截图**(用户要求 2026-10-11: "点击操作默认要截图, 不可以关闭"):
         #   点错地方是最难查的一类问题 —— 报告里必须能看到"当时点在哪"。
         #   步骤里写 screenshot: false 也照样截; 写了路径就用那个路径。
-        click_step = (self.click_shots
-                      and reg.is_click_action(reg.primary_action_key(step)))
+        _key = reg.primary_action_key(step)
+        click_step = (self.click_shots and reg.is_click_action(_key))
+        # ★ 图像对比类步骤**默认截图**(用户 2026-10-15) —— 与 click_shots 开关无关:
+        #   前置里的对比步骤也要留标注图(它的证据 = 标注本身)
+        shot_step = click_step or _key in reg.COMPARE_ACTIONS
         pre_shot = getattr(self, "_pre_click_shot", None)
         # ★ sleep 步骤的 pre_shot 即便带显式 screenshot 键也采用 —— 等待前后画面
         #   相同, 没必要再等 180s 重拍一张(2026-10-14 用户: 等待不应延迟截图)
         if pre_shot and ("screenshot" not in step or
-                         (main and main[0] in ("sleep", "if", "if not"))):
+                         (main and main[0] in ("sleep", "if", "if not",
+                                               "compare", "diff"))):
             # 点击/等待证据已在**动作前**拍好并标注(2026-10-13/14) —— 直接采用,
             #   不再动作后再拍一张(那时页面已经变了)
             screenshot = pre_shot
             # ★ 采用即消费(用户 2026-10-15): 不清掉的话, if 分支的后续子步骤和
             #   父 if 行会把这张图**当成自己的**继承下去 —— 子步骤截图显示错乱的根因
             self._pre_click_shot = None
-        elif "screenshot" in step or click_step or self.always_screenshot:
+        elif "screenshot" in step or shot_step or self.always_screenshot:
             sv = step.get("screenshot")
             if isinstance(sv, str) and sv.strip():
                 path = sv                       # 旧用例的手动路径, 兼容保留

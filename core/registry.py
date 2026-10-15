@@ -80,3 +80,14 @@ CLICK_ACTIONS = frozenset({"click", "click_template", "long_click",
 def is_click_action(key):
     """这个动作是不是"点击类"(→ 强制截图并把点击位置标在图上)"""
     return key in CLICK_ACTIONS
+
+
+#: 「图像对比」类: 它们的截图 = **标注图本身**(对比范围矩形 + 相似度/阈值 + PASS/FAIL),
+#: 所以同样**默认产出**、且必须用标注后的那张(用户 2026-10-15: "图像对比步骤也需要
+#: 改为默认截图, 并且需要显示对比标注图")。与 click_shots 开关无关 —— 前置里也要。
+COMPARE_ACTIONS = frozenset({"compare", "diff"})
+
+
+def is_shot_action(key):
+    """这个动作是否**默认产出截图**(点击类 / 图像对比)"""
+    return key in CLICK_ACTIONS or key in COMPARE_ACTIONS
