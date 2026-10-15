@@ -43,7 +43,6 @@ BASE_DIR_MODULES = (
     "core.actions.map_ops",
     "core.excel_report",
     "core.runner",
-    "core.trace",
     "core.vision",
     "gui.main_window",
     "gui.runner_thread",

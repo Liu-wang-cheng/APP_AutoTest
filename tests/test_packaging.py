@@ -889,28 +889,32 @@ def test_prune_debug_artifacts_keeps_newest_per_dir(tmp_path, monkeypatch):
     assert keep.exists(), "debug 之外的文件被误删了"
 
 
-def test_prune_debug_artifacts_removes_legacy_duplicate_dir(tmp_path, monkeypatch):
-    """★ 旧版重复图目录整棵删掉(用户 2026-10-15: "看下截图中还有重复的吗"):
+def test_prune_debug_artifacts_removes_legacy_duplicate_dirs(tmp_path, monkeypatch):
+    """★ 旧版**重复图**目录整棵删掉(用户 2026-10-15: "看下截图中还有重复的吗" +
+    "失败截图统一存用例失败时的那一张…其他的什么失败时序和失败步骤都不需要了"):
 
-    2.0.20 及更早会把每次模板点击再存一份到 Test_img/debug/clicks/ —— 同一张画面
-    在"步骤截图"里已经有一份带点击标记的了。新版本不再写它, 老装机的残留要收掉
-    (按个数封顶收不掉: 那目录只有几张, 永远到不了 200)。
+      · clicks/   —— 2.0.20 及更早把每次模板点击再存一份到这里(同画面的第二张);
+      · failures/ —— 旧版失败截图/时序证据目录(失败图现在就在用例自己的截图目录里)。
+    两个目录新版本都不再写, 老装机的残留要收掉 —— 按个数封顶收不掉: 文件太少,
+    永远到不了 200 的上限。
     """
     from core import bootstrap
 
     monkeypatch.setattr(bootstrap, "_app_root", lambda app_dir=None: str(tmp_path))
-    legacy = tmp_path / "Test_img" / "debug" / "clicks" / "用例A"
-    legacy.mkdir(parents=True)
-    (legacy / "a.png").write_bytes(b"x" * 10)
-    keep = tmp_path / "Test_img" / "debug" / "failures" / "用例A_trace"
+    debug = tmp_path / "Test_img" / "debug"
+    for name in ("clicks", "failures"):
+        old = debug / name / "用例A"
+        old.mkdir(parents=True)
+        (old / "a.png").write_bytes(b"x" * 10)
+    keep = debug / "compare_preview"
     keep.mkdir(parents=True)
-    (keep / "00_ok.jpg").write_bytes(b"j" * 10)      # 失败证据不能被误删
+    (keep / "预览.png").write_bytes(b"p" * 10)       # 还在用的目录不能被误删
 
     n, freed = bootstrap.prune_debug_artifacts()
-    assert not (tmp_path / "Test_img" / "debug" / "clicks").exists(), \
-        "旧版重复图目录应整棵删除"
-    assert n == 2 and freed == 10, (n, freed)      # 目录本身 + 里面那张 10 字节的图
-    assert keep.exists() and (keep / "00_ok.jpg").exists(), "失败证据被误删了"
+    assert not (debug / "clicks").exists(), "旧版点击标记目录应整棵删除"
+    assert not (debug / "failures").exists(), "旧版失败证据目录应整棵删除"
+    assert n == 4 and freed == 20, (n, freed)      # 2 个目录 + 各 1 张 10 字节的图
+    assert (keep / "预览.png").exists(), "在用的预览目录被误删了"
 
 
 def test_prune_debug_artifacts_caps_total_size(tmp_path, monkeypatch):
@@ -919,7 +923,7 @@ def test_prune_debug_artifacts_caps_total_size(tmp_path, monkeypatch):
     from core import bootstrap
 
     monkeypatch.setattr(bootstrap, "_app_root", lambda app_dir=None: str(tmp_path))
-    d = tmp_path / "Test_img" / "debug" / "failures"
+    d = tmp_path / "Test_img" / "debug" / "notes"
     d.mkdir(parents=True)
     for i in range(4):
         f = d / f"big{i}.bin"
@@ -963,7 +967,12 @@ def test_prune_run_artifacts_keeps_recent_runs_per_case(tmp_path, monkeypatch, m
 
 
 def test_prune_run_artifacts_caps_total_and_reports(tmp_path, monkeypatch, mk_run_dirs):
-    """总体积超上限按最旧优先删; reports 按份数、失败截图按张数封顶"""
+    """总体积超上限按最旧优先删; reports 按份数封顶
+
+    ★ 失败截图不再单独封顶(用户 2026-10-15: "失败截图统一存用例失败时的那一张, 并且
+      和测试步骤截图放同一个目录") —— 它在用例自己的截图目录里, 随"保留最近 N 次运行"
+      一起循环; 旧的 Test_img/debug/failures/ 由启动清理整棵删掉。
+    """
     from core import bootstrap
     monkeypatch.setattr(bootstrap, "_app_root", lambda app_dir=None: str(tmp_path))
     shots = tmp_path / "Test_cases" / "组甲" / "screenshots"
@@ -976,7 +985,7 @@ def test_prune_run_artifacts_caps_total_and_reports(tmp_path, monkeypatch, mk_ru
         f.write_bytes(b"r")
         import os as _os
         _os.utime(f, (3000 + i, 3000 + i))
-    # 用例级失败截图已并入 debug/failures(2026-10-14, 与逐步失败图/时序证据同目录)
+    # 旧版失败证据目录(整棵删掉的老目录)
     fdir = tmp_path / "Test_img" / "debug" / "failures"
     fdir.mkdir(parents=True)
     for i in range(4):
@@ -986,89 +995,11 @@ def test_prune_run_artifacts_caps_total_and_reports(tmp_path, monkeypatch, mk_ru
         _os.utime(f, (4000 + i, 4000 + i))
 
     dirs, files, _freed = bootstrap.prune_run_artifacts(
-        keep_runs=9, max_total_mb=2 / 1024, report_keep=2, fail_keep=1)
+        keep_runs=9, max_total_mb=2 / 1024, report_keep=2)
     left = sorted(p.name for p in shots.iterdir())
     assert left == ["甲用例-第2次", "甲用例-第3次"], left      # 2KB 上限 → 只剩最新两个
     assert sorted(p.name for p in reps.glob("*.xlsx")) == ["report_3.xlsx", "report_4.xlsx"]
-    assert sorted(p.name for p in fdir.iterdir()) == ["c3.png"]
-
-
-def test_failure_shots_and_trace_dirs_capped_at_twenty(tmp_path, monkeypatch):
-    """★ 失败截图与失败时序证据目录都只留 20 个(用户 2026-10-12: "失败截图改为20张, 多了也无用")
-
-    时序证据是**目录**(<用例>_trace/ 里面还有 8 张 JPEG), 只按"目录里的文件数"限会让
-    目录本身一直攒 —— 所以按**目录个数**也要封顶。
-    """
-    import os as _os
-    from core import bootstrap
-    monkeypatch.setattr(bootstrap, "_app_root", lambda app_dir=None: str(tmp_path))
-    monkeypatch.setattr(bootstrap, "TRACE_KEEP", 2)
-    monkeypatch.setattr(bootstrap, "REPORT_FAIL_SHOTS_KEEP", 2)
-
-    # ①② 失败截图与时序证据**同目录**(2026-10-14 合并):
-    #     文件 = 用例级失败截图(按张数封顶), 目录 = 时序证据(按组数封顶) —— 互不干扰
-    fdir = tmp_path / "Test_img" / "debug" / "failures"
-    fdir.mkdir(parents=True)
-    for i in range(5):
-        f = fdir / f"用例{i}.png"
-        f.write_bytes(b"s")
-        _os.utime(f, (1000 + i, 1000 + i))
-    tdir = fdir
-    for i in range(5):
-        d = tdir / f"用例{i}_trace"
-        d.mkdir(parents=True)
-        (d / "step.jpg").write_bytes(b"j")
-        _os.utime(d, (2000 + i, 2000 + i))
-
-    bootstrap.prune_run_artifacts()          # 内部会连带跑 prune_debug_artifacts
-
-    assert sorted(p.name for p in fdir.iterdir()) == \
-        ["用例3.png", "用例3_trace", "用例4.png", "用例4_trace"], \
-        sorted(p.name for p in fdir.iterdir())
-
-
-def test_caps_are_fifty_and_recycle_at_write_time(tmp_path, monkeypatch):
-    """★ 上限 50, 且"到上限就**循环覆盖**最旧的"是**写的时候**做的, 不是等下次启动。
-
-    用户 2026-10-12: "失败截图改为50张, 按上限循环存储" —— 一次长时间运行里连着失败几十次时,
-    图片必须先涨过上限、等到下次启动才被清掉是不行的。
-    """
-    import os as _os
-    from core import bootstrap
-    monkeypatch.setattr(bootstrap, "_app_root", lambda app_dir=None: str(tmp_path))
-    assert bootstrap.REPORT_FAIL_SHOTS_KEEP == 50, bootstrap.REPORT_FAIL_SHOTS_KEEP
-    assert bootstrap.TRACE_KEEP == 50, bootstrap.TRACE_KEEP
-
-    # ① 失败截图: 写第 51 张后调 trim → 只剩最新 50 张
-    fdir = tmp_path / "reports" / "failures"
-    fdir.mkdir(parents=True)
-    for i in range(51):
-        f = fdir / f"用例{i:02d}.png"
-        f.write_bytes(b"s")
-        _os.utime(f, (1000 + i, 1000 + i))
-    n, _freed = bootstrap.trim_failures(str(fdir))
-    left = sorted(p.name for p in fdir.iterdir())
-    assert n == 1 and len(left) == 50, (n, len(left))
-    assert "用例00.png" not in left and "用例50.png" in left, left
-
-    # ② 时序证据目录同理(每个目录里还有若干 JPEG)
-    tdir = tmp_path / "Test_img" / "debug" / "failures"
-    for i in range(51):
-        d = tdir / f"用例{i:02d}_trace"
-        d.mkdir(parents=True)
-        (d / "00_fail.jpg").write_bytes(b"j")
-        _os.utime(d, (2000 + i, 2000 + i))
-    # 同目录下还有**单张**失败截图(trace.failure_screenshot 写的), 也要一起循环
-    for i in range(51):
-        f = tdir / f"用例{i:02d}_step00_fail.png"
-        f.write_bytes(b"p")
-        _os.utime(f, (2500 + i, 2500 + i))
-    n2, _f = bootstrap.trim_traces(str(tdir))
-    left2 = sorted(p.name for p in tdir.iterdir())
-    assert n2 == 2, n2                      # 1 个旧目录 + 1 张旧截图
-    assert len(left2) == 100, len(left2)     # 50 目录 + 50 文件
-    assert "用例00_trace" not in left2 and "用例50_trace" in left2, left2
-    assert "用例00_step00_fail.png" not in left2, left2
+    assert not fdir.exists(), "旧版失败证据目录应整棵删掉"
 
 
 def test_case_screenshots_recycle_at_write_time(tmp_path, monkeypatch):

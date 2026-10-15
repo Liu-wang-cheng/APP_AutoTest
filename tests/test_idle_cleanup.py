@@ -34,10 +34,10 @@ def qapp():
 
 def test_idle_when_not_running_runs_immediately(tmp_path, mk_stale_files):
     """空闲时照旧立刻执行, 且不排队(闸门不能把正常运行也拦掉)"""
-    d = tmp_path / "reports" / "failures"
+    d = tmp_path / "Test_img" / "debug" / "notes"
     mk_stale_files(d, 3)
     assert idle.is_busy() is False
-    n, _freed = bootstrap.trim_failures(str(d), keep=2)
+    n = bootstrap.keep_newest([str(x) for x in d.iterdir()], 2)[0]
     assert n == 1, "空闲时清理应当立刻动手, 而不是排进待办"
     assert idle.pending_names() == []
 
@@ -187,40 +187,6 @@ def test_prune_debug_artifacts_deferred_while_running(tmp_path, mk_stale_files):
     assert sorted(p.name for p in d.iterdir()) == ["f3.png", "f4.png"]
 
 
-def test_trim_failures_deferred_while_running(tmp_path, mk_stale_files):
-    """失败截图循环覆盖: 执行期间不删(它按用例名存, 推迟不会堆文件), 结束后收"""
-    d = tmp_path / "reports" / "failures"
-    mk_stale_files(d, 3)
-    idle.begin_run()
-    try:
-        assert bootstrap.trim_failures(str(d), keep=2) == (0, 0)
-        assert len(list(d.iterdir())) == 3
-        assert "失败截图循环" in idle.pending_names()
-    finally:
-        idle.end_run()
-    idle.flush(background=False)
-    assert sorted(p.name for p in d.iterdir()) == ["f1.png", "f2.png"]
-
-
-def test_trim_traces_deferred_while_running(tmp_path):
-    """失败时序证据: 执行期间不删, 结束后目录与单张截图各留最新 N 个"""
-    d = tmp_path / "Test_img" / "debug" / "failures"
-    d.mkdir(parents=True)
-    for i in range(3):
-        sub = d / f"用例{i}_trace"
-        sub.mkdir()
-        os.utime(sub, (2000 + i, 2000 + i))
-    idle.begin_run()
-    try:
-        assert bootstrap.trim_traces(str(d), keep=2) == (0, 0)
-        assert len(list(d.iterdir())) == 3
-        assert "失败证据循环" in idle.pending_names()
-    finally:
-        idle.end_run()
-    idle.flush(background=False)
-    assert sorted(p.name for p in d.iterdir()) == ["用例1_trace", "用例2_trace"]
-
-
 def test_trim_case_screenshots_deferred_while_running(tmp_path):
     """用例截图循环: 执行期间不删, 结束后按**运行**整组循环覆盖(保留最近 2 次运行)
 
@@ -335,8 +301,6 @@ def test_每个清理入口都装了空闲闸门():
         bootstrap.cleanup_old_backup,
         bootstrap.prune_debug_artifacts,
         bootstrap.prune_run_artifacts,
-        bootstrap.trim_failures,
-        bootstrap.trim_traces,
         bootstrap.trim_case_screenshots,
     ]
     missing = [f.__name__ for f in entries

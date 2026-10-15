@@ -9,9 +9,9 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 # 引擎侧注册的动作数(grab/match/screenshot 不进分发表,见下)
-EXPECTED_ACTION_COUNT = 25
+EXPECTED_ACTION_COUNT = 26
 # schema 声明的动作数:不含 screenshot —— 它是通用字段,任何步骤都能挂
-EXPECTED_SCHEMA_COUNT = 27
+EXPECTED_SCHEMA_COUNT = 28
 GENERIC_FIELD_KEYS = {"desc", "screenshot", "wait", "timeout", "retry"}
 
 
@@ -21,7 +21,6 @@ def main():
     from core.actions.data_ops import extract_value  # noqa: F401
     from core.driver import BASE_DIR, load_yaml_file  # noqa: F401
     from core.runner import ActionRunner  # noqa: F401
-    from core.trace import TraceRecorder  # noqa: F401
     from gui import schema
     from vlm.backend import VisionRouter
 

@@ -127,6 +127,22 @@ class _SeqDev(FakeDevice):
         p.write_bytes(b"png")
 
 
+class _FrameDev(FakeDevice):
+    """真画面的桩: `format="opencv"` 给帧, 给 path 就写一张真 PNG(对比/标注流程要用)"""
+
+    def screenshot(self, path=None, format=None):
+        import cv2
+        import numpy as np
+        frame = np.full((120, 80, 3), 200, dtype=np.uint8)
+        if path:
+            from pathlib import Path as _P
+            p = _P(path)
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_bytes(cv2.imencode(".png", frame)[1].tobytes())
+            return path
+        return frame
+
+
 def test_click_screenshots_before_clicking(runner):
     """★ 点击证据要**点击前**拍: 点完再截页面已变, 标注的坐标对不上那一刻的界面。"""
     runner.d = _SeqDev()
@@ -384,6 +400,57 @@ def test_failed_row_error_has_timestamp(runner):
     assert ok is False
     err = runner.results[-1]["error"]
     assert re.match(r"^\[\d{2}:\d{2}:\d{2}\] ", err), err
+
+
+def test_failure_shot_reuses_step_evidence_in_run_dir(runner, monkeypatch, tmp_path):
+    """★ 失败截图统一存**用例失败时的那一张**, 和步骤截图同目录(用户 2026-10-15:
+    "失败截图统一存用例失败时的那一张，并且和测试步骤截图放同一个目录，其他的什么失败
+    时序和失败步骤都不需要了" + "测试步骤本身就包含了测试失败的步骤截图")。
+
+    本步已经有自己的证据图(点击前的点位标记图 / 对比范围标注图)时**直接采用**它 ——
+    失败行指向的就是这张, 不会再拍第二张同画面的图, 也不再落 Test_img/debug/。
+    """
+    import cv2
+    import numpy as np
+    import core.runner as runner_mod
+    monkeypatch.setattr(runner_mod, "BASE_DIR", str(tmp_path))
+    runner.shot_subdir = "甲用例_r20260101_090000_第1次"
+    runner.d = _FrameDev()
+
+    # 基准图与当前画面明显不同 → 对比步骤判 FAIL(它会先落一张带 FAIL 标注的证据图)
+    base = tmp_path / "base.png"
+    base.write_bytes(cv2.imencode(
+        ".png", np.zeros((120, 80, 3), dtype=np.uint8))[1].tobytes())
+    ok = runner.run_steps([{"desc": "对比一下", "compare": str(base), "threshold": 0.9,
+                            "compare_area": "0%,0% 100%,100%"}])
+    assert ok is False
+    row = runner.results[-1]
+    shot = row["screenshot"]
+    assert "/screenshots/甲用例_r20260101_090000_第1次/" in shot.replace("\\", "/"), shot
+    assert shot.endswith("step01_对比一下.png"), shot     # 本步证据图(带 FAIL 标注), 不是另拍的
+    assert (tmp_path / "Test_cases" / "未分组" / "screenshots"
+            / "甲用例_r20260101_090000_第1次" / "step01_对比一下.png").exists()
+    assert not (tmp_path / "Test_img" / "debug").exists(), \
+        "不该再有 Test_img/debug 下的失败截图/时序证据"
+
+
+def test_failure_shot_added_when_step_has_no_evidence(runner, monkeypatch, tmp_path):
+    """★ 纯断言类步骤失败时**补拍一张**, 名字固定 `失败截图.png`, 位置同样在本轮截图目录
+    —— 保证"失败时一定有一张图", 且和步骤截图在一起(不再有时序证据/逐步失败图)。"""
+    import core.runner as runner_mod
+    monkeypatch.setattr(runner_mod, "BASE_DIR", str(tmp_path))
+    runner.shot_subdir = "甲用例_r20260101_090000_第1次"
+    runner.d = _FrameDev()
+
+    ok = runner.run_steps([{"desc": "只断言", "assert": "不会有这个文本", "timeout": 0.1}])
+    assert ok is False
+    shot = runner.results[-1]["screenshot"]
+    assert shot.endswith("失败截图.png"), shot
+    assert "/screenshots/甲用例_r20260101_090000_第1次/" in shot.replace("\\", "/"), shot
+    assert (tmp_path / "Test_cases" / "未分组" / "screenshots"
+            / "甲用例_r20260101_090000_第1次" / "失败截图.png").exists(), shot
+    assert not (tmp_path / "Test_img" / "debug").exists(), \
+        "不该再有 Test_img/debug 下的失败截图/时序证据"
 
 
 def test_click_coordinates(runner):
@@ -707,7 +774,7 @@ def test_screenshots_are_split_per_execution(runner):
     assert runner.run_steps([{"desc": "点一下", "click": "确认", "screenshot": True}])
     runner.shot_subdir = "甲用例-第2次"          # worker 每次执行会设成"用例名-第N次"
     assert runner.run_steps([{"desc": "点一下", "click": "确认", "screenshot": True}])
-    # 只要"有路径"的那几次(TraceRecorder 每步也会截一帧 format="opencv", path=None)
+    # 只要「有路径」的那几次
     paths = [p for p in outs if p]
     assert len(paths) == 2, outs
     first, second = [p.replace("\\", "/") for p in paths]

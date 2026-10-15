@@ -423,18 +423,11 @@ class RunWorker(QThread):
                     if not passed:
                         all_passed = False
                         if not self._stop_requested:
-                            # 用例级失败截图
-                            # ★ 与逐步失败图/时序证据同目录(2026-10-14 合并):
-                            #   失败证据只看一处; 按用例名复用, 不新增文件
-                            fail_dir = os.path.join(BASE_DIR, "Test_img", "debug",
-                                                    "failures")
-                            os.makedirs(fail_dir, exist_ok=True)
-                            try:
-                                d.screenshot(os.path.join(fail_dir, f"{case_name}.png"))
-                                from core import bootstrap as _bs
-                                _bs.trim_failures(fail_dir)      # 到上限就循环覆盖最旧的
-                            except Exception:
-                                pass
+                            # ★ 失败截图由引擎在失败那一刻留好(用户 2026-10-15: "失败截图
+                            #   统一存用例失败时的那一张, 并且和测试步骤截图放同一个目录")
+                            #   —— 就在本轮 screenshots/<用例_r标签_第N次>/ 里, 已经通过
+                            #   失败步骤那一行的 screenshot 进了界面与报告, 这里不再另拍
+                            #   一张(以前存 Test_img/debug/failures/<用例>.png, 同画面重复)。
                             self.status.emit(f"用例失败: {case_name}")
                             self.case_finished.emit(fp, case_name, False)   # 状态灯 → 红
                     else:

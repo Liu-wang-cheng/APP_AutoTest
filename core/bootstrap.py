@@ -16,7 +16,7 @@
 
 ★ 清理类操作一律先过「空闲闸门」(core/idle.py, 用户要求 2026-10-12)
   `cleanup_update_leftovers` / `cleanup_old_backup` / `prune_debug_artifacts` /
-  `prune_run_artifacts` / `trim_failures` / `trim_traces` / `trim_case_screenshots`
+  `prune_run_artifacts` / `trim_case_screenshots`
   都挂着 `@idle.gated(...)` 装饰器 —— 正在执行用例时**推迟**到本轮结束再做, 免得目录
   遍历与跑用例的内存峰值撞在一起。**新增清理函数请照挂**, 否则它就成了漏网的那个
   (有一条结构性守护测试扫描 @idle.gated)。注意: 只做"推迟", 不做"跳过" ——
@@ -273,20 +273,23 @@ def _ensure_update_section(cfg_path):
 
 
 #: 调试图片的封顶策略(用户要求 2026-10-11: "测试的调试图片也要限制一下")
-#: 每次真机运行都会往 Test_img/debug/ 存模板点击标记、失败截图与失败前的时序证据 ——
+#: 每次真机运行都会往 Test_img/debug/ 存对比范围预览图这类排查产物 ——
 #: 长期跑下来会慢慢堆满盘(打包版没有测试期那套清理)。
 DEBUG_KEEP_PER_DIR = 200          # 每个子目录最多留最新的 200 个文件
 DEBUG_MAX_TOTAL_MB = 300          # 整个 debug 目录最多占 300MB(超了按最旧优先删)
-TRACE_KEEP = 50                   # 失败时序证据目录最多保留多少个(每个目录里还有 8 张 JPEG)
 #: 「预览对比范围」的标注图(Test_img/debug/compare_preview/): 每点一次存一张, 只在
 #: **写新图时**循环覆盖(用户 2026-10-15: "对比范围预览图的数量是不是也没做限制") ——
 #: 以前只有启动时那趟 debug 扫描按"每目录 200 个"兜底, 一次编辑会话连点几十次预览
 #: 就会攒几十张(而且没有哪张是看得完的: 图当场就在弹窗里看过了)。
 PREVIEW_KEEP = 20
 
-#: 2.0.20 及更早版本往这里存"模板点击标记图" —— 现在点击标记直接画在**步骤截图**上,
-#: 这个目录只剩历史副本(同一次点击的第二份图), 启动清理时整棵删掉。
-LEGACY_DUP_DIRS = ("clicks",)
+#: 2.0.21 起不再写的**历史目录**(用户 2026-10-15: "失败截图统一存用例失败时的那一张,
+#: 并且和测试步骤截图放同一个目录, 其他的什么失败时序和失败步骤都不需要了" +
+#: "把点击的标注图直接替换步骤截图统一放在测试步骤截图的目录中"):
+#:   · clicks/    —— 模板点击标记的第二份副本(现在直接画在步骤截图上);
+#:   · failures/ —— 失败截图/时序证据(现在失败图就在用例自己的截图目录里)。
+#: 两者都只剩同画面的重复图, 启动清理时整棵删掉(按个数封顶收不掉: 文件太少)。
+LEGACY_DUP_DIRS = ("clicks", "failures")
 
 
 def _debug_entries(debug_dir):
@@ -346,18 +349,6 @@ def prune_debug_artifacts(app_dir=None, keep_per_dir=DEBUG_KEEP_PER_DIR,
             if p in dead and _remove(p):
                 n += 1
                 freed += size
-        # ★ 失败时序证据目录(<用例>_trace/)也按**个数**保留 —— 只按"每个目录里的文件数"限,
-        #   目录本身会一直攒(用户 2026-10-12: "多了也无用")。
-        trace_root = os.path.join(debug_dir, "failures")
-        if os.path.isdir(trace_root):
-            traces = [os.path.join(trace_root, n) for n in os.listdir(trace_root)
-                      if os.path.isdir(os.path.join(trace_root, n))]
-            traces.sort(key=lambda x: os.path.getmtime(x), reverse=True)
-            for old_t in traces[TRACE_KEEP:]:
-                n2, b2 = _tree_size(old_t)
-                if _rm_tree(old_t):
-                    n += 1 + n2
-                    freed += b2
         # 顺手收掉空目录
         for root2, dirs, files in os.walk(debug_dir, topdown=False):
             if root2 != debug_dir and not os.listdir(root2):
@@ -390,7 +381,6 @@ SCREENSHOT_KEEP_RUNS = 3          # 每个用例保留最近 3 次**运行**的�
                                   # 一次点「运行」即使跑多轮也只算一次运行)
 SCREENSHOT_MAX_TOTAL_MB = 1024    # 所有用例截图目录合计上限(超了按最旧优先删)
 REPORT_KEEP = 20                  # 最多保留多少份报告
-REPORT_FAIL_SHOTS_KEEP = 50       # 失败截图最多保留多少张(用户 2026-10-12: 50)
 
 
 def _rm_tree(path):
@@ -403,8 +393,8 @@ def _rm_tree(path):
 
 @idle.gated("运行产物封顶", empty=(0, 0, 0))
 def prune_run_artifacts(app_dir=None, keep_runs=None, max_total_mb=None,
-                        report_keep=None, fail_keep=None):
-    """给"跑出来的产物"封顶: 用例截图按执行次数保留 + 报告/失败截图按份数保留。
+                        report_keep=None):
+    """给"跑出来的产物"封顶: 用例截图按执行次数保留 + 报告按份数保留。
 
     返回 (删掉的目录数, 删掉的文件数, 释放字节数)。任何异常都吞掉(绝不影响启动)。
     ★ 这一趟要走遍 Test_cases 下所有组的 screenshots 树并逐个 stat, 是最重的清理 ——
@@ -415,20 +405,20 @@ def prune_run_artifacts(app_dir=None, keep_runs=None, max_total_mb=None,
       策略(只删**可以重跑出来的**东西, 绝不碰用例/模板/配置/备份):
         · Test_cases/<组>/screenshots/<每次执行一个目录> → 每个用例保留最近 N 次;
           所有用例合计超过上限时, 按目录时间最旧优先整目录删。
-        · reports/ 下: 报告文件保留最近 N 份;
-        · Test_img/debug/failures/: 失败截图/时序证据保留最近 M 组(2026-10-14 起
-          用例级失败截图也并到这里, 不再放 reports/failures/)。
+        · reports/ 下: 报告文件保留最近 N 份。
+
+    ★ 失败截图不再单独封顶(用户 2026-10-15): 它就存在用例自己的截图目录里, 随
+      "每个用例保留最近 N 次运行"一起循环覆盖 —— 不再有 Test_img/debug/failures/。
     """
     # ★ 阈值在**调用时**读取(不是写进默认参数): 默认参数在导入时就绑定了, 改不动,
     #   测试/调优都没法覆盖。
     keep_runs = SCREENSHOT_KEEP_RUNS if keep_runs is None else keep_runs
     max_total_mb = SCREENSHOT_MAX_TOTAL_MB if max_total_mb is None else max_total_mb
     report_keep = REPORT_KEEP if report_keep is None else report_keep
-    fail_keep = REPORT_FAIL_SHOTS_KEEP if fail_keep is None else fail_keep
     root = _app_root(app_dir)
     if not root:
         return 0, 0, 0
-    # ★ 顺带把 Test_img/debug(点击标记/失败截图/时序证据)也封顶 —— 同一个入口, 启动跑一次
+    # ★ 顺带把 Test_img/debug(模板点击标记等排查产物)也封顶 —— 同一个入口, 启动跑一次
     prune_debug_artifacts(app_dir)
     dirs_removed = files_removed = freed = 0
     try:
@@ -484,19 +474,6 @@ def prune_run_artifacts(app_dir=None, keep_runs=None, max_total_mb=None,
                 if _remove(old):
                     files_removed += 1
                     freed += _file_size(old)
-        # ── ④ 失败截图: 保留最近 M 张 ──
-        fdir = os.path.join(root, "Test_img", "debug", "failures")
-        # ★ 2026-10-14 并入 debug 树; 本函数作用域没有 debug_dir(那是
-        #   prune_debug_artifacts 的局部变量), 直接用 root 拼 —— NameError
-        #   会被外层 try 吞掉导致整段清理静默失效(实测抓到)
-        if os.path.isdir(fdir):
-            shots = [os.path.join(fdir, f) for f in os.listdir(fdir)
-                     if os.path.isfile(os.path.join(fdir, f))]
-            shots.sort(key=lambda x: os.path.getmtime(x), reverse=True)
-            for old in shots[fail_keep:]:
-                if _remove(old):
-                    files_removed += 1
-                    freed += _file_size(old)
         if files_removed or dirs_removed:
             log.info(f"[清理] 运行产物封顶: 删 {dirs_removed} 个旧截图目录 / {files_removed} 个文件, "
                      f"释放 {freed / 1048576:.0f}MB")
@@ -536,42 +513,6 @@ def keep_newest(paths, keep):
             removed += 1
             freed += size
     return removed, freed
-
-
-@idle.gated("失败截图循环", empty=(0, 0))
-def trim_failures(failures_dir, keep=None):
-    """失败截图目录: 只留最新 N 张(写新图后立刻调用 → 循环覆盖)"""
-    keep = REPORT_FAIL_SHOTS_KEEP if keep is None else keep
-    if not failures_dir or not os.path.isdir(failures_dir):
-        return 0, 0
-    files = [os.path.join(failures_dir, f) for f in os.listdir(failures_dir)
-             if os.path.isfile(os.path.join(failures_dir, f))]
-    n, freed = keep_newest(files, keep)
-    if n:
-        log.info(f"[清理] 失败截图循环: 删最旧 {n} 张, 释放 {freed / 1048576:.1f}MB")
-    return n, freed
-
-
-@idle.gated("失败证据循环", empty=(0, 0))
-def trim_traces(failures_dir, keep=None):
-    """失败证据目录(Test_img/debug/failures/): **子目录(时序证据)与文件(逐步失败截图)**
-    各留最新 N 个, 写一次就回收一次 → 到上限循环覆盖。
-
-    ★ 两类都放这里(一个目录一种用途), 所以一起管 —— 只限目录会漏掉那些单张 PNG。
-    """
-    keep = TRACE_KEEP if keep is None else keep
-    if not failures_dir or not os.path.isdir(failures_dir):
-        return 0, 0
-    entries = [os.path.join(failures_dir, x) for x in os.listdir(failures_dir)]
-    dirs = [p for p in entries if os.path.isdir(p)]
-    files = [p for p in entries if os.path.isfile(p)]
-    n1, f1 = keep_newest(dirs, keep)
-    n2, f2 = keep_newest(files, keep)
-    n, freed = n1 + n2, f1 + f2
-    if n:
-        log.info(f"[清理] 失败证据循环: 删最旧 {n} 项(目录 {n1} / 文件 {n2}), "
-                 f"释放 {freed / 1048576:.1f}MB")
-    return n, freed
 
 
 def _round_of(dirname):

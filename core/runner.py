@@ -17,7 +17,6 @@ from core.driver import BASE_DIR, split_texts
 from core.session import (text_present, text_present_detail, warm_webview,  # noqa: E501  判断统一入口 + WebView 预热
                           scan_status_words, set_status_words, FaultStateError)
 from core.logger import get_logger
-from core.trace import TraceRecorder
 from vlm.backend import VisionRouter
 
 log = get_logger()
@@ -135,7 +134,6 @@ class ActionRunner:
         self.on_pause_state = None
         self._sub_seq = 0        # 子步骤行序号(界面按它在原地更新嵌套容器的行)
         self._if_depth = 0       # if 嵌套深度: 只有**最外层** if 结束后统一落账
-        self.trace = TraceRecorder(case_name, config.get("trace_limit", 8))
         self.router = VisionRouter(config)
         self._locators = self._load_locators()
         # 执行过程中动态写入的状态,集中在此初始化
@@ -727,6 +725,37 @@ class ActionRunner:
             path = os.path.join(BASE_DIR, path)
         return path
 
+    #: 用例失败时那张截图的固定文件名(和步骤截图同目录)
+    FAIL_SHOT_NAME = "失败截图.png"
+
+    def _failure_shot(self, step_desc=""):
+        """用例失败时**那一张**失败截图(用户 2026-10-15): "失败截图统一存用例失败时的
+        那一张, 并且和测试步骤截图放同一个目录, 其他的什么失败时序和失败步骤都不需要了"
+        + "测试步骤本身就包含了测试失败的步骤截图"。
+
+        所以证据**只有一张**, 而且就放在本轮步骤截图的目录里:
+          · 本步已经有自己的证据图(点击前的点位标记图、对比范围标注图、等待前截图、
+            if 判定那一刻那张) → 直接用它 —— "测试步骤本身就包含了测试失败的步骤截图",
+            再拍一张同画面的只是重复; 且对比步骤失败时那张还带 FAIL 判定, 信息更多;
+          · 本步什么都没留(纯断言类步骤失败) → 此时补拍一张, 命名固定的
+            `失败截图.png`, 保证"失败时一定有一张图"。
+        不再有失败时序证据(内存 JPEG 环 + steps.txt)与逐步失败图(`_step_NN_fail.png`)。
+        """
+        shot = getattr(self, "_pre_click_shot", None)
+        if shot and os.path.exists(shot):
+            self._pre_click_shot = None      # 采用即消费(与 _execute 后置块同一规则)
+            return shot
+        try:
+            path = os.path.join(os.path.dirname(self._step_shot_path(step_desc)),
+                                self.FAIL_SHOT_NAME)
+            os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+            self.d.screenshot(path)
+            log.info(f"[失败截图] {path}")
+            return path
+        except Exception as e:      # 截图失败不能影响失败处理本身
+            log.warning(f"[失败截图] 保存失败(不影响结果): {type(e).__name__}: {e}")
+            return ""
+
     def mark_click(self, pos, label=None):
         """点击**前**截图并标注位置(用户 2026-10-13): 点完再截, 页面已经变了 ——
         标注的坐标对不上点击那一刻的界面, 证据就失去意义。
@@ -889,7 +918,6 @@ class ActionRunner:
                         self._last_compare_msg = None
                     self._append_result({"desc": desc, "passed": True, "error": "",
                                          "screenshot": screenshot})
-                    self.trace.capture(self.d, desc, True)
                     # ★ 仅**最外层** if 结束后落账(嵌套的交给外层, 顺序才对);
                     #   嵌套时把列表留给孩子, 由外层统一按序追加(2026-10-15)
                     if getattr(self, "_if_depth", 0) == 0 and                             getattr(self, "_pending_sub_results", None):
@@ -907,8 +935,13 @@ class ActionRunner:
                         log.warning(f"[retry] 步骤「{desc}」第{attempt+1}次失败: {e},重试...")
                         self._sleep(2)
                     else:
-                        # 最终失败:截图 + 诊断
-                        screenshot = self.trace.failure_screenshot(self.d, i)
+                        # 最终失败: 留下**那一张**失败截图 + 诊断
+                        # ★ 用户 2026-10-15: "失败截图统一存用例失败时的那一张, 并且和
+                        #   测试步骤截图放同一个目录, 其他的什么失败时序和失败步骤都不需要了"
+                        #   + "测试步骤本身就包含了测试失败的步骤截图" —— 所以:
+                        #   本步已有自己的证据图(点击标记/对比标注/等待前截图)就直接用它,
+                        #   没有才补拍一张; 不再有时序证据(JPEG 环)与逐步失败图。
+                        screenshot = self._failure_shot(desc)
                         try:
                             xml = self.d.dump_hierarchy()
                             texts = [t for t in re.findall(r'text="([^"]+)"', xml) if t.strip()]
@@ -944,10 +977,9 @@ class ActionRunner:
                                      #   未执行项显示成 FAIL 之后, 正常步骤同样要中性)
                                      "stopped": bool(self.stopped or
                                                      isinstance(last_err, UserStopped))})
-                # 真实失败才留时序证据;用户主动停止没有诊断价值
-                if not (self.stopped or isinstance(last_err, UserStopped)):
-                    self.trace.capture(self.d, desc, False)
-                    self.trace.dump(self.d, i)
+                # ★ 用户主动停止不留失败图(没有诊断价值, 也不是失败); 也**不再**落
+                #   失败时序证据(用户 2026-10-15: "失败时序…不需要了") —— 失败证据只有
+                #   上面那一张, 和步骤截图同目录。
                 if getattr(self, "_if_depth", 0) == 0 and                         getattr(self, "_pending_sub_results", None):
                     for sub in self._pending_sub_results:
                         self._append_result(sub, fire=False)

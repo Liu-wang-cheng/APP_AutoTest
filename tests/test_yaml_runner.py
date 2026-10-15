@@ -114,13 +114,6 @@ def test_yaml_case(device, report, module, case_name, steps, priority, case_wait
                           device_name=cfg.get("target_device", ""))
     passed = runner.run_steps(steps)
 
-    # 失败自动截图
-    if not passed and cfg["runner"].get("screenshot_on_fail", True):
-        fail_dir = os.path.join(BASE_DIR, "Test_img", "debug", "failures")
-        os.makedirs(fail_dir, exist_ok=True)
-        fail_path = os.path.join(fail_dir, f"{case_name}.png")
-        device.screenshot(fail_path)
-
     # 记录每步到报告(直接从 runner.results 读取,包含 else 子步骤)
     for r in runner.results:
         report.set_step_desc(module, r.get("desc", ""))
@@ -131,11 +124,14 @@ def test_yaml_case(device, report, module, case_name, steps, priority, case_wait
             screenshot=r.get("screenshot", ""),
         )
 
-    # 失败截图追加到报告
+    # ★ 失败截图追加到报告: 用引擎失败那一刻留下的**那一张**(用户 2026-10-15: "失败截图
+    #   统一存用例失败时的那一张, 并且和测试步骤截图放同一个目录") —— 它就在本轮截图目录里,
+    #   要么是失败步骤自己的证据图, 要么是补拍的 失败截图.png; 不再另存 debug/failures。
     if not passed and cfg["runner"].get("screenshot_on_fail", True):
-        report.set_step_desc(module, "失败截图")
-        report.add_result(module, False, error="用例执行失败,自动截图",
-                          screenshot=os.path.join(BASE_DIR, "Test_img", "debug", "failures",
-                                                  f"{case_name}.png"))
+        shot = next((r.get("screenshot") for r in reversed(runner.results)
+                     if not r.get("passed") and r.get("screenshot")), "")
+        if shot:
+            report.set_step_desc(module, "失败截图")
+            report.add_result(module, False, error="用例执行失败,自动截图", screenshot=shot)
 
     assert passed, f"{case_name} 执行失败"
