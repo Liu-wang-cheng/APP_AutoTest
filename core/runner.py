@@ -700,16 +700,18 @@ class ActionRunner:
         截图, 且要显示滑动路径: 起点圈 + 箭头指向终点)。
 
         机制与 mark_click 同一套证据槽: 每步最多一张, _execute 后置块见到就让路;
-        显式 `screenshot:` 键不在此拍(老语义)。
+        勾了截图/写了 screenshot 键**也在此拍**(证据必须是滑动前的界面)。
         """
         if getattr(self, "_pre_click_shot", None):
             return
         if not (self.click_shots or self.always_screenshot):
             return
-        if "screenshot" in (self._cur_step or {}):
-            return
-        try:
+        sv = (self._cur_step or {}).get("screenshot")
+        if isinstance(sv, str) and sv.strip():
+            path = sv           # 手动路径 → 标记图写在那儿(与 mark_click 同一规则)
+        else:
             path = self._step_shot_path(self._cur_step_desc)
+        try:
             os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
             self.d.screenshot(path)     # 滑动前: 界面还是"要滑"的样子, 立即截
             self._annotate_shot(
@@ -751,7 +753,9 @@ class ActionRunner:
         所有点击类动作在拿到坐标后、真正点击前调用本方法; 截图进本步结果的
         screenshot 字段(_execute 的后置截图块见到它就让路)。
         ★ 每步最多一张(重复调用直接返回 —— 一步里先点 A 再点 B, 证据取第一击);
-        ★ 显式 `screenshot:` 键的步骤不在此拍 —— 用户要的是点击后的状态, 仍点击后拍;
+        ★ 勾了截图/写了 `screenshot:` 的步骤**也在此拍**(用户 2026-10-15: 点击的
+          证据必须是"点击前 + 带点位标记"那张, 否则与点击位置对不上); 写了字符串
+          路径的, 标记图就写到那个路径;
         ★ pos: (x, y) / (x, y, label) / None(取不到中心 —— 不标注不截图, 只置标记)。
         """
         if getattr(self, "_pre_click_shot", None):
@@ -761,10 +765,12 @@ class ActionRunner:
                                label or (pos[2] if len(pos) > 2 else ""))
         if not pos or not (self.click_shots or self.always_screenshot):
             return
-        if "screenshot" in (self._cur_step or {}):
-            return
-        try:
+        sv = (self._cur_step or {}).get("screenshot")
+        if isinstance(sv, str) and sv.strip():
+            path = sv           # 旧用例点了名的手动路径 → 标记图就写在那儿
+        else:
             path = self._step_shot_path(self._cur_step_desc)
+        try:
             os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
             self.d.screenshot(path)     # 点击前: 界面还是"要点"的样子, 立即截不安定等
             self._mark_last_click_on(path)
@@ -1061,11 +1067,13 @@ class ActionRunner:
         pre_shot = getattr(self, "_pre_click_shot", None)
         # ★ sleep 步骤的 pre_shot 即便带显式 screenshot 键也采用 —— 等待前后画面
         #   相同, 没必要再等 180s 重拍一张(2026-10-14 用户: 等待不应延迟截图)
-        if pre_shot and ("screenshot" not in step or
-                         (main and main[0] in ("sleep", "if", "if not",
-                                               "compare", "diff"))):
-            # 点击/等待证据已在**动作前**拍好并标注(2026-10-13/14) —— 直接采用,
-            #   不再动作后再拍一张(那时页面已经变了)
+        if pre_shot:
+            # ★ 证据槽里有就用(用户 2026-10-15: "点击截图还是没有先标记点位截图再进行
+            #   点击…前置步骤的点击(也一样)"): 以前只有"没勾截图"的步骤才采用 —— 一旦
+            #   勾了截图/写了 screenshot 键, 点击步骤就会走"点击后重拍", 那张既是点击
+            #   后的页面、也没有点位标记, 与点击位置对不上。
+            #   槽里的图由点击/滑动/长按/等待/if判定/图像对比**在动作前**拍好并标注,
+            #   且每步(含每个子步骤)开始前都会清空 —— 所以"有就采用"不会串味。
             screenshot = pre_shot
             # ★ 采用即消费(用户 2026-10-15): 不清掉的话, if 分支的后续子步骤和
             #   父 if 行会把这张图**当成自己的**继承下去 —— 子步骤截图显示错乱的根因

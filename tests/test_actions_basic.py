@@ -136,11 +136,30 @@ def test_click_screenshots_before_clicking(runner):
     assert res == runner.d.ops[0][1], "点击前那张就是本步的证据截图"
 
 
-def test_click_explicit_screenshot_stays_after_click(runner):
-    """显式 `screenshot:` 键 = 用户要点击后的状态 → 仍是点击后拍(老语义不变)"""
+def test_click_explicit_screenshot_still_shoots_before_click(runner):
+    """★ 勾了截图/写了 `screenshot:` 键的点击步骤**也要在点击前**拍(用户 2026-10-15:
+    "点击截图还是没有先标记点位截图再进行点击，截到的图和点击位置对应不上")。
+
+    以前这种步骤会走"点击后重拍" —— 那张既是**点击后**的页面(可能已跳转)、
+    又没有点位标记, 与点击位置对不上。证据永远是"点击前 + 带标记"那张。
+    """
     runner.d = _SeqDev()
-    runner._execute({"desc": "点完留证", "click": [10, 20], "screenshot": True})
-    assert [o[0] for o in runner.d.ops] == ["click", "shot"], runner.d.ops
+    res = runner._execute({"desc": "点完留证", "click": [10, 20], "screenshot": True})
+    kinds = [o[0] for o in runner.d.ops]
+    assert kinds[:2] == ["shot", "click"], runner.d.ops
+    assert res == runner.d.ops[0][1], "证据必须是点击前那张(而不是后置重拍)"
+
+
+def test_prereq_click_shoots_before_click(runner):
+    """★ 前置里的点击同样如此(用户 2026-10-15: "还有前置步骤的点击"): 前置 runner
+    是 click_shots=False + always_screenshot=True —— 也要"先拍带标记的、再点"。"""
+    runner.click_shots = False
+    runner.always_screenshot = True
+    runner.d = _SeqDev()
+    res = runner._execute({"desc": "前置点一下", "click": [5, 6], "screenshot": True})
+    kinds = [o[0] for o in runner.d.ops]
+    assert kinds[:2] == ["shot", "click"], runner.d.ops
+    assert res == runner.d.ops[0][1]
 
 
 # ── 暂停/继续(用户 2026-10-13) ──
