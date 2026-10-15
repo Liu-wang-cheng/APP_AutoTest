@@ -35,6 +35,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
 from core.version import __version__ as CODE_VERSION          # noqa: E402
+from core import timefmt as _tf                           # noqa: E402
 
 API = "https://api.github.com"
 UPLOAD = "https://uploads.github.com"
@@ -419,7 +420,7 @@ def update_version_json_and_tag(repo, version, sha256, download_url, notes):
       但**未提交的改动不会**被包含(脚本会先拒绝脏工作区)。
     """
     data = {"version": version, "sha256": sha256, "download_url": download_url,
-            "release_date": __import__("time").strftime("%Y-%m-%d"),
+            "release_date": __import__("time").strftime(_tf.ISO_DATE),
             "release_notes": notes, "min_version": "1.0"}
     vpath = os.path.join(ROOT, "version.json")
     with open(vpath, "w", encoding="utf-8", newline="\n") as f:

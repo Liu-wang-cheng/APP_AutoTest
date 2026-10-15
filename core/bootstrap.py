@@ -241,7 +241,7 @@ def _ensure_update_section(cfg_path):
       "检查更新"会静默返回"未启用自动更新", 用户以为功能坏了(实测遇到)。
       ★ 文本级追加而不是 yaml.safe_dump 重写: 保住用户自己的注释与排版。
       已有该段就一个字都不动(哪怕用户改过内容)。
-    ★ 必须走 core.driver._atomic_write(先写临时文件再 os.replace): 直接 `open(w)`
+    ★ 必须走 core.driver.atomic_write(先写临时文件再 os.replace): 直接 `open(w)`
       会**立刻截断**用户的 config.yaml, 写到一半进程被杀(或磁盘满)就只剩半截 ——
       而它含设备序列号等, 被 .gitignore 忽略、丢了只能手工重建。
     """
@@ -266,8 +266,8 @@ def _ensure_update_section(cfg_path):
         f'  version_file: "version.json"{eol}'
         f"  check_interval_hours: 8{eol}"
     )
-    from core.driver import _atomic_write
-    _atomic_write(cfg_path, text.rstrip("\r\n") + eol + block)
+    from core.driver import atomic_write
+    atomic_write(cfg_path, text.rstrip("\r\n") + eol + block)
     log.info("[初始化] config.yaml 缺少 update 段, 已补上默认配置(自动更新启用)")
     return True
 

@@ -5,12 +5,12 @@
 import os
 import re
 import threading
-import time
 
 import yaml
 from PySide6.QtCore import QThread, Signal
 
 from core import session
+from core import timefmt as _timefmt
 from core.runner import ActionRunner, UserStopped
 from core.driver import load_config
 from core.excel_report import ExcelReport, case_sheet_name
@@ -220,7 +220,7 @@ class RunWorker(QThread):
         run_token = idle.begin_run()
         # ★ 运行标签(2026-10-14): 本次「运行」的唯一名片 —— 全部轮次/用例的截图
         #   目录共用它, 循环覆盖按"运行"整组进行
-        self._run_tag = time.strftime("%Y%m%d_%H%M%S")
+        self._run_tag = _timefmt.run_tag()
         report = None
         report_saved = False
         try:

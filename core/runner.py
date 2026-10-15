@@ -951,7 +951,8 @@ class ActionRunner:
                 else:
                     # ★ 失败发生时间写进错误信息(用户 2026-10-15: 报告/执行结果要能
                     #   看出"什么时候失败的") —— 结果表与报告的 error 列同源
-                    err_text = f"[{time.strftime('%H:%M:%S')}] {last_err}"
+                    from core import timefmt
+                    err_text = f"[{timefmt.clock()}] {last_err}"
                 self._append_result({"desc": desc, "passed": False, "error": err_text,
                                      "screenshot": screenshot,
                                      # ★ 用户停止不算"失败"(用户 2026-10-15: 前置那些

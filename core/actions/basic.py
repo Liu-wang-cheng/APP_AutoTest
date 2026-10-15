@@ -259,7 +259,8 @@ def do_wait_for(runner, step):
 
 # 加载态提示语。涂鸦各页面用词不统一(列表页"正在加载"、地图页"请稍候"),
 # 少一个词就会误判成"已加载完"而立刻往下走。
-_LOADING_TEXTS = ("加载中", "正在加载", "loading", "Loading", "处理中", "请稍候")
+# ★ 公开名(结构整理 2026-10-15): map_ops 也要用同一份词表, 原先它跨层取下划线私有名。
+LOADING_TEXTS = ("加载中", "正在加载", "loading", "Loading", "处理中", "请稍候")
 
 
 @reg.action("wait_loading", priority=105, fixed_bool=True)
@@ -275,7 +276,7 @@ def do_wait_loading(runner, step):
         n += 1
         # ★ 判断走 runner._text_present —— 树稀疏时"看不到加载提示"是假象,
         #   只读无障碍树会把"还在加载"误判成"已加载完"; 轮次传下去, OCR 仍按 5 轮一次
-        if not runner._text_present(*_LOADING_TEXTS, round_no=n):
+        if not runner._text_present(*LOADING_TEXTS, round_no=n):
             log.info(f"[wait_loading] 加载提示已消失(第 {n} 轮确认)")
             return
         end += runner._sleep(1) or 0    # 暂停挂起 → 超时顺延(2026-10-14 审查)

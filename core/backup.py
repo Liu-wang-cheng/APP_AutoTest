@@ -35,7 +35,8 @@ _BACKUP_ITEMS = (
 
 
 def _stamp(now=None, with_time=True):
-    return time.strftime("%Y%m%d-%H%M%S" if with_time else "%Y%m%d",
+    from core import timefmt
+    return time.strftime(timefmt.STAMP if with_time else timefmt.DATE,
                          time.localtime(now))
 
 

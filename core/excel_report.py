@@ -13,6 +13,7 @@ from openpyxl.drawing.image import Image as XLImage
 from openpyxl.worksheet.hyperlink import Hyperlink
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 
+from core import timefmt as _tf
 from core.driver import BASE_DIR
 
 
@@ -43,7 +44,8 @@ class ExcelReport:
     def __init__(self, path=None):
         # 默认按时间戳命名,历史报告不互相覆盖(不建子目录)
         if path is None:
-            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+            from core import timefmt
+            ts = datetime.now().strftime(timefmt.RUN_TAG)
             reports_dir = os.path.join(BASE_DIR, "reports")
             os.makedirs(reports_dir, exist_ok=True)
             path = os.path.join(reports_dir, f"test_report_{ts}.xlsx")
@@ -180,7 +182,7 @@ class ExcelReport:
         # ── 生成时间 ──
         ws.merge_cells(start_row=2, start_column=1, end_row=2, end_column=ncols)
         ws.cell(row=2, column=1,
-                value=f"生成时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}").font = Font(
+                value=f"生成时间: {datetime.now().strftime(_tf.DATETIME)}").font = Font(
             name="Microsoft YaHei", size=9, color="808080")
         ws.cell(row=2, column=1).alignment = Alignment(horizontal="center")
 
@@ -209,7 +211,8 @@ class ExcelReport:
         for case_name, case in self._cases.items():
             total, passed, failed = case["total"], case["passed"], case["failed"]
             # ★ 带日期: 长跑(比如连续几十小时、跨零点)时只写 HH:MM:SS 会分不清是哪天
-            end_txt = case["ended"].strftime("%m-%d %H:%M:%S") if case.get("ended") else ""
+            end_txt = (case["ended"].strftime(_tf.REPORT_TIME)
+                       if case.get("ended") else "")
             for ci, val in enumerate([seq, case_name,
                                       case.get("priority") or "", "",
                                       total, passed, failed, end_txt], 1):

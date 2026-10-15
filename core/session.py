@@ -993,10 +993,10 @@ def _run_one(d, cfg, item, on_progress, should_cancel, collect=None,
             last_ts["t"] = time.time()          # 耗时从"本步开始"算(与用例路径同语义)
             if on_step_start:
                 try:
-                    # ★ 前缀必须用 _item_label(带"自定义步骤(1步)"的计数后缀) ——
+                    # ★ 前缀必须用 item_label(带"自定义步骤(1步)"的计数后缀) ——
                     #   完成行的 desc 就是它(_emit_pre_result), 两边对不上,
                     #   界面的「执行中」行就地改 PASS 就会失效变成重复行
-                    on_step_start(f"{_item_label(item)}: {desc}", attempt)
+                    on_step_start(f"{item_label(item)}: {desc}", attempt)
                 except Exception as e:          # 界面回调异常不影响前置执行
                     log.debug(f"[前置] 步骤开始回调异常(忽略): {e}")
 
@@ -1062,7 +1062,7 @@ def prepare_items(d, cfg, items, on_progress=None, should_cancel=None,
     for i, item in enumerate(items or []):
         if not item.get("enabled", True):
             continue
-        desc = _item_label(item)
+        desc = item_label(item)
         if should_cancel and should_cancel():
             _finish(i, desc, False, skipped=True)   # 未执行(用户停止), 不是失败
             continue
@@ -1083,8 +1083,12 @@ def prepare_items(d, cfg, items, on_progress=None, should_cancel=None,
     return results
 
 
-def _item_label(item):
-    """前置项展示名(带关键参数, 便于报告里区分同类型多实例)"""
+def item_label(item):
+    """前置项展示名(带关键参数, 便于报告里区分同类型多实例)
+
+    ★ 公开名(结构整理 2026-10-15): 界面侧一直 `from core.session import _item_label`
+      直接取下划线私有名 —— 那是跨层依赖私有实现, 改名就会静默炸在别处。
+    """
     t = item.get("type")
     if t == "steps":
         base = item.get("name") or "自定义步骤"
@@ -1151,3 +1155,7 @@ def prepare(d, cfg, restart=True, charging=True, map_load=True, battery=True,
         results["battery"] = ensure_battery(d, on_progress=on_progress,
                                             should_cancel=should_cancel)
     return results
+
+
+#: 旧名兼容(下划线私有名曾被子模块/界面跨层引用) —— 新代码请用 item_label()
+_item_label = item_label

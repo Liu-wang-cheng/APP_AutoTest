@@ -721,7 +721,10 @@ def test_add_precondition_opens_edit_dialog(qapp, monkeypatch):
         def exec(self):
             return 0            # 取消 → 不应加入列表
 
-    monkeypatch.setattr(mw, "PreconditionEditDialog", _FakeEdit)
+    # ★ 消费方是 gui.dialogs 里的 PreconditionsDialog(结构整理 2026-10-15):
+    #   patch 必须打在它自己的模块上, 否则真对话框会 exec() 挂住整轮测试
+    from gui import dialogs as _dlg
+    monkeypatch.setattr(_dlg, "PreconditionEditDialog", _FakeEdit)
     before = len(dlg.items)
     dlg._add_of_type("battery")
     assert opened == ["battery"], "应弹出编辑框且预选该类型"
@@ -763,6 +766,10 @@ def test_steps_editor_has_app_group_picker(qapp, monkeypatch, tmp_path):
         tdir.mkdir(parents=True)
         (tdir / tpl).write_bytes(b"fake")
     monkeypatch.setattr(mw, "BASE_DIR", str(tmp_path), raising=False)
+    # ★ 步骤编辑器(含组下拉)已拆到 gui/step_card.py(结构整理 2026-10-15) ——
+    #   patch 必须打在**消费方**模块上, 打在 mw 上不再起作用
+    from gui import step_card as _sc
+    monkeypatch.setattr(_sc, "BASE_DIR", str(tmp_path), raising=False)
     from core import vision as _vision
     monkeypatch.setattr(_vision, "BASE_DIR", str(tmp_path), raising=False)
     # 前缀从 config 读; 这里直接固定, 否则读不到(测试目录没有 config)
@@ -800,6 +807,8 @@ def test_steps_editor_syncs_context_on_first_open(qapp, monkeypatch, tmp_path):
         tdir.mkdir(parents=True)
         (tdir / f"涂鸦_{g}模板.png").write_bytes(b"fake")
     monkeypatch.setattr(mw, "BASE_DIR", str(tmp_path), raising=False)
+    from gui import step_card as _sc2
+    monkeypatch.setattr(_sc2, "BASE_DIR", str(tmp_path), raising=False)
     monkeypatch.setattr(vision, "BASE_DIR", str(tmp_path), raising=False)
     monkeypatch.setattr(vision, "_template_prefix", lambda: "涂鸦", raising=False)
     vision.set_template_app_group("")          # 模拟: 主窗口还没设上下文

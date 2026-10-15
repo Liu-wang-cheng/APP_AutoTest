@@ -2,6 +2,61 @@
 
 所有对外可见的变更记录于此。版本号与 git tag 对应(如 `v1.0`)。
 
+## [2.0.22] - 2026-10-15
+
+### 修复
+
+- **多值条件的日志现在写清"按哪个候选判的"**(用户 2026-10-15: "`[if] 条件成立
+  ('今天,已取消,结尾') → 执行 then(2 步)` 这里也没显示命中的内容, 排查下其他地方
+  是否还有此类问题"): 根因是 `session.text_present_detail` 本来就算出了"命中的候选 /
+  来源 / 命中原文", 但 `runner._text_present` 走的是 `text_present`(内部再转一次
+  detail), 把详情丢了 —— 于是所有"任一命中"的调用点都只能打出整串候选。现在:
+  · `[if]` / `[if not]` → `条件成立('今天,已取消,结尾' 命中「今天」← 来自节点文本:
+    '今天,已取消')`(`if not` 判"不成立"= 文本确实出现时同样写出命中的候选);
+  · `wait_for` 多值候选、`[断言] 命中文本(任一)` 多值断言 → 同样补上命中的是哪个;
+  · 数值条件(`if: 电量 > 50`)→ 追加 `实测 '43'`, 读不到就写 `该字段读不到`;
+  · 图片/id 条件**不读**上一步留下的命中详情(免得串味)。
+  排查过的其余条件日志(都已带足信息, 未改): if_click / find_click(逐值循环, 带具体值)、
+  单值断言(命中「…」← 元素描述)、模板类(带模板名)、wait_loading(判"消失")、
+  switch_to / assert_switch(颜色判定, 带饱和度)、前置各检查(命中「…」← 原文)、
+  map_ops / timer_ops 各类(都带具体值)。
+
+### 改进
+
+- **项目结构整理**(用户 2026-10-15: "看下当前项目结构有哪些可以优化的地方" → "按你的
+  方案去改")。**全部是搬运与去重, 行为不变**(全量 824 条测试守着):
+  · 新增 `core/paths.py`: `safe_name()` / `group_screenshots_dir()` / `shot_dir()` /
+    `resolve_path()` —— 原先 `Test_cases/<组>/screenshots/...` 与「`screenshots/` 前缀
+    补 `Test_img/`」两条规则散在 runner / runner_thread / asserts / bootstrap / vision
+    五处各写一遍(`screenshots/` 那条有 3 份写法都不同的副本); 文件名清洗也有两套
+    (正则+30 字 / 字符黑名单+40 字), 同一个描述会得到不同文件名。
+  · 新增 `core/imgio.py`: 中文路径安全的 `imread/imwrite/annotate` ——
+    `np.fromfile+imdecode` 这套原先在 runner 里逐行重复两份, asserts 里两份。
+    (灰度基准图仍走 PIL: 换实现会改变灰度取整, 让相似度数值偏移。)
+  · 新增 `core/timefmt.py`: 时间戳格式常量 —— 原先"运行标签"格式 3 处各写一遍(backup
+    还是带横线的变体), 时分秒多处各写一遍。
+  · `gui/main_window.py` **4568 → 2582 行**: 按职责拆出 `gui/style.py`(常量与全局 QSS)、
+    `gui/widgets.py`(通用小控件/列表)、`gui/dialogs.py`(各类对话框)、
+    `gui/step_card.py`(步骤卡片/编辑器)、`gui/threads.py`(后台线程), 并在原模块显式
+    re-export —— `main_window.X` 的用法(界面/测试/工具)保持不变。
+  · 删掉 7 处**死代码**(全仓只有定义行): `FIXED_BOOL_DEFAULTS`、`data_ops._to_float`、
+    `runner_thread._QtLogHandler`、`vision.group_screenshots_dir`(由 core.paths 接替)、
+    `session.get_status_streaks`、`updater._name_of/_prefix_of`。
+  · 去私有化跨层引用: `session.item_label`(界面一直 import 下划线私有名)、
+    `basic.LOADING_TEXTS`(map_ops 跨层取私有名)、`driver.atomic_write`(bootstrap 取私有名);
+    旧的私有名保留为别名。
+  · `gui/schema.primary_action_key` **改名** `display_action_key`: 它与
+    `core.registry.primary_action_key` 同名但语义不同(引擎答不上来时还要按 schema 键序
+    兜底, 好让 `{grab: 面积}` 这类步骤在卡片上认得出来) —— 同名引错会显示"断言"却
+    实际执行"点击"。
+  · 修掉一个潜在坑: `core/idle.py` 的 `_flush_timer` 只写不读, 且
+    `_idle_flush_fire` 里那句漏了 `global`(写的是局部变量) —— 会让人误以为能查/能取消
+    这个计时器, 直接删掉。
+  · `tools/README.md`: 13 个脚本分成"自动流程调用(6)"与"手动排查用(7)" —— 原先 6 个
+    全仓 0 引用, 谁也说不清哪个还在用。
+  · `.gitignore`: 日志规则从"build*/release*/ota_* 三族白名单"改成通用 `*.log`
+    (换名字就漏, 实测根目录已堆 43 个 552KB); 顺带清掉盘上这些残留日志。
+
 ## [2.0.21] - 2026-10-15
 
 ### 修复

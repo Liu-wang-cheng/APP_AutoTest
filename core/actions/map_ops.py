@@ -538,10 +538,10 @@ def merge_pair_order(zones, boxes):
 
 def _wait_loading(runner, timeout=15):
     """等房间操作后的加载提示消失(不长等,失败也不报错)"""
-    from core.actions.basic import _LOADING_TEXTS
+    from core.actions.basic import LOADING_TEXTS      # 与 wait_loading 共用一份词表
     end = time.time() + timeout
     while time.time() < end:
-        if not any(runner.d(textContains=t).exists(timeout=0.5) for t in _LOADING_TEXTS):
+        if not any(runner.d(textContains=t).exists(timeout=0.5) for t in LOADING_TEXTS):
             return
         end += runner._sleep(1) or 0    # 暂停挂起 → 超时顺延(2026-10-14 审查)
 

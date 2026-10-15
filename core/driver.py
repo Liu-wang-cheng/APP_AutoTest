@@ -56,7 +56,7 @@ USER_DATA_PATHS = (
 _ENCRYPTED_HEADER = b"%TSD-Header"
 
 
-def _atomic_write(path, text, newline=""):
+def atomic_write(path, text, newline=""):
     """原子写文本: 先写同目录临时文件, 再 os.replace 覆盖目标。
 
     ★ 为什么不用直接 `open(path, "w")`: 该模式会**立即截断**目标文件。写入途中
@@ -132,7 +132,7 @@ def save_group_preconditions(app_group, items):
     """
     path = group_preconditions_path(app_group)
     body = yaml.safe_dump({"preconditions": items}, allow_unicode=True, sort_keys=False)
-    _atomic_write(path, body, newline="\n")
+    atomic_write(path, body, newline="\n")
     return path
 
 
@@ -219,7 +219,7 @@ def save_preconditions(items, path=None):
                 end = j
                 break
         new_text = "".join(lines[:start]) + body + "".join(lines[end:])
-    _atomic_write(path, new_text)
+    atomic_write(path, new_text)
 
 
 def update_config(updates, path=None):
@@ -245,7 +245,7 @@ def update_config(updates, path=None):
             lines = _set_scalar(lines, section, key, value)
         else:
             lines = _set_top_scalar(lines, spec, value)
-    _atomic_write(path, "".join(lines))
+    atomic_write(path, "".join(lines))
 
 
 def _set_top_scalar(lines, key, value):

@@ -165,7 +165,8 @@ def preview_region(frame, region):
     _draw_region_annotation(vis, x1, y1, x2, y2, pct_txt, sim_line=None)
     d = os.path.join(BASE_DIR, "Test_img", "debug", "compare_preview")
     os.makedirs(d, exist_ok=True)
-    path = os.path.join(d, time.strftime("%H%M%S") + "_预览.png")
+    from core import timefmt
+    path = os.path.join(d, time.strftime(timefmt.CLOCK_TIGHT) + "_预览.png")
     from core import imgio
     imgio.imwrite(path, vis)        # 中文路径安全的写图(统一走 core/imgio)
     # ★ 预览图到上限就循环覆盖(用户 2026-10-15: "对比范围预览图的数量是不是也没做限制"):

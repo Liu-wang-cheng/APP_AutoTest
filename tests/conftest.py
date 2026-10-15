@@ -46,6 +46,8 @@ BASE_DIR_MODULES = (
     "core.runner",
     "core.vision",
     "gui.main_window",
+    "gui.step_card",
+    "gui.style",
 )
 
 

@@ -30,8 +30,12 @@ def _renderer_types():
     """从字段渲染器源码里抠出它支持的字段类型。
 
     ★ 不手写白名单: 我手写过一次, 当场就把 `template` 漏成"不支持"(假阳性)。
+    ★ 字段渲染器已搬到 gui/step_card.py(结构整理 2026-10-15) —— 用 inspect 取源码,
+      这样将来再挪模块也不会失效。
     """
-    src = open(os.path.join(ROOT, "gui", "main_window.py"), encoding="utf-8").read()
+    import inspect
+    from gui import step_card
+    src = inspect.getsource(step_card)
     i = src.index("def _make_field_widget(")
     body = src[i:]
     j = body.find("\ndef ", 10)
