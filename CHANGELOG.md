@@ -6,6 +6,16 @@
 
 ### 修复
 
+- **前置里"点模板按钮"的轮询收不到停止**(2026-10-15 结构审查实测): `session.
+  click_template` 用的是**裸 `time.sleep(2)`** 轮询 —— 前置在回充/开始清扫这类模板点击
+  上按「停止」, 要等满 timeout(10s)才响应。本模块十几行之下就有可中断的
+  `_sleep(seconds, should_cancel)`(0.2s 粒度响应取消), 之前漏用了。现在:
+  · `click_template(d, img, timeout, should_cancel=None)` 用可中断等待, 期间收到停止
+    立刻返回; `ensure_charging` 与 `map_ops._click_tpl` 都把取消信号传下去
+    (`lambda: runner.stopped`, 已含 GUI 的停止请求)。
+  · 顺带装了两条**结构守护**: ① 扫描 `runner/session/actions/ocr` 里所有"带等待的
+    `while` 循环", 只用了裸 sleep 的当场红(实测全仓只剩上面这一处); ② 盯住
+    `Test_preconditions` 的"进包 + 首启铺默认 + OTA 不覆盖"三处必须一致。
 - **多值条件的日志现在写清"按哪个候选判的"**(用户 2026-10-15: "`[if] 条件成立
   ('今天,已取消,结尾') → 执行 then(2 步)` 这里也没显示命中的内容, 排查下其他地方
   是否还有此类问题"): 根因是 `session.text_present_detail` 本来就算出了"命中的候选 /
@@ -20,6 +30,13 @@
   单值断言(命中「…」← 元素描述)、模板类(带模板名)、wait_loading(判"消失")、
   switch_to / assert_switch(颜色判定, 带饱和度)、前置各检查(命中「…」← 原文)、
   map_ops / timer_ops 各类(都带具体值)。
+
+### 改进
+
+- **默认前置配置随包分发**(用户 2026-10-15: "这里是真实配置也是示例"):
+  `Test_preconditions/<组>.yaml` 与 `Test_cases` 同待遇了 —— 进包(打包脚本收 yaml) +
+  首次运行"缺才补"地铺到 exe 那一层 + OTA 更新当用户数据保护(更新不覆盖你的改动)。
+  以前它只在仓库里, 新装的用户没有可用前置配置。
 
 ### 改进
 

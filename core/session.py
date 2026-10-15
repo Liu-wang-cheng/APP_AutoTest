@@ -77,17 +77,26 @@ def is_charging(d, text=None):
     return _any_present(d, texts, xml=xml)
 
 
-def click_template(d, img_name, timeout=10):
-    """SIFT 定位并点击模板图片,成功返回坐标,失败返回 None"""
+def click_template(d, img_name, timeout=10, should_cancel=None):
+    """SIFT 定位并点击模板图片,成功返回坐标,失败返回 None
+
+    ★ should_cancel(结构守护 2026-10-15): 这里原来用**裸 time.sleep(2)** 轮询 ——
+      前置里点模板按钮(回充/开始清扫等)时按「停止」, 得等满 timeout 才响应。本模块
+      10 行之下就有可中断的 `_sleep(seconds, should_cancel)`, 之前漏用了。
+    """
     img_path = vision.resolve_template(img_name)
     end = time.time() + timeout
     while time.time() < end:
+        if should_cancel and should_cancel():
+            log.info("[前置] 收到停止请求, 中止模板点击")
+            return None
         screen = d.screenshot(format="opencv")
         pos = vision.find_in_gray(cv2.cvtColor(screen, cv2.COLOR_BGR2GRAY), img_path)
         if pos:
             d.click(*pos)
             return pos
-        time.sleep(2)
+        if not _sleep(2, should_cancel):      # 未睡满 = 期间收到停止
+            return None
     return None
 
 
@@ -310,7 +319,7 @@ def ensure_charging(d, timeout=1200, on_progress=None, should_cancel=None,
         else:
             log.info(f"[前置] 没找到文本「{text}」的回充按钮, 改用模板「{tpl}」")
     if not clicked:
-        pos = click_template(d, tpl)
+        pos = click_template(d, tpl, should_cancel=should_cancel)
         if pos:
             clicked = True
             log.info(f"[前置] 已按模板点击回充按钮「{tpl}」@ ({pos[0]}, {pos[1]})")

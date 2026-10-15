@@ -248,9 +248,14 @@ def _wait_map_ready(runner, timeout=300):
 
 
 def _click_tpl(runner, name, timeout=10):
-    """模板点击(复用 session.click_template),成功返回坐标,失败返回 None"""
+    """模板点击(复用 session.click_template),成功返回坐标,失败返回 None
+
+    ★ 把 runner 的停止状态当取消信号传下去(2026-10-15): 否则按了停止, 这一处
+      最长还要等满 timeout 才响应(runner.stopped 已含 GUI 的 cancel_check)。
+    """
     from core import session
-    return session.click_template(runner.d, name, timeout)
+    return session.click_template(runner.d, name, timeout,
+                                  should_cancel=lambda: runner.stopped)
 
 
 def _collapse_panel(runner, cfg):

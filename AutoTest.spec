@@ -93,6 +93,15 @@ for _base, _dirs, _files in os.walk(_cases_root):
         _in_templates = os.sep + "templates" + os.sep in _full
         if _in_templates or _fn.lower().endswith((".yaml", ".yml")):
             datas.append((_full, _rel_dir))
+# 默认前置配置: 同样是"随包带 + 首启缺才补"(见 core/bootstrap._SEED_DIRS)。
+# 用户真实改动留在 exe 那一层, OTA 更新不碰(见 core/driver.USER_DATA_PATHS)。
+_pre_root = os.path.join(ROOT, "Test_preconditions")
+for _base, _dirs, _files in os.walk(_pre_root):
+    _dirs[:] = [d for d in _dirs if d not in ("__pycache__",)]
+    for _fn in _files:
+        if _fn.lower().endswith((".yaml", ".yml")):
+            _full = os.path.join(_base, _fn)
+            datas.append((_full, os.path.relpath(os.path.dirname(_full), ROOT)))
 for _base, _dirs, _files in os.walk(os.path.join(ROOT, "Test_img", "templates")):
     for _fn in _files:
         _full = os.path.join(_base, _fn)

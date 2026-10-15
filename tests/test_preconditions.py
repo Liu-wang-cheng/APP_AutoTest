@@ -138,7 +138,7 @@ def test_charging_flow_clicks_recharge_then_polls(monkeypatch):
     dev = FakeDev()
     clicks = []
     monkeypatch.setattr(session, "click_template",
-                        lambda d, name, timeout=10: clicks.append(name) or (500, 600))
+                        lambda d, name, timeout=10, **kw: clicks.append(name) or (500, 600))
     monkeypatch.setattr(session, "get_battery_level", lambda d: 42)
     monkeypatch.setattr(session.time, "sleep", lambda s: None)
     seq = iter([False, True])          # 进入时非充电, 循环里第一次判定就充上了
@@ -152,7 +152,7 @@ def test_charging_waits_until_timeout_then_returns_false(monkeypatch):
     from core import session
     clicks = []
     monkeypatch.setattr(session, "click_template",
-                        lambda d, name, timeout=10: clicks.append(name) or (1, 2))
+                        lambda d, name, timeout=10, **kw: clicks.append(name) or (1, 2))
     monkeypatch.setattr(session, "get_battery_level", lambda d: 42)
     monkeypatch.setattr(session.time, "sleep", lambda s: None)
     monkeypatch.setattr(session, "is_charging", lambda d, text=None: False)
@@ -164,7 +164,7 @@ def test_charging_skips_click_when_already_charging(monkeypatch):
     """已经在充电: 不点回充按钮, 直接通过"""
     from core import session
     clicks = []
-    monkeypatch.setattr(session, "click_template", lambda d, name, timeout=10: clicks.append(name))
+    monkeypatch.setattr(session, "click_template", lambda d, name, timeout=10, **kw: clicks.append(name))
     monkeypatch.setattr(session, "is_charging", lambda d, text=None: True)
     assert session.ensure_charging(FakeDev(), timeout=60) is True
     assert clicks == []
@@ -177,7 +177,7 @@ def test_charging_recharge_template_is_configurable(monkeypatch, tpl, expect):
     from core import session
     seen = []
     monkeypatch.setattr(session, "click_template",
-                        lambda d, name, timeout=10: seen.append(name) or (1, 2))
+                        lambda d, name, timeout=10, **kw: seen.append(name) or (1, 2))
     monkeypatch.setattr(session, "is_charging", lambda d, text=None: False)
     monkeypatch.setattr(session.time, "sleep", lambda s: None)
     session.ensure_charging(FakeDev(), timeout=0, recharge_tpl=tpl)
@@ -189,7 +189,7 @@ def test_charging_text_first_then_template_fallback(monkeypatch):
     from core import session
     seen = []
     monkeypatch.setattr(session, "click_template",
-                        lambda d, name, timeout=10: seen.append(name) or (1, 2))
+                        lambda d, name, timeout=10, **kw: seen.append(name) or (1, 2))
     monkeypatch.setattr(session, "is_charging", lambda d, text=None: False)
     monkeypatch.setattr(session.time, "sleep", lambda s: None)
 
@@ -215,7 +215,7 @@ def test_charging_recharge_settings_are_declared_and_pass_through(monkeypatch):
 
     seen = []
     monkeypatch.setattr(session, "click_template",
-                        lambda d, name, timeout=10: seen.append(name) or (1, 2))
+                        lambda d, name, timeout=10, **kw: seen.append(name) or (1, 2))
     monkeypatch.setattr(session, "is_charging", lambda d, text=None: False)
     monkeypatch.setattr(session.time, "sleep", lambda s: None)
     session._run_one(FakeDev(), {"target_device": "X"},

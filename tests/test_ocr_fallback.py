@@ -179,9 +179,15 @@ def test_text_present_falls_back_to_ocr(monkeypatch):
 
     ★ 2026-10-11 起 OCR 不再每轮都做: **前 4 轮只读无障碍树, 第 5 轮才截图识别**
       (用户要求), 之后 10、15… 轮再各做一次。
+
+    ★ 诊断(2026-10-15): 这条断言在全量跑里偶然红过一次(单跑/两两组合/重跑全量都绿,
+      没能复现)。断言本身不放宽(它卡的是"5 轮一次"的节流规则, 放宽会掩盖真回归),
+      但失败信息里带上**判定依据** —— 下次再红就能一眼看出是节流规则被破坏, 还是
+      测试自身的状态泄漏(OCR 可用性/树稀疏判定/round_no)。
     """
     from core import ocr
-    d = _Runner(xml='<node text="扫地机器人0087"/>')
+    xml = '<node text="扫地机器人0087"/>'
+    d = _Runner(xml=xml)
     r = _make_runner(d)
     monkeypatch.setattr(ocr, "available", lambda: True)
     calls = []
@@ -191,11 +197,17 @@ def test_text_present_falls_back_to_ocr(monkeypatch):
         return [("屏幕上读到 正在吸尘", (1, 2))]
 
     monkeypatch.setattr(ocr, "screen_texts", _lines)
-    assert r._text_present("正在吸尘") is True
-    assert calls == [1], f"应在第 5 轮做**一次** OCR 就命中: {calls}"
+
+    def _why(extra=""):
+        return (f"{extra} | OCR可用={ocr.available()} 树稀疏={ocr.sparse(xml)} "
+                f"第5轮放行={ocr.round_allows_ocr(5)} 单次放行="
+                f"{ocr.round_allows_ocr(None)} 缓存={getattr(ocr, '_cache', None)}")
+
+    assert r._text_present("正在吸尘") is True, _why("树稀疏页面应能靠 OCR 命中")
+    assert calls == [1], _why(f"应在第 5 轮做**一次** OCR 就命中, 实际 {calls}")
     calls.clear()
     assert r._text_present("回充中") is False          # 一直读不到 → 超时才返回
-    assert calls, f"持续读不到时也该按 5 轮周期做 OCR: {calls}"
+    assert calls, _why("持续读不到时也该按 5 轮周期做 OCR")
 
 
 def test_normal_page_does_ocr_on_every_fifth_round(monkeypatch):

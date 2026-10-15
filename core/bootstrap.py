@@ -44,7 +44,11 @@ _SEED_FILES = (
 # ★ 2026-10-11: 去掉 "Test_img/templates" —— 模板一律按 APP 组存放
 #   (Test_cases/<组>/templates/), 那个全局目录已删(用户确认没有老版本了);
 #   留着它会让程序每次启动又把空目录建回来。
-_SEED_DIRS = ("Test_cases",)
+#: 首次运行"缺才补"的默认数据目录(随包带一套; 用户改过的一律不动)。
+#: ★ Test_preconditions 也是**默认值**(用户 2026-10-15: "这里是真实配置也是示例"):
+#:   它既是用户真实在用的前置配置, 也是新装用户的开箱默认; 与 Test_cases 同待遇
+#:   (进包 + 首启铺到用户目录 + OTA 更新不碰, 见 core/driver.USER_DATA_PATHS)。
+_SEED_DIRS = ("Test_cases", "Test_preconditions")
 #: 用户配置的模板(只生成, 之后由用户在 GUI 里改)
 _CONFIG_TEMPLATE = "config/config.example.yaml"
 _CONFIG_TARGET = "config/config.yaml"

@@ -464,7 +464,7 @@ def test_ensure_charging_not_charging_clicks_recharge(monkeypatch):
     monkeypatch.setattr(session.time, "sleep", lambda s: None)
     clicks = []
     monkeypatch.setattr(session, "click_template",
-                        lambda d, name, timeout=10: clicks.append(name) or (10, 10))
+                        lambda d, name, timeout=10, **kw: clicks.append(name) or (10, 10))
     states = [False, True, True]      # 预检 False → 点击后变 True
     monkeypatch.setattr(session, "is_charging",
                         lambda d, *a, **k: states.pop(0) if states else True)
@@ -488,7 +488,7 @@ def test_ensure_charging_timeout_returns_false(monkeypatch):
     from core import session
     monkeypatch.setattr(session.time, "sleep", lambda s: None)
     monkeypatch.setattr(session, "is_charging", lambda d, *a, **k: False)
-    monkeypatch.setattr(session, "click_template", lambda d, name, timeout=10: (1, 1))
+    monkeypatch.setattr(session, "click_template", lambda d, name, timeout=10, **kw: (1, 1))
 
     class D:
         def textContains(self, kw):
