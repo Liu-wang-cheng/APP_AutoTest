@@ -52,6 +52,92 @@ def ignore_packages():
     return set(_ignore_packages)
 
 
+_BOUNDS_RE = re.compile(r"\[(-?\d+),(-?\d+)\]\[(-?\d+),(-?\d+)\]")
+
+
+def system_ui_rects(xml):
+    """**实测**系统 UI(状态栏/通知栏/导航栏)在屏幕上的矩形 [(x1,y1,x2,y2)]。
+
+    ★ 为什么不用"裁掉顶部 5%"这种比例(2026-10-15 实测):
+      1080x1920 上 5% = 96px, 而系统栏实测只到 61px —— 多切 35px; 更危险的是 APP
+      自己的标题在 y=104, 距 5% 那条线只剩 **8px**, 换台挖孔屏(状态栏 90~110px)就会
+      把 APP 顶部文案一起切掉, 表现为"断言莫名判不成立"这类最难查的回归。
+      按**层级里系统 UI 节点的真实 bounds** 算就没有这个猜测: 它随设备/ROM 自适应。
+    ★ 只认 ignore_packages() 里的包; 层级里没有它们(精简层级) → 返回空 = 不过滤。
+    """
+    out = []
+    for tag in _NODE_RE.findall(xml or ""):
+        attrs = dict(_NODE_ATTR_RE.findall(tag))
+        if attrs.get("package") not in _ignore_packages:
+            continue
+        m = _BOUNDS_RE.search(attrs.get("bounds") or "")
+        if m:
+            out.append(tuple(int(g) for g in m.groups()))
+    return out
+
+
+def system_ui_regions(xml, top_ratio=0.15, bottom_ratio=0.85):
+    """系统 UI **实际遮住的区域** [(x1,y1,x2,y2)] —— 给 OCR 兜底按坐标过滤用。
+
+    ★ 为什么不能直接用系统 UI 节点的原始矩形(实测踩到): 状态栏是**整宽**一条, 而它的
+      节点只有各自的小方块(时钟 [10,9][110,51]、电池图标 [989,13][1009,47]) —— 一条
+      x=0 起头的通知横幅跟这两个框都不"完全相交", 按原矩形丢就会漏掉它。
+      所以: **贴顶/贴底**的系统节点归成一条**整宽带**(状态栏 / 导航栏本来就是整宽窗口),
+      中间的系统窗口(悬浮窗、气泡)只按它自己的矩形算 —— 那种不该整宽, 否则会把同一行
+      的 APP 文案一起误杀。
+    ★ 屏幕宽高从层级里所有节点的最大边界推出来(不额外问设备, 零成本)。
+    """
+    rects = system_ui_rects(xml)
+    if not rects:
+        return []
+    w = h = 0
+    for tag in _NODE_RE.findall(xml or ""):
+        m = _BOUNDS_RE.search(dict(_NODE_ATTR_RE.findall(tag)).get("bounds") or "")
+        if m:
+            w = max(w, int(m.group(3)))
+            h = max(h, int(m.group(4)))
+    if not w or not h:
+        return rects          # 层级里连全屏节点都没有: 退回"按各自原始矩形", 绝不整宽
+    # ★ 顶带判据用**两个条件同时成立**(只看屏幕比例会被稀疏层级骗: 没有全屏节点时 h
+    #   等于最大节点下沿, 一条底部导航栏就能让"顶带"吞掉整屏 —— 那是灾难性的误杀):
+    #   ① 它在屏幕上半部分; ② 它的下沿不超过"系统矩形最小下沿"的 2 倍。
+    _min_y2 = min(r[3] for r in rects)
+    tops = [r for r in rects
+            if r[3] <= h * 0.5 and r[3] <= max(_min_y2 * 2, _min_y2 + 12)]
+    bottoms = [r for r in rects if r[1] >= h * bottom_ratio]
+    out = []
+    if tops:
+        out.append((0, 0, w, max(r[3] for r in tops)))          # 状态栏: 整宽
+    if bottoms:
+        out.append((0, min(r[1] for r in bottoms), w, h))       # 导航栏: 整宽
+    mid = [r for r in rects if r not in tops and r not in bottoms]
+    out.extend(mid)                                             # 悬浮窗: 按原矩形
+    return out
+
+
+def drop_system_ui_lines(lines, rects):
+    """丢掉**整行都落在系统 UI 区域里**的 OCR 结果 —— 返回保留下来的行。
+
+    lines: [(文本, (x1,y1,x2,y2))](见 core/ocr.py::screen_boxes)
+    rects: system_ui_regions(xml) 的结果
+
+    ★ 判据严格(用户 2026-10-15 定的方案): 只有**整框**都在区域里才丢; 压线的一律保留
+      —— 宁可漏排一条状态栏文案, 也不能把"从状态栏压线往下的 APP 文案"误杀。
+    ★ 为什么 OCR 侧还需要它: 树侧已经按包名排除了(visible_nodes), 但 OCR 读的是**像素**,
+      没有包名可依 —— 手机状态栏上"看得见"的字(通知横幅、锁屏提示)只能靠坐标排。
+    """
+    if not rects:
+        return list(lines)
+    kept = []
+    for txt, box in lines:
+        x1, y1, x2, y2 = box
+        inside = any(x1 >= rx1 and y1 >= ry1 and x2 <= rx2 and y2 <= ry2
+                     for rx1, ry1, rx2, ry2 in rects)
+        if not inside:
+            kept.append((txt, box))
+    return kept
+
+
 def visible_nodes(xml):
     """层级里的 (text, desc, 中心坐标|None) —— **只保留屏幕上真实可见的节点**。
 
@@ -76,7 +162,7 @@ def visible_nodes(xml):
             continue                         # 未渲染 → 视觉上不存在
         pos = None
         if b:
-            m = re.match(r"\[(-?\d+),(-?\d+)\]\[(-?\d+),(-?\d+)\]", b)
+            m = _BOUNDS_RE.search(b)
             if m:
                 x1, y1, x2, y2 = (int(g) for g in m.groups())
                 pos = ((x1 + x2) // 2, (y1 + y2) // 2)

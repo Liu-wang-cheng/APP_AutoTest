@@ -505,12 +505,35 @@ class ActionRunner:
                 end_time += self._poll_sleep(check_count) or 0
 
     def _ocr_find_xy(self, value):
-        """OCR 全文扫描, 找含 value 的那行, 返回 (value, (x, y)) / (None, None)。"""
+        """OCR 全文扫描, 找含 value 的那行, 返回 (value, (x, y)) / (None, None)。
+
+        ★ 排除**手机系统 UI**上的识别结果(用户 2026-10-15): OCR 读的是像素, 没有包名
+          可依 —— 状态栏/通知栏上的字(如手机上"正在充电")若被当成目标, 这里会去
+          **点状态栏**(可能拉下通知栏)。判据与判定侧同一套: 实测的系统 UI 遮挡区域,
+          且只有整行落在里面才丢。坐标按需取一次(2s 内复用, 与 OCR 尝试的节奏一致)。
+        """
         from core import ocr as _ocr
-        for line, pos in _ocr.screen_texts(self.d):
+        from core.sentinel import drop_system_ui_lines
+        rects = self._system_ui_regions_cached()
+        for line, box in drop_system_ui_lines(list(_ocr.screen_boxes(self.d)), rects):
             if value and value in line:
-                return value, pos
+                return value, (box[0], box[1])
         return None, None
+
+    def _system_ui_regions_cached(self, ttl=2.0):
+        """系统 UI 遮挡区域(带 2s 缓存) —— 拿不到就返回空(= 不过滤, 与旧行为一致)"""
+        import time as _t
+        key = "_sysui_regions_cache"
+        cached = getattr(self, key, None)
+        if cached and _t.time() - cached[0] < ttl:
+            return cached[1]
+        try:
+            from core.sentinel import system_ui_regions
+            regions = system_ui_regions(self.d.dump_hierarchy())
+        except Exception:
+            regions = []
+        setattr(self, key, (_t.time(), regions))
+        return regions
 
     @staticmethod
     def _element_visible(el):

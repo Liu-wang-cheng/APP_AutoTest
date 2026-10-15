@@ -25,7 +25,7 @@ log = get_logger()
 
 _ocr = None
 _lock = threading.Lock()
-_cache = {"t": 0.0, "texts": []}
+_cache = {"t": 0.0, "texts": [], "boxes": []}   # texts=左上角口径, boxes=整框
 CACHE_SECS = 1.5          # 同一帧不重复识别(一次识别约 1s)
 SPARSE_MIN_TEXTS = 5      # 层级里可见文本少于此数 ⇒ 认为页面主体没暴露
 
@@ -93,11 +93,16 @@ def sparse(xml, min_texts=SPARSE_MIN_TEXTS):
     return len([t for t in re.findall(r'text="([^"]*)"', xml) if t]) < min_texts
 
 
-def screen_texts(d, use_cache=True):
-    """截图 → OCR → [(文本, (x, y))];失败返回空列表(绝不影响主流程)"""
+def screen_boxes(d, use_cache=True):
+    """截图 → OCR → [(文本, (x1, y1, x2, y2))];失败返回空列表(绝不影响主流程)
+
+    ★ 为什么要连**框**一起给(2026-10-15): 判断"这行字是不是手机状态栏/通知栏里的"
+      必须知道整行的上下边界 —— 只看左上角坐标没法区分"整行落在系统栏内"(该丢)和
+      "从系统栏压着线往下的 APP 文案"(不该丢)。见 sentinel.drop_system_ui_lines()。
+    """
     now = time.time()
     if use_cache and now - _cache["t"] < CACHE_SECS:
-        return _cache["texts"]
+        return _cache["boxes"]
     try:
         img = d.screenshot(format="opencv")
         res, _ = _get()(img)
@@ -108,11 +113,24 @@ def screen_texts(d, use_cache=True):
     for item in (res or []):
         try:
             box, txt = item[0], item[1]
-            out.append((str(txt), (int(box[0][0]), int(box[0][1]))))
+            xs = [int(p[0]) for p in box]
+            ys = [int(p[1]) for p in box]
+            out.append((str(txt), (min(xs), min(ys), max(xs), max(ys))))
         except Exception:
             continue
-    _cache.update(t=now, texts=out)
+    _cache.update(t=now, boxes=out, texts=[(t, (b[0], b[1])) for t, b in out])
     return out
+
+
+def screen_texts(d, use_cache=True):
+    """截图 → OCR → [(文本, (x, y))];失败返回空列表(绝不影响主流程)
+
+    (x, y) = 识别框左上角 —— 老调用方的口径, 保持原样; 需要整框的用 screen_boxes()。
+    """
+    now = time.time()
+    if use_cache and now - _cache["t"] < CACHE_SECS:
+        return _cache["texts"]
+    return [(t, (b[0], b[1])) for t, b in screen_boxes(d, use_cache=use_cache)]
 
 
 def contains(d, text):

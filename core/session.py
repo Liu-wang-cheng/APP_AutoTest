@@ -503,7 +503,17 @@ def text_present_detail(d, texts, xml=None, round_no=None):
         # ★ 全文哨兵(2026-10-13): 识别一次(帧缓存), **所有行**都过故障词 —— 故障弹窗
         #   画在屏上但不进无障碍树时, 只有 OCR 这条路能抓到; 哪怕等待目标没命中也要扫。
         #   ★ 同样走 streak 防护(2026-10-13 用户补充): 单帧瞬时 toast 不触发。
-        lines = list(ocr.screen_texts(d))          # [(行文本, 坐标)]
+        # ★ 排掉**手机系统 UI**上的字(用户 2026-10-15): 树侧已按包名排除, 但 OCR 读的是
+        #   像素、没有包名可依 —— 手机状态栏/通知栏上"看得见"的字(通知横幅、锁屏提示、
+        #   电量文案)只能按坐标排。判据用**实测**的系统 UI 矩形(不是猜比例), 且只有整行
+        #   落在矩形内才丢(压线的不动) —— 见 sentinel.system_ui_rects/drop_system_ui_lines。
+        from core.sentinel import drop_system_ui_lines, system_ui_regions
+        _boxes_all = list(ocr.screen_boxes(d))        # [(行文本, 整框)]
+        _boxes = drop_system_ui_lines(_boxes_all, system_ui_regions(xml))
+        if len(_boxes) != len(_boxes_all):
+            _lost = [t for t, b in _boxes_all if (t, b) not in _boxes]
+            log.info(f"[OCR] 忽略手机系统 UI 内的 {len(_lost)} 行识别结果: {_lost}")
+        lines = [(t, (b[0], b[1])) for t, b in _boxes]     # 后续按 (行文本, 左上角) 用
         ocr_fault = None
         for line, _pos in lines:
             fw, fword = _word_in(line, _status_words["fault"])

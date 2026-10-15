@@ -119,3 +119,89 @@ def test_nodes_without_package_are_kept():
     """★ 精简层级不带 package 属性 —— 那种节点**必须保持原样**(宁可不误杀)"""
     xml = '<node text="充电中" bounds="[40,300][300,360]"/>'
     assert [t for t, _d, _p in sentinel.visible_nodes(xml)] == ["充电中"]
+
+
+# ── ③ OCR 兜底: 按**实测**系统 UI 矩形丢识别行(没有包名可依, 只能按坐标) ──
+
+FULL_SCREEN = '<node bounds="[0,0][1080,1920]"/>'   # 只为推出屏幕尺寸
+SYS_XML = ('<node text="20:22" package="com.android.systemui" bounds="[10,9][110,51]"/>'
+           '<node text="" package="com.android.systemui" bounds="[989,13][1009,47]"/>')
+
+
+def test_system_ui_rects_use_real_bounds_not_a_ratio():
+    """★ 用层级里系统 UI 节点的**真实范围**, 不是"顶部 5%"这种猜的比例
+
+    实测(1080x1920, 用户 2026-10-15): 系统栏只到 61px, 而 5% = 96px —— 多切 35px,
+    而 APP 自己的标题在 y=104, 距 5% 线只剩 8px(换台挖孔屏就会把 APP 文案一起切掉)。
+    """
+    rects = sentinel.system_ui_rects(SYS_XML)
+    assert rects == [(10, 9, 110, 51), (989, 13, 1009, 47)], rects
+    assert sentinel.system_ui_rects('<node text="充电中" bounds="[1,2][3,4]"/>') == [], \
+        "没有 package 的节点不该被当成系统 UI"
+
+
+def test_ocr_lines_inside_system_ui_are_dropped_straddling_are_kept():
+    """★ 只有**整框**落在系统 UI 矩形里才丢; 压线的一律保留(用户定的严格判据)"""
+    rects = sentinel.system_ui_regions(SYS_XML + FULL_SCREEN)
+    lines = [
+        ("正在充电", (0, 0, 200, 40)),       # 整框在状态栏内 → 丢
+        ("充电中", (0, 80, 300, 130)),       # 状态栏之下 → 留
+        ("扫地机器人0090", (150, 40, 900, 130)),   # 从状态栏压线往下 → 留(严格判据)
+    ]
+    kept = [t for t, _b in sentinel.drop_system_ui_lines(lines, rects)]
+    assert kept == ["充电中", "扫地机器人0090"], kept
+    # 没有系统 UI 信息(精简层级) → 一条都不丢
+    assert sentinel.drop_system_ui_lines(lines, []) == lines
+
+
+class _OcrDev:
+    """桩设备: 层级给一句系统 UI 文案, 画面里"看起来"有手机充电文案(OCR 口径)"""
+
+    serial = "fake"
+
+    def __init__(self, xml):
+        self._xml = xml
+
+    def dump_hierarchy(self):
+        return self._xml
+
+    def screenshot(self, path=None, format=None):
+        return None
+
+    def __call__(self, **kw):
+        class _El:
+            def exists(self, timeout=1):
+                return False
+        return _El()
+
+
+def _force_ocr(monkeypatch, ocr_lines):
+    """让判断一定走 OCR 兜底, 并把它认到的行固定下来"""
+    from core import ocr
+    monkeypatch.setattr(ocr, "available", lambda: True)
+    monkeypatch.setattr(ocr, "screen_boxes", lambda d, **k: list(ocr_lines))
+
+
+def test_charging_precondition_not_fooled_by_phone_status_bar_via_ocr(monkeypatch):
+    """★ 真机场景的 OCR 版本: 手机状态栏上"看得见"的「正在充电」不能顶成机器人充电
+
+    树侧靠包名排除, OCR 读的是像素没有包名 —— 只能按实测的系统 UI 矩形丢。
+    """
+    d = _OcrDev(SYS_XML + FULL_SCREEN)       # 树里只有系统 UI 的时钟 → 稀疏 → 走 OCR
+    _force_ocr(monkeypatch, [("正在充电", (0, 0, 200, 40)),      # 系统栏内 → 该丢
+                             ("扫地机器人0090", (150, 104, 900, 160))])
+    assert session.is_charging(d) is False, "手机状态栏的「正在充电」不算机器人充电"
+
+    _force_ocr(monkeypatch, [("正在充电", (0, 0, 200, 40)),
+                             ("充电中", (70, 309, 200, 360))])   # APP 自己的 → 该认
+    assert session.is_charging(d) is True
+
+
+def test_ocr_fault_words_from_system_ui_do_not_trip_sentinel(monkeypatch):
+    """系统通知栏里 OCR 出来的「检查更新」不该触发故障哨兵(APP 自己的照常触发)"""
+    from core import session as _s
+    _s.reset_status_words()
+    _force_ocr(monkeypatch, [("正在检查更新", (0, 0, 200, 40))])
+    assert _s.scan_status_words  # 哨兵走的是同一批 OCR 行
+    hit, _src, _raw, _pos = _s.text_present_detail(_OcrDev(SYS_XML + FULL_SCREEN), ["充电"])
+    assert hit is None, "系统栏里的「检查更新」既不该命中目标, 也不该触发故障哨兵"
