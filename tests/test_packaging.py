@@ -918,28 +918,15 @@ def test_prune_debug_artifacts_is_safe_when_missing(tmp_path, monkeypatch):
 
 # ── 运行产物封顶(用户 2026-10-12: "如何确保不会越来越大") ──
 
-def _mk_run(d, name, n_files=2, size=1024, mtime=None):
-    import os as _os
-    p = d / name
-    p.mkdir(parents=True, exist_ok=True)
-    for i in range(n_files):
-        f = p / f"step{i:02d}.png"
-        f.write_bytes(b"x" * size)
-        if mtime:
-            _os.utime(f, (mtime, mtime))
-    if mtime:
-        _os.utime(p, (mtime, mtime))
-    return p
-
-
-def test_prune_run_artifacts_keeps_recent_runs_per_case(tmp_path, monkeypatch):
+def test_prune_run_artifacts_keeps_recent_runs_per_case(tmp_path, monkeypatch, mk_run_dirs):
     """★ 每个用例只保留最近 N 次执行的截图目录, 更旧的整目录删; 不碰用例/模板"""
     from core import bootstrap
     monkeypatch.setattr(bootstrap, "_app_root", lambda app_dir=None: str(tmp_path))
     shots = tmp_path / "Test_cases" / "组甲" / "screenshots"
     for i in range(5):                       # 用例甲跑了 5 次
-        _mk_run(shots, f"甲用例-第{i + 1}次", mtime=1000 + i)
-    _mk_run(shots, "乙用例-第1次", mtime=1000)      # 另一个用例, 只跑过 1 次 → 不该被删
+        mk_run_dirs(shots, [(f"甲用例-第{i + 1}次", 1000 + i)])
+    # 另一个用例, 只跑过 1 次 → 不该被删
+    mk_run_dirs(shots, [("乙用例-第1次", 1000)])
     keep = tmp_path / "Test_cases" / "组甲" / "templates" / "按钮.png"
     keep.parent.mkdir(parents=True)
     keep.write_bytes(b"TPL")
@@ -951,13 +938,13 @@ def test_prune_run_artifacts_keeps_recent_runs_per_case(tmp_path, monkeypatch):
     assert keep.exists(), "用例/模板被误删了"
 
 
-def test_prune_run_artifacts_caps_total_and_reports(tmp_path, monkeypatch):
+def test_prune_run_artifacts_caps_total_and_reports(tmp_path, monkeypatch, mk_run_dirs):
     """总体积超上限按最旧优先删; reports 按份数、失败截图按张数封顶"""
     from core import bootstrap
     monkeypatch.setattr(bootstrap, "_app_root", lambda app_dir=None: str(tmp_path))
     shots = tmp_path / "Test_cases" / "组甲" / "screenshots"
     for i in range(3):
-        _mk_run(shots, f"甲用例-第{i + 1}次", n_files=1, size=1024, mtime=2000 + i)
+        mk_run_dirs(shots, [(f"甲用例-第{i + 1}次", 2000 + i)], n_files=1)
     reps = tmp_path / "reports"
     reps.mkdir(parents=True)
     for i in range(5):

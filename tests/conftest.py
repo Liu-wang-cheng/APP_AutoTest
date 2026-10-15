@@ -213,6 +213,33 @@ def _isolate_base_dir(monkeypatch, tmp_path):
 
 
 @pytest.fixture
+def mk_run_dirs(tmp_path):
+    """造"运行目录"(截图封顶类测试共用, 2026-10-15 从 test_packaging 内联迁来)。
+
+    用法: mk_run_dirs("Test_cases/组甲/screenshots", [("甲用例_r..._第1次", 3000),
+    ("甲用例_r..._第2次", 3001)], n_files=2)
+    —— 每个目录里放 n_files 个文件, 目录与文件的 mtime 都设为给定值(便于"留最新")。
+    """
+    def _make(d, specs, n_files=2, size=1024):
+        base = d if os.path.isabs(str(d)) else tmp_path / d
+        out = []
+        for spec in specs:
+            name, mtime = spec if isinstance(spec, (list, tuple)) else (spec, None)
+            p = base / name
+            p.mkdir(parents=True, exist_ok=True)
+            for i in range(n_files):
+                f = p / f"step{i:02d}.png"
+                f.write_bytes(b"x" * size)
+                if mtime:
+                    os.utime(f, (mtime, mtime))
+            if mtime:
+                os.utime(p, (mtime, mtime))
+            out.append(p)
+        return out
+    return _make
+
+
+@pytest.fixture
 def mk_stale_files(tmp_path):
     """造 n 个 mtime 递增的文件 —— 「留最新 N 个」断言的根基(审查 2026-10-12 #31)。
 

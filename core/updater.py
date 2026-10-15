@@ -606,13 +606,16 @@ def _download_parallel(url, dest_path, total, connections, progress_cb, timeout)
 
 
 def verify_sha256(file_path, expected):
-    """校验文件 sha256; expected 为空时视为"未提供校验值" -> 通过(仅记警告)。
+    """校验文件 sha256。**空期望值 = 拒绝**(用户 2026-10-15 审查后收紧)。
 
-    ★ 提供校验值时**必须**比对成功, 否则一个被中间人换掉的包会被直接执行。
+    ★ 为什么不再"警告后放行": sha256 是更新包唯一的完整性凭据 —— 放行等于一个
+      没有校验的包会被直接解压执行。版本清单是我方发布产物, 正常**永远**带
+      sha256(见 tools/release.py); 真缺失说明清单损坏或被篡改, 宁可让更新失败
+      并报错, 也不能默默装一个来路不明的包。
     """
     if not expected:
-        log.warning("[更新] 版本清单未提供 sha256, 跳过完整性校验")
-        return True
+        log.error("[更新] 版本清单没有 sha256, 拒绝安装(完整性无法校验)")
+        return False
     h = hashlib.sha256()
     with open(file_path, "rb") as f:
         for chunk in iter(lambda: f.read(65536), b""):

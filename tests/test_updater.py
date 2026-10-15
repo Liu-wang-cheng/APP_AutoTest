@@ -302,8 +302,9 @@ def test_verify_sha256(tmp_path):
     assert updater.verify_sha256(str(p), good) is True
     assert updater.verify_sha256(str(p), good.upper()) is True   # 大小写不敏感
     assert updater.verify_sha256(str(p), "0" * 64) is False
-    # 没提供校验值时放行(只警告) —— 不能因为清单没写 sha256 就永远更不了
-    assert updater.verify_sha256(str(p), "") is True
+    # ★ 没提供校验值 → **拒绝**(用户 2026-10-15 审查后收紧): sha256 是完整性唯一
+    #   凭据, 放行等于把没校验的包装上去执行; 清单缺失说明损坏/被篡改
+    assert updater.verify_sha256(str(p), "") is False
 
 
 # ── 总入口的各分支 ──
@@ -884,6 +885,42 @@ def test_check_for_update_sees_newer_version_over_real_http():
         assert res2.status == "up_to_date", res2.message
     finally:
         shutdown()
+
+
+def test_download_worker_resume_uses_file_size(monkeypatch, tmp_path):
+    """★ 分块续传以**盘上字节数**为准(2026-10-15 审查): 写盘后异常重试不会重复
+    字节 —— 以前用内存计数, 异常落在 f.write 与 local += 之间就会重复追加。"""
+    payload = b"A" * 4096
+    calls = []
+
+    class _Resp:
+        def __init__(self, body):
+            self._body = body
+            self.status = 206
+            self.headers = {}
+
+        def read(self, n=None):
+            body, self._body = self._body[:n], self._body[n:]
+            return body
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    def fake_request(url, method="GET", timeout=0, extra_headers=None):
+        rng = (extra_headers or {}).get("Range", "")
+        calls.append(rng)
+        start = int(rng.split("-")[0][6:]) if rng else 0
+        if len(calls) == 1:            # 第一次: 故意只给一半就断(模拟写盘后异常)
+            raise OSError("模拟中断")
+        return _Resp(payload[start:])
+
+    monkeypatch.setattr(updater, "_request", fake_request)
+    dest = tmp_path / "pkg.zip"
+    updater._download_parallel("http://s/pkg", str(dest), len(payload), 1, None, 30)
+    assert dest.read_bytes() == payload, "续传后必须与原包逐字节一致(无重复/无缺失)"
 
 
 def test_check_for_update_reports_error_when_source_is_down():
