@@ -609,7 +609,9 @@ class ActionRunner:
                 self.mark_click(pos, name)      # ★ 点击前截图标注(2026-10-13)
                 self.d.click(*pos)
                 log.info("[模板点击] %s @ (%d, %d)", name, pos[0], pos[1])
-                self._save_click_marker(screen, pos, name)
+                # ★ 不再另存一份 Test_img/debug/clicks/ 标记图(用户 2026-10-15:
+                #   "把点击的标注图直接替换步骤截图统一放在测试步骤截图的目录中")
+                #   —— 带标记的步骤截图就是唯一证据, 同一次运行的所有图都在一处。
                 return pos
             self._sleep(2)
         raise AssertionError(f"超时({timeout}s)未匹配到模板图: {name}")
@@ -644,30 +646,9 @@ class ActionRunner:
         cv2.line(img, (x, y - 40), (x, y - 14), (0, 0, 255), 2)
         cv2.line(img, (x, y + 14), (x, y + 40), (0, 0, 255), 2)
 
-    def _save_click_marker(self, frame, pos, label):
-        """把点击位置标注在匹配帧上存档(报告之外的第一手证据)。
-
-        存 Test_img/debug/clicks/<case>/,conftest 每轮收集前清 debug 目录,
-        不会无限堆积。cv2 的 imwrite/imdecode 在 Windows 上不支持中文路径,
-        统一走 imencode + open()。
-        """
-        try:
-            import cv2
-            vis = frame.copy()
-            self._draw_click_marker(vis, pos[0], pos[1])
-            d = os.path.join(BASE_DIR, "Test_img", "debug", "clicks",
-                             self.case_name or "case")
-            os.makedirs(d, exist_ok=True)
-            safe = "".join(c for c in str(label).rsplit(".", 1)[0]
-                           if c.isascii() and c not in '\\/:*?"<>|') or "tpl"
-            path = os.path.join(d, "%s_%s.png" % (time.strftime("%H%M%S"), safe))
-            ok, buf = cv2.imencode(".png", vis)
-            if ok:
-                with open(path, "wb") as f:
-                    f.write(buf.tobytes())
-                log.info("[点击标记] %s", path)
-        except Exception:
-            pass                      # 标记只是附加证据,绝不能影响执行
+    # ★ Test_img/debug/clicks/ 那份重复标记图已删除(用户 2026-10-15:
+    #   "把点击的标注图直接替换步骤截图统一放在测试步骤截图的目录中")
+    #   —— 带标记的步骤截图是唯一证据,见 _mark_last_click_on()。
 
     def _annotate_shot(self, path, draw):
         """在已落盘的截图上作标注(中文路径安全读写); 失败不影响证据本身"""

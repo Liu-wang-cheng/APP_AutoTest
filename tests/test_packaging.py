@@ -873,10 +873,10 @@ def test_prune_debug_artifacts_keeps_newest_per_dir(tmp_path, monkeypatch):
     from core import bootstrap
 
     monkeypatch.setattr(bootstrap, "_app_root", lambda app_dir=None: str(tmp_path))
-    clicks = tmp_path / "Test_img" / "debug" / "clicks" / "用例A"
-    clicks.mkdir(parents=True)
+    notes = tmp_path / "Test_img" / "debug" / "notes" / "用例A"
+    notes.mkdir(parents=True)
     for i in range(5):
-        f = clicks / f"f{i}.png"
+        f = notes / f"f{i}.png"
         f.write_bytes(b"x" * 10)
         _os.utime(f, (1000 + i, 1000 + i))          # mtime 递增: f4 最新
     keep = tmp_path / "Test_img" / "templates" / "模板.png"   # 不该被碰
@@ -885,8 +885,32 @@ def test_prune_debug_artifacts_keeps_newest_per_dir(tmp_path, monkeypatch):
 
     n, freed = bootstrap.prune_debug_artifacts(keep_per_dir=2)
     assert n == 3 and freed == 30, (n, freed)
-    assert sorted(p.name for p in clicks.iterdir()) == ["f3.png", "f4.png"]
+    assert sorted(p.name for p in notes.iterdir()) == ["f3.png", "f4.png"]
     assert keep.exists(), "debug 之外的文件被误删了"
+
+
+def test_prune_debug_artifacts_removes_legacy_duplicate_dir(tmp_path, monkeypatch):
+    """★ 旧版重复图目录整棵删掉(用户 2026-10-15: "看下截图中还有重复的吗"):
+
+    2.0.20 及更早会把每次模板点击再存一份到 Test_img/debug/clicks/ —— 同一张画面
+    在"步骤截图"里已经有一份带点击标记的了。新版本不再写它, 老装机的残留要收掉
+    (按个数封顶收不掉: 那目录只有几张, 永远到不了 200)。
+    """
+    from core import bootstrap
+
+    monkeypatch.setattr(bootstrap, "_app_root", lambda app_dir=None: str(tmp_path))
+    legacy = tmp_path / "Test_img" / "debug" / "clicks" / "用例A"
+    legacy.mkdir(parents=True)
+    (legacy / "a.png").write_bytes(b"x" * 10)
+    keep = tmp_path / "Test_img" / "debug" / "failures" / "用例A_trace"
+    keep.mkdir(parents=True)
+    (keep / "00_ok.jpg").write_bytes(b"j" * 10)      # 失败证据不能被误删
+
+    n, freed = bootstrap.prune_debug_artifacts()
+    assert not (tmp_path / "Test_img" / "debug" / "clicks").exists(), \
+        "旧版重复图目录应整棵删除"
+    assert n == 2 and freed == 10, (n, freed)      # 目录本身 + 里面那张 10 字节的图
+    assert keep.exists() and (keep / "00_ok.jpg").exists(), "失败证据被误删了"
 
 
 def test_prune_debug_artifacts_caps_total_size(tmp_path, monkeypatch):

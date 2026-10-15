@@ -171,6 +171,14 @@ def preview_region(frame, region):
     if ok:
         with open(path, "wb") as f:
             f.write(buf.tobytes())
+    # ★ 预览图到上限就循环覆盖(用户 2026-10-15: "对比范围预览图的数量是不是也没做限制"):
+    #   每点一次「预览范围」存一张, 以前只在启动时按"每目录 200 个"兜底 —— 一次编辑
+    #   会话连点几十次就攒几十张, 而图当场就在弹窗里看过了。删最旧的, 只留最新几张。
+    try:
+        from core import bootstrap as _bs
+        _bs.keep_newest([os.path.join(d, f) for f in os.listdir(d)], _bs.PREVIEW_KEEP)
+    except Exception as e:          # 清理失败绝不能影响预览本身
+        log.debug(f"[截图比对] 预览图循环覆盖失败: {e}")
     return path, f"{pct_txt} → 像素 {x1},{y1}-{x2},{y2}"
 
 

@@ -320,25 +320,38 @@ def test_ensure_device_reconnects_after_failure(make_runner, monkeypatch):
 
 # ── 点击标记 ──
 
-def test_save_click_marker_writes_annotated_frame(make_runner, monkeypatch, tmp_path):
-    """模板点击后要在匹配帧上留标记图(红圈+十字),点在哪一眼可见"""
-    import cv2
+def test_template_click_marks_before_click_and_writes_no_duplicate(make_runner,
+                                                                 monkeypatch,
+                                                                 tmp_path):
+    """模板点击只留「步骤截图」这一份证据:
+
+    ① 先 `mark_click`(点击前截图+点位标记) 再 `d.click`,顺序不能倒;
+    ② 不再另存 Test_img/debug/clicks/ 的重复标记图。
+    (用户 2026-10-15: "把点击的标注图直接替换步骤截图统一放在测试步骤截图的目录中")
+    """
     import numpy as np
     import core.runner as runner_mod
     monkeypatch.setattr(runner_mod, "BASE_DIR", str(tmp_path))
 
+    seq = []
     frame = np.zeros((400, 300, 3), dtype=np.uint8)
-    r = make_runner(FakeDevice())
-    r._save_click_marker(frame, (100, 200), "继续清扫.png")
 
-    files = list((tmp_path / "Test_img" / "debug" / "clicks" / "t").glob("*.png"))
-    assert files, "标记图未生成"
-    img = cv2.imdecode(np.fromfile(str(files[0]), dtype=np.uint8), cv2.IMREAD_COLOR)
-    assert img is not None
-    # 圆环半径 26:上边缘 (100,174) 应为红色(BGR 高 R 低 B)
-    assert img[174, 100, 2] > 200 and img[174, 100, 0] < 80
-    # 原帧其余位置未被破坏(仍是黑)
-    assert img[380, 290, 2] == 0
+    class D(FakeDevice):
+        def screenshot(self, format=None):
+            return frame
+
+        def click(self, x, y):
+            seq.append(("click", x, y))
+
+    r = make_runner(D())
+    monkeypatch.setattr(r, "mark_click", lambda pos, label: seq.append(("mark",) + tuple(pos)))
+    monkeypatch.setattr("core.vision.find_in_gray", lambda *a, **k: (100, 200))
+
+    assert r._click_by_template("继续清扫.png") == (100, 200)
+    assert [s[0] for s in seq] == ["mark", "click"], \
+        "必须先标记点位截图再点击,否则截到的图和点击位置对不上"
+    assert not (tmp_path / "Test_img" / "debug" / "clicks").exists(), \
+        "标记图应只落在步骤截图里,不再另存一份到 debug/clicks"
 
 
 def test_mark_last_click_on_draws_and_consumes(make_runner, tmp_path):

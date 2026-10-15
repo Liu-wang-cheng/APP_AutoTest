@@ -382,3 +382,32 @@ def test_compare_with_explicit_screenshot_key_still_annotated(tmp_path):
                   "screenshot": True, "compare_area": "0%,0% 100%,100%"}])
     img = _imread_any(r.results[0]["screenshot"])
     assert tuple(img[0, 50]) == (0, 200, 255), "写了 screenshot 键也要用标注图"
+
+
+def test_preview_region_keeps_only_newest(tmp_path, monkeypatch):
+    """★ 对比范围预览图到上限就循环覆盖(用户 2026-10-15: "对比范围预览图的数量
+    是不是也没做限制"): 每点一次「预览范围」存一张, 以前只在启动时按"每目录 200 个"
+    兜底 —— 一次编辑会话连点几十次就攒几十张。现在**写新图时**就回收旧的。"""
+    import os
+    import time
+    import numpy as np
+    from core import bootstrap
+    import core.actions.asserts as A
+
+    monkeypatch.setattr(A, "BASE_DIR", str(tmp_path))
+    monkeypatch.setattr(bootstrap, "PREVIEW_KEEP", 3)
+    d = tmp_path / "Test_img" / "debug" / "compare_preview"
+    d.mkdir(parents=True)
+    for i in range(5):                      # 5 张旧图, mtime 递增
+        f = d / f"旧{i}.png"
+        f.write_bytes(b"x")
+        os.utime(f, (1000 + i, 1000 + i))
+    time.sleep(0.01)                        # 保证新图 mtime 最大
+
+    frame = np.full((200, 100, 3), 120, dtype=np.uint8)
+    path, _desc = A.preview_region(frame, "0%,0% 100%,100%")
+
+    left = sorted(p.name for p in d.iterdir())
+    assert len(left) == 3, f"预览图没封顶: {left}"
+    assert os.path.basename(path) in left, "刚生成的那张被删了"
+    assert "旧0.png" not in left and "旧1.png" not in left and "旧2.png" not in left, left

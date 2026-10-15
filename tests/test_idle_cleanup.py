@@ -173,7 +173,8 @@ def test_prune_run_artifacts_deferred_while_running(tmp_path):
 
 def test_prune_debug_artifacts_deferred_while_running(tmp_path, mk_stale_files):
     """调试产物封顶: 执行期间不删, 结束后按每个目录留最新 N 个"""
-    d = tmp_path / "Test_img" / "debug" / "clicks"
+    # ★ 不能用 debug/clicks 当样本: 那是旧版重复图目录, 启动清理会**整棵删**
+    d = tmp_path / "Test_img" / "debug" / "notes"
     mk_stale_files(d, 5)
     idle.begin_run()
     try:

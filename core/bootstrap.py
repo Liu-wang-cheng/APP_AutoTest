@@ -278,6 +278,15 @@ def _ensure_update_section(cfg_path):
 DEBUG_KEEP_PER_DIR = 200          # 每个子目录最多留最新的 200 个文件
 DEBUG_MAX_TOTAL_MB = 300          # 整个 debug 目录最多占 300MB(超了按最旧优先删)
 TRACE_KEEP = 50                   # 失败时序证据目录最多保留多少个(每个目录里还有 8 张 JPEG)
+#: 「预览对比范围」的标注图(Test_img/debug/compare_preview/): 每点一次存一张, 只在
+#: **写新图时**循环覆盖(用户 2026-10-15: "对比范围预览图的数量是不是也没做限制") ——
+#: 以前只有启动时那趟 debug 扫描按"每目录 200 个"兜底, 一次编辑会话连点几十次预览
+#: 就会攒几十张(而且没有哪张是看得完的: 图当场就在弹窗里看过了)。
+PREVIEW_KEEP = 20
+
+#: 2.0.20 及更早版本往这里存"模板点击标记图" —— 现在点击标记直接画在**步骤截图**上,
+#: 这个目录只剩历史副本(同一次点击的第二份图), 启动清理时整棵删掉。
+LEGACY_DUP_DIRS = ("clicks",)
 
 
 def _debug_entries(debug_dir):
@@ -356,6 +365,18 @@ def prune_debug_artifacts(app_dir=None, keep_per_dir=DEBUG_KEEP_PER_DIR,
                     os.rmdir(root2)
                 except OSError:
                     pass
+        # ★ 历史遗留的**重复图**目录整棵删掉(用户 2026-10-15: "看下截图中还有重复的吗"):
+        #   2.0.20 及更早会把每次模板点击再存一份到 Test_img/debug/clicks/ —— 同一张
+        #   画面在"步骤截图"里已经有一份带标记的了。新版本不再写它, 老装机的残留顺手收掉
+        #   (按个数封顶收不掉: 那目录只有几张, 永远不到 200)。
+        for legacy in LEGACY_DUP_DIRS:
+            old = os.path.join(debug_dir, legacy)
+            if os.path.isdir(old):
+                n2, b2 = _tree_size(old)
+                if _rm_tree(old):
+                    n += 1 + n2
+                    freed += b2
+                    log.info(f"[初始化] 清理旧版重复图目录: {old}")
         if n:
             log.info(f"[初始化] 调试产物封顶: 删除 {n} 个旧文件, 释放 {freed / 1048576:.0f}MB")
         return n, freed
