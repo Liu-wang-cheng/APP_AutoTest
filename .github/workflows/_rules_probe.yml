@@ -1,0 +1,28 @@
+name: 探针(临时, 验证完即删)
+
+# 目的: 搞清"往**非默认分支**推一个新提交, 仓库 ruleset(required status checks, ref ~ALL)
+# 到底管不管"。管 → release.yml 的预检可以用"推两次探针分支"来做真实探针;
+# 不管 → 预检就得换别的办法(绝不能再留一个"永远通过"的假预检)。
+on:
+  workflow_dispatch:
+
+jobs:
+  probe:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 往探针分支推两个提交(默认 token, 没有 bypass)
+        shell: pwsh
+        run: |
+          git config user.name "rules-probe"
+          git config user.email "rules-probe@example.com"
+          $b = "refs/heads/__rules_probe"
+          git commit --allow-empty -m "probe 1" | Out-Null
+          Write-Host "=== push#1 (可能是建分支, 规则按设计不执行) ==="
+          git push origin "HEAD:$b" 2>&1 | Write-Host
+          Write-Host "push#1 exit=$LASTEXITCODE"
+          git commit --allow-empty -m "probe 2" | Out-Null
+          Write-Host "=== push#2 (对已存在分支的新提交 —— 与推 master 同等待遇?) ==="
+          git push origin "HEAD:$b" 2>&1 | Write-Host
+          Write-Host "push#2 exit=$LASTEXITCODE"

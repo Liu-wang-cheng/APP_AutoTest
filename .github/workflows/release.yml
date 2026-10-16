@@ -46,11 +46,15 @@ jobs:
         with:
           ref: master             # 见坑 ②: 发版要基于 master
           fetch-depth: 0
-          # ★ 推 version.json 与 tag 用的是 checkout 存下的凭据(见坑 ④)。
-          #   仓库规则(ruleset「合入规则」要求 pytest 状态检查)会拦下**新增提交**的推送,
-          #   除非推送身份在 bypass 名单里 —— 所以要么在 ruleset 里给 GitHub Actions 放行,
-          #   要么配一个 RELEASE_TOKEN(PAT) 并用它 checkout。没配就退回默认 token(行为不变)。
-          token: ${{ secrets.RELEASE_TOKEN || github.token }}
+          # ★ 推 version.json / tag 用的是 checkout 存下的凭据, 而仓库规则(ruleset
+          #   「合入规则」要求 pytest 状态检查)会拦下**新增提交**的推送 —— 除非推送
+          #   身份在 ruleset 的 bypass 名单里。Actions 自带的 GITHUB_TOKEN(应用 id
+          #   15368)**不在**名单里, 名单里那条是 DeployKey(见坑 ④)。
+          #   所以这里用**部署密钥** checkout(SSH): 它是写权限的部署密钥, 命中
+          #   `DeployKey` 那条 bypass, 推送才过得去。
+          #   没配这个 secret 时 ssh-key 为空 → checkout 退回默认 token(行为与以前一致,
+          #   但那时推送会被规则拒 —— 预检那一步会先拦下来并说明)。
+          ssh-key: ${{ secrets.RELEASE_DEPLOY_KEY }}
 
       - uses: actions/setup-python@v5
         with:
