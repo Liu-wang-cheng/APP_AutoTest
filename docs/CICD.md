@@ -202,6 +202,16 @@ jobs:
 | 磁盘 | 每季度 | 见 3.5 的清理 |
 | 依赖变化 | 跟着仓库 | workflow 每次 `pip install -r requirements.txt` ✓ 自动 |
 
+**存储与清理**（2026-10-16 盘点）：
+- **Release 资产是大头**：每个包 ~225MB，34 个版本就是 **7.65GB**。已按"只保留最近 5 个"
+  清到 5 个（1.13GB）。删 Release **不影响 tag 与源码历史** —— 需要老版本时
+  `git checkout v1.7 && build.bat` 重新构建即可（这就是敢删的底气）。建议每次发布后随手
+  把最老的删掉，别等攒成几个 G。
+- Action artifacts：`AutoTest-*`（演练/打包自检产物，~227MB/个，保留 3 天）与
+  `pytest-junit-*`（失败时的报告，很小）都会自动过期；要立刻回收就手动删。
+- 本地产物（`.venv` 1.1G、`dist/*.zip` ~216MB、`backups/` 你的数据）按需自行清理；
+  `build/`、`build_*.log`、`Test_img/debug/` 都是可再生的，随时可删。
+
 **常见故障对照**：
 - 任务一直 **Queued** → runner 没在线/标签不匹配（检查 `runs-on` 的标签与注册时的 `--labels`）；
 - **"模拟器/真机没在线"** → 启动模拟器，或改 `vars.SMOKE_DEVICE`；
