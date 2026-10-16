@@ -55,6 +55,16 @@ def ignore_packages():
 _BOUNDS_RE = re.compile(r"\[(-?\d+),(-?\d+)\]\[(-?\d+),(-?\d+)\]")
 
 
+def tag_is_system_ui(tag):
+    """这个 `<node …>` 标签是不是**手机系统 UI**(状态栏/通知栏)的?
+
+    给"自己解析层级"的调用方用(如 runner._get_all_nodes 抓取数据), 判据与
+    visible_nodes 完全一致 —— 两处必须同规则, 否则文本序列会错位。
+    """
+    attrs = dict(_NODE_ATTR_RE.findall(tag))
+    return attrs.get("package") in _ignore_packages
+
+
 def system_ui_rects(xml):
     """**实测**系统 UI(状态栏/通知栏/导航栏)在屏幕上的矩形 [(x1,y1,x2,y2)]。
 

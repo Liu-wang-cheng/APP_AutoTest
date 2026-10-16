@@ -270,3 +270,32 @@ def test_ocr_cache_key_includes_excluded_regions(monkeypatch):
     assert len(calls) == 1, "同屏蔽范围应复用缓存"
     ocr.screen_boxes(dev, exclude=[])                       # 换范围 → 必须重新识别
     assert len(calls) == 2, "换了屏蔽范围就不能复用缓存"
+
+
+# ── ⑤ 电量判定 / 抓取数据 也必须过滤系统 UI(与充电前置同一类 bug, 用户 2026-10-16) ──
+
+PHONE_BATT = ('<node text="电池 20%" package="com.android.systemui" '
+              'bounds="[10,9][110,51]"/>')
+APP_BATT = ('<node text="电池 85%" package="com.tuya.smartiot" '
+            'bounds="[40,300][300,360]"/>')
+HIDDEN_APP_BATT = ('<node text="电池 99%" package="com.tuya.smartiot" '
+                   'bounds="[0,0][0,0]"/>')
+
+
+def test_battery_level_ignores_phone_and_hidden_nodes():
+    """★ 电量判定: 手机状态栏的「电池 20%」与收起面板留下的隐藏节点「电池 99%」
+    都不能算机器人的电量(以前两者都会被算进去, 而且 max() 会挑走最大值)"""
+    d = _Dev(_xml(PHONE_BATT, HIDDEN_APP_BATT, APP_BATT))
+    assert session.get_battery_level(d) == 85, \
+        "应只认 APP 页面上**可见**的那条电量"
+
+
+def test_grab_nodes_ignore_system_ui():
+    """★ 抓取/比对数据(_get_all_nodes)同样不吃系统 UI 的文本"""
+    from core.runner import ActionRunner
+
+    r = ActionRunner.__new__(ActionRunner)          # 只要这两个方法, 不走 __init__
+    r.d = _Dev(_xml(PHONE_BATT, APP_BATT))
+    texts = [t for t, _b in r._get_all_nodes()]
+    assert texts == ["电池 85%"], texts
+    assert r._get_all_texts() == ["电池 85%"], r._get_all_texts()

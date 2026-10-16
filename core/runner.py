@@ -16,7 +16,7 @@ import core.actions  # noqa: F401  导入即注册全部动作(见 core/actions/
 from core.driver import BASE_DIR, split_texts
 from core.session import (text_present_detail, warm_webview,  # noqa: E501  判断统一入口 + WebView 预热
                           scan_status_words, set_status_words, FaultStateError)
-from core.sentinel import ignore_packages as _ignore_packages,     set_ignore_packages as _set_ignore_packages
+from core.sentinel import ignore_packages as _ignore_packages,     set_ignore_packages as _set_ignore_packages, tag_is_system_ui as _tag_is_system_ui
 from core.logger import get_logger
 from vlm.backend import VisionRouter
 
@@ -334,8 +334,7 @@ class ActionRunner:
 
     def _get_all_texts(self):
         """当前页面所有节点文本(含空串)"""
-        xml = self.d.dump_hierarchy()
-        return re.findall(r'text="([^"]*)"', xml)
+        return [t for t, _b in self._get_all_nodes()]
 
     def _get_all_nodes(self):
         """dump_hierarchy → [(text, bounds|None)]
@@ -345,10 +344,18 @@ class ActionRunner:
         · **不筛空文本** —— 筛掉空串会让下标整体偏移,取到隔壁指标的数字,
           而且取回来的值看起来完全正常
         · bounds 解析不到时为 None,调用方据此走"无 bounds"的下标回退
+
+        ★ 排除**手机系统 UI**的节点(用户 2026-10-16): 抓取/比对数据(grab/match)、
+          电量判定都会遍历这里的文本 —— 不过滤的话, 手机状态栏/通知栏里的
+          「电池 20%」「93%」会被当成机器人的数据抓走(与"充电前置被手机充电顶通过"
+          同一类 bug)。判据与 visible_nodes 一致: 按 package 排系统栏。
+          两个函数的过滤规则必须**完全相同**, 否则下标又会错位。
         """
         xml = self.d.dump_hierarchy()
         nodes = []
         for tag in re.findall(r'<node\b[^>]*>', xml):
+            if _tag_is_system_ui(tag):
+                continue                      # 手机状态栏/通知栏的文本不算页面内容
             tm = re.search(r'\btext="([^"]*)"', tag)
             if tm is None:
                 continue

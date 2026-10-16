@@ -37,7 +37,12 @@ def get_battery_level(d):
       (`正在充电，已完成百分之 80。`), 那不是这里要的插件电量。
     """
     xml = d.dump_hierarchy()
-    texts = re.findall(r'text="([^"]*)"', xml)
+    # ★ 走 visible_nodes(而不是自己裸扫 text=): 包名与可见性都要过滤(用户 2026-10-16 那一类
+    #   问题的同源漏洞) —— 手机状态栏/通知栏里的「电池 20%」不算机器人的电量, 收起面板留下的
+    #   隐藏节点也不算。仍**只读 text 属性**(与原来一致): 手机自己的电量在 content-desc 里,
+    #   这里要的是插件页的文本。
+    from core.sentinel import visible_nodes
+    texts = [t for t, _d, _p in visible_nodes(xml) if t]
     for kw in ("电池", "电量"):
         hits = [int(m) for t in texts if kw in t
                 for m in re.findall(r'(\d+)\s*%', t)]
@@ -48,7 +53,10 @@ def get_battery_level(d):
         return max(hits)
     # ★ OCR 兜底: 插件页树稀疏时 text 里什么都没有, 但屏幕上电量的数字是可见的
     if ocr.available():
-        ocr_texts = [t for t, _ in ocr.screen_texts(d)]
+        # ★ 识别前抹掉系统栏(同 2.0.25): 否则手机状态栏那个「93%」会被当机器人的电量
+        from core.sentinel import system_ui_regions
+        ocr_texts = [t for t, _ in ocr.screen_texts(
+            d, exclude=system_ui_regions(xml))]
         for kw in ("电池", "电量"):
             hits = [int(m) for t in ocr_texts if kw in t
                     for m in re.findall(r'(\d+)\s*%', t)]
