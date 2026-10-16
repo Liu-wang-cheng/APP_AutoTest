@@ -6,27 +6,39 @@ preconditions:
   ready_text: 设备控制,服务
   timeout: 30
   rounds: 3
-- type: steps
-  enabled: true
-  name: 退出省电模式
-  steps:
-  - desc: 关闭省电模式
-    if_click: 关闭省电模式
-    screenshot: false
 - type: tap_blank
   enabled: true
   point: 540,660
-- type: charging
-  enabled: true
-  timeout: 1200
-  ready_text: 充电，满电
 - type: map_load
   enabled: true
   timeout: 10
   rounds: 6
-  ready_text: 地图编辑，全部
+  ready_text: 全部,房间,更改区域
   loading_text: 地图正在加载
+- type: steps
+  enabled: true
+  name: 结束烘干拖布
+  steps:
+  - desc: 判断是否处于烘干状态
+    if not: 正在干燥拖布
+    threshold: 0.8
+    screenshot: false
+    else:
+    - desc: 点击结束烘干
+      click_template: 结束烘干.png
+      screenshot: false
+    - desc: 点击停止烘干
+      click_template: 停止烘干.png
+      screenshot: false
+- type: charging
+  enabled: true
+  timeout: 1200
+  ready_text: 充电,满电
+  recharge_tpl: 开始回充.png
+  recharge_text: 返回
+  interval: 5
+  soft: false
 - type: battery
   enabled: true
   min_level: 50
-  timeout: 1800
+  timeout: 2400

@@ -1,0 +1,64 @@
+# ============ CI 冒烟专用配置(入库, 2026-10-16) ============
+# 内容 = 用户那台工具(桌面 APP_Test 目录)实际在用的 config.yaml。
+#
+# ★ 为什么入库这份: 「真机冒烟」workflow 要在干净 checkout 里跑, 而 config/config.yaml
+#   被 .gitignore(含本机设备信息、由 GUI 回写)—— 所以 CI 用这份**提交在仓库里的副本**,
+#   由 workflow 复制成 config/config.yaml 再跑。
+# ★ 「防止一修改 CI 就跑不了」(用户 2026-10-16): CI 只读仓库里的副本, 不去够桌面那份 ——
+#   桌面文件改名/挪走/换机器都不会让冒烟失效。
+# ★ 只给 CI 用, 别拿它当本机配置(本机配置请改 config/config.yaml)。改了本机配置想让 CI
+#   跟上时, 手动把差异同步到这里一行即可。
+
+app:
+  name: SmartThings          # 被测APP名(包名自动检测依据,中英文均可)
+  package: com.samsung.android.oneconnect
+  main_activity: .ui.SCMainActivity
+
+# APP 内要进入的设备页面名称(前置阶段自动点击进入),留空则不进设备页
+target_device: 扫地机器人 0050
+
+device:
+  default: 127.0.0.1:5555   # --device auto 时使用;真机填 USB 序列号
+  list:
+    - id: 127.0.0.1:5555
+      name: 模拟器
+
+runner:
+  idle_streak: 3
+  fault_streak: 3
+  idle_texts: 待机,空闲,等待
+  fault_texts: 故障,错误,卡住,被困,问题,失败,异常
+  step_interval: 3        # 每步间隔秒
+  default_timeout: 30     # assert 超时(0 = 无限等待)
+  click_timeout: 10       # click 超时
+  screenshot_on_fail: true
+
+# ── OTA 自动更新(可选) ──
+update:
+  enabled: false            # ★ CI 里关掉: 冒烟不该顺带做一次更新检查
+  repository: "Liu-wang-cheng/APP_AutoTest"
+  branch: "master"
+  version_file: "version.json"
+  check_interval_hours: 8
+
+preconditions:
+- type: restart
+  enabled: true
+- type: enter_device
+  enabled: true
+  ready_text: 设备控制,服务
+  timeout: 30
+  rounds: 3
+- type: charging
+  enabled: true
+  timeout: 1200
+- type: map_load
+  enabled: true
+  timeout: 10
+  rounds: 6
+  ready_text: 地图编辑
+  loading_text: 地图正在加载
+- type: battery
+  enabled: true
+  min_level: 50
+  timeout: 1800

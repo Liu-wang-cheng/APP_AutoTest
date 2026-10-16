@@ -7,10 +7,19 @@ name: 真机冒烟
 #   自建 runner 一旦被 fork 的 PR 触发, 别人就能在你的机器上执行任意代码。
 #   将来若要接 PR, 必须加: if: github.event.pull_request.head.repo.full_name == github.repository
 #
-# ★ 冒烟集(用户 2026-10-16 定): 三星 APP 的「全局清扫」(11 步) ——
-#   覆盖点击 / 模板点击 / 断言(清扫中、暂停、继续) / back, 对"链路通不通"最有代表性。
+# ★ 冒烟集(用户 2026-10-16 定): 三星 APP 的「全局清扫」。
 #   为什么用 --group 而不是只给 --case: 涂鸦组也有含"全局清扫"字样的用例,
 #   只给 --case 会一次跑两条(两家 APP 的模板与页面都不一样)。
+#
+# ★★ 冒烟用的用例/前置/模板 = **用户那台工具在用的那一套, 已整份入库**
+#    (用户 2026-10-16 的三句原话: "CICD 跑的冒烟测试用桌面 APP_Test 里那条全局清扫"
+#     → "这个测试用例你直接替换过来用, 不要直接用桌面上那个" → "防止一修改 CICD 就跑不了了")。
+#    所以: `Test_cases/三星/全局清扫.yaml`(验证过可完整执行)、`Test_cases/三星/templates/`
+#    (含 停止烘干/结束烘干 —— 前置要用)、`Test_preconditions/三星.yaml` 都以**仓库里的副本**
+#    为准; CI **不去够桌面路径**, 桌面文件改名/挪走/换机器都不会让冒烟失效。
+#    唯一的例外是 config/config.yaml(被 .gitignore, 含本机设备信息, 没法入库)——
+#    仓库里放了一份 `config/config.ci.yaml`(内容=用户那台工具在用的配置), 跑前复制成
+#    config.yaml。**改配置只改这一处**, 别让 CI 依赖仓库外的文件。
 on:
   workflow_dispatch:
     inputs:
@@ -46,6 +55,24 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
+
+      - name: "准备冒烟配置(用仓库里提交的 config/config.ci.yaml)"
+        # ★ 用例/前置/模板**直接入库**用(用户 2026-10-16: "这个测试用例你直接替换过来用,
+        #   不要直接用桌面上那个" + "防止一修改 CICD 就跑不了了")—— CI 只读仓库, 桌面那份
+        #   改名/挪走/换机器都不会让冒烟失效。
+        # ★ 只有 config/config.yaml 例外: 它被 .gitignore(含本机设备信息、由 GUI 回写),
+        #   没法入库, 所以仓库里放一份 config/config.ci.yaml(内容 = 用户那台工具在用的配置),
+        #   跑之前复制成 config.yaml。改配置只需改这一处。
+        shell: pwsh
+        run: |
+          if (-not (Test-Path config/config.ci.yaml)) { throw "缺少 config/config.ci.yaml(冒烟用的配置)" }
+          Copy-Item config/config.ci.yaml config/config.yaml -Force
+          # 留个指纹: 日志里能看出**这次跑的是哪一版**用例/配置(排查"改了没生效"最快的一招)
+          foreach ($f in @("Test_cases/三星/全局清扫.yaml", "config/config.ci.yaml")) {
+            $i = Get-Item $f
+            Write-Host ("  {0}  改于 {1}  大小 {2}  sha256 {3}" -f $f, $i.LastWriteTime,
+                        $i.Length, (Get-FileHash $f -Algorithm SHA256).Hash.Substring(0, 12))
+          }
 
       - name: "探活设备(设备没起来就明说, 别让用例背锅)"
         shell: pwsh

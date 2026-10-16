@@ -125,7 +125,21 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
-        with: { fetch-depth: 1 }        # 用户数据(config/Test_cases)在 runner 本机, 不被覆盖
+        with: { fetch-depth: 1 }
+
+      # ★ 冒烟用的用例/前置/模板都以**仓库里提交的那份**为准(用户 2026-10-16 定:
+      #   "直接替换过来用, 不要直接用桌面上那个" + "防止一修改 CICD 就跑不了了"):
+      #   Test_cases/三星/全局清扫.yaml、Test_cases/三星/templates/(含 停止烘干/结束烘干)、
+      #   Test_preconditions/三星.yaml 都是用户那台工具在用的那一套。
+      #   只有 config/config.yaml 入不了库(被 .gitignore、含本机设备信息) —— 所以库里放一份
+      #   config/config.ci.yaml(= 用户那台工具在用的配置), 跑前复制成 config.yaml。
+      - name: 准备冒烟配置(用仓库里的 config/config.ci.yaml)
+        shell: pwsh
+        run: |
+          Copy-Item config/config.ci.yaml config/config.yaml -Force
+          foreach ($f in @("Test_cases/三星/全局清扫.yaml", "config/config.ci.yaml")) {
+            Write-Host ("  {0} sha256 {1}" -f $f, (Get-FileHash $f -Algorithm SHA256).Hash.Substring(0, 12))
+          }
 
       - uses: actions/setup-python@v5
         with: { python-version: '3.13', cache: pip }
@@ -169,10 +183,13 @@ jobs:
 
 ### 3.4 冒烟集怎么定（**需要你拍板**）
 
+**已定（2026-10-16，用户拍板）**：三星 APP 的 `全局清扫` —— 就用用户那台工具里
+**验证过可以完整执行**的那一份，已整份入库（用例/模板/前置，见 3.3 顶部注释）。
+
 | 候选 | 成本 | 特点 |
 |---|---|---|
 | `快速建图` | 4 步 | 最短；但会真的建图（改变设备状态） |
-| `全局清扫`（三星，11 步） | 中 | 覆盖点击/模板点击/断言/暂停/继续 —— 对"整条链路通不通"最有代表性（**我建议先用它**） |
+| `全局清扫`（三星） | 中 | 覆盖模板点击/if 分支（清洗拖布）/断言/菜单与打扫报告 —— 对"整条链路通不通"最有代表性（**已选它**） |
 | `勿扰模式` 等 | 4~14 步 | 按需再加 |
 
 先跑一个；稳定一两周后再加第二个。**不要一上来全量**（一轮十几个用例要十几分钟，且任何一步失败都得人工复位机器人）。

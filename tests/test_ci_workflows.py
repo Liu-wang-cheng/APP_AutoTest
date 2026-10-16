@@ -316,3 +316,30 @@ def test_all_workflow_step_names_are_quoted_when_needed():
                 continue
             assert ": " not in val, (
                 f"{p.name}:{i} 的 name 值里有「冒号+空格」会被 YAML 截断, 请加引号: {val!r}")
+
+
+def test_real_smoke_uses_repo_committed_data_not_a_desktop_path():
+    """★ 真机冒烟用的用例/前置/模板/配置必须是**仓库里提交好的那份**, 不许去够仓库外的路径。
+
+    用户 2026-10-16 的定调(三句话): "CICD 跑的冒烟测试用桌面 APP_Test 里那条全局清扫"
+    → "这个测试用例你直接替换过来用, **不要直接用桌面上那个**"
+    → "**防止一修改 CICD 就跑不了了**"。
+    所以做法是: 把用户那台工具在用的用例(验证过可完整执行)、模板、前置条件**整份入库**,
+    CI 只读仓库 —— 桌面文件改名/挪走/换机器都不会让冒烟失效。
+
+    这条钉住: ① workflow 里**没有**对仓库外路径的复制/依赖(不能再用 SMOKE_APP_DIR 那套);
+    ② 配置走仓库里提交的 `config/config.ci.yaml` → 复制成 config.yaml(只有它没法入库:
+       被 .gitignore 且含本机设备信息); ③ 日志留文件指纹, 看得出跑的是哪一版。
+    """
+    _data, text = _load("real-smoke.yml")
+    assert "SMOKE_APP_DIR" not in text, "冒烟不许依赖仓库外的数据目录"
+    assert "Desktop" not in text.replace("C:/Users", ""), "别在 workflow 里写桌面路径"
+    assert "config/config.ci.yaml" in text and "Copy-Item config/config.ci.yaml config/config.yaml" in text, \
+        "配置要用仓库里的 config/config.ci.yaml 复制成 config.yaml"
+    assert "Get-FileHash" in text, "日志里要留指纹(排查'改了没生效'靠它)"
+    # 入库的那几份数据得真在仓库里(少了就说明只改了 workflow, 没把数据搬过来)
+    root = Path(__file__).resolve().parent.parent
+    for rel in ("Test_cases/三星/全局清扫.yaml", "Test_cases/三星/templates/结束烘干.png",
+                "Test_cases/三星/templates/停止烘干.png", "Test_preconditions/三星.yaml",
+                "config/config.ci.yaml"):
+        assert (root / rel).is_file(), f"冒烟要用的数据没入库: {rel}"

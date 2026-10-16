@@ -3,39 +3,46 @@ cases:
 - name: 全局清扫
   priority: P1
   steps:
-  - desc: 点击菜单
-    click: 菜单
-    screenshot: true
-  - desc: 点击清扫类型
-    click: 清扫类型
-    screenshot: true
-  - desc: 点击切换扫拖模式
-    click: 真空吸尘器
-    screenshot: true
-  - desc: 返回主界面
-    back: true
   - desc: 点击开始清扫
     click_template: 开始清扫.png
     screenshot: true
+  - desc: 判断是否清洗拖布
+    if: 清洗拖布
+    threshold: 1.0
+    screenshot: true
+    wait: 5
+    then:
+    - desc: 等待拖布清洗完成
+      sleep: 180.0
   - desc: 判断是否处于清扫状态
-    assert: 清洁中，正在吸尘
+    assert: 正在清洁
     screenshot: true
-    timeout: 30
-  - desc: 点击暂停清扫
-    click_template: 暂停清扫.png
-    screenshot: true
-  - desc: 判断是否处于暂停状态
-    assert: 暂停
-    screenshot: true
-  - desc: 点击继续清扫
-    click_template: 开始清扫.png
-    screenshot: true
-  - desc: 判断是否处于清扫状态
-    assert: 清洁中，正在吸尘
-    screenshot: true
-    timeout: 30
+    timeout: 60
   - desc: 判断是否清扫完成
-    assert: 充电,烘干
+    assert: 干燥拖布
     screenshot: true
     timeout: 0
+    wait: 10
+  - desc: 检测菜单界面是否可见
+    if: 今天,已取消,昨天,已完成
+    threshold: 0.6
+    screenshot: true
+    then:
+    - desc: 清除提示
+      click: 540,700
+      screenshot: true
+      wait: 10
+    - desc: 进入菜单界面
+      click: 菜单
+      screenshot: true
+    else:
+    - desc: 进入菜单界面
+      click: 菜单
+      screenshot: true
+  - desc: 进入清扫报告界面
+    click: 打扫报告
+    wait: 15
+  - desc: 等待清扫记录加载
+    sleep: 5.0
+    screenshot: true
   wait: 5
