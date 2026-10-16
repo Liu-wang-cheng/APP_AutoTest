@@ -13,6 +13,7 @@
 | 打包自检（方案 A） | ✅ 手动/推 `v*` tag → `build.bat` → zip 传 artifact（7 天） | `.github/workflows/package.yml` |
 | 全自动发版（方案 B） | ✅ 手动填版本号/推 `v*.*.*` tag → 全套发版；勾 `dry_run` 可演练（不发布） | `.github/workflows/release.yml` |
 | 真机用例入口 | ✅ `pytest tests/test_yaml_runner.py --mode real --device <id> --case <名>`（`--mode` 默认 mock，裸跑不会碰设备） | `conftest.py` |
+| 存储瘦身（每月自动） | ✅ 保留最近 5 个 Release，更老的连同资产删掉（不动 tag/历史） | `.github/workflows/prune.yml` + `tools/prune_releases.py` |
 
 **唯一缺口**：能连模拟器/真机的那台机器还没注册成 self-hosted runner。
 
@@ -205,8 +206,9 @@ jobs:
 **存储与清理**（2026-10-16 盘点）：
 - **Release 资产是大头**：每个包 ~225MB，34 个版本就是 **7.65GB**。已按"只保留最近 5 个"
   清到 5 个（1.13GB）。删 Release **不影响 tag 与源码历史** —— 需要老版本时
-  `git checkout v1.7 && build.bat` 重新构建即可（这就是敢删的底气）。建议每次发布后随手
-  把最老的删掉，别等攒成几个 G。
+  `git checkout v1.7 && build.bat` 重新构建即可（这就是敢删的底气）。
+  **已自动化**：`.github/workflows/prune.yml` 每月 1 号自动保留最近 5 个、删掉更老的
+  （`tools/prune_releases.py`，默认演练；手动触发也默认演练，取消勾选才真删）。
 - Action artifacts：`AutoTest-*`（演练/打包自检产物，~227MB/个，保留 3 天）与
   `pytest-junit-*`（失败时的报告，很小）都会自动过期；要立刻回收就手动删。
 - 本地产物（`.venv` 1.1G、`dist/*.zip` ~216MB、`backups/` 你的数据）按需自行清理；
