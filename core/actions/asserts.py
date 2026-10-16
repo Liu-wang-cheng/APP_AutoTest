@@ -115,46 +115,60 @@ def _resolve_region(runner, region, shape):
     return x1, y1, x2, y2, f"{x1},{y1}-{x2},{y2}(像素)"
 
 
-def _draw_region_annotation(img, x1, y1, x2, y2, pct_txt, sim_line=None,
-                             verdict=None):
-    """对比范围标注(共用): 范围矩形 + 两行大字(相似度/阈值 + 范围百分比)。
+def _compare_labels(similarity, threshold, verdict, pct_txt):
+    """对比证据图上的三段中文文案(抽成纯函数: 中文绘制没法用像素断言, 就断言文案)。
 
-    半透明深色底衬 + 黑描边亮黄字 —— 任何底色(绿色横幅/浅色页面)都可读。
-    sim_line: "sim 97.2% / thr 80%" 这类; None = 只画范围(预览模式)。
-    verdict: "PASS"/"FAIL" —— 结论行(用户 2026-10-15: 图上要一眼看出对比结果);
-      FAIL 时矩形转红(与点击标记的红圈同色系, 一屏内不必读字)。
+    返回 (右上角第一行, 右上角第二行, 底部结论带)。
     """
+    zh = "通过" if verdict != "FAIL" else "未通过"
+    line1 = f"相似度 {similarity:.1%} / 阈值 {threshold:.0%}"
+    line2 = f"{zh} | 范围 {pct_txt}"
+    caption = f"{zh} | 相似度 {similarity:.1%} / 阈值 {threshold:.0%} | 范围 {pct_txt}"
+    return line1, line2, caption
+
+
+def _draw_region_annotation(img, x1, y1, x2, y2, pct_txt, sim_line=None,
+                             verdict=None, line2_override=None):
+    """对比范围标注(共用): 范围矩形 + 两行大字(相似度/阈值 + 范围)。
+
+    ★ 中文绘制(用户 2026-10-16: "图像对比组合的图上能不能用中文标注呢"): cv2.putText
+      画不了中文(Hershey 只有 ASCII), 这里统一走 core.imgio.draw_text(PIL + 系统字体)。
+      没有中文字体时退回英文文案, 绝不画方块。
+    半透明深色底衬 + 黑描边 —— 任何底色(绿色横幅/浅色页面)都可读。
+    sim_line: `相似度 97.2% / 阈值 80%` 这类; None = 只画范围(预览模式)。
+    verdict: "PASS"/"FAIL" —— 结论(FAIL 时矩形转红, 与点击标记的红圈同色系)。
+    """
+    from core import imgio
     ok = verdict != "FAIL"
     box_color = (0, 200, 255) if ok else (0, 0, 235)
     cv2.rectangle(img, (x1, y1), (x2 - 1, y2 - 1), box_color, 3)
     line1 = sim_line or ""
-    line2 = f"area {pct_txt}"
-    if verdict:
-        line2 = f"{verdict} | {line2}"
-    ty1 = y1 - 60 if y1 >= 110 else y1 + 56
-    ty2 = y1 - 20 if y1 >= 110 else y1 + 100
+    line2 = line2_override or f"范围 {pct_txt}"
+    if verdict and not line2_override:
+        line2 = f"{'通过' if ok else '未通过'} | {line2}"
+    size = 34
+    w1 = imgio.text_width(line1, size) if line1 else 0
+    w2 = imgio.text_width(line2, size)
+    fh = size + 14
+    ty1 = y1 - 2 * fh - 8 if y1 >= 2 * fh + 20 else y1 + 8
+    ty2 = ty1 + fh
     tx = x1 + 10
-    sx1, sy1 = max(0, x1), max(0, ty1 - 46)
-    sx2 = min(img.shape[1], x1 + max(len(line1), len(line2)) * 26 + 24)
-    sy2 = min(img.shape[0], ty2 + 14)
+    sx1, sy1 = max(0, x1), max(0, ty1 - 10)
+    sx2 = min(img.shape[1], x1 + max(w1, w2) + 30)
+    sy2 = min(img.shape[0], ty2 + size + 10)
     if sx2 > sx1 and sy2 > sy1:
         overlay = img.copy()
         cv2.rectangle(overlay, (sx1, sy1), (sx2, sy2), (25, 25, 25), -1)
         cv2.addWeighted(overlay, 0.45, img, 0.55, 0, img)
     ink = (0, 220, 255) if ok else (80, 80, 255)
     if line1:
-        cv2.putText(img, line1, (tx, ty1), cv2.FONT_HERSHEY_SIMPLEX, 1.4,
-                    (0, 0, 0), 6, cv2.LINE_AA)
-        cv2.putText(img, line1, (tx, ty1), cv2.FONT_HERSHEY_SIMPLEX, 1.4,
-                    ink, 3, cv2.LINE_AA)
-    cv2.putText(img, line2, (tx, ty2), cv2.FONT_HERSHEY_SIMPLEX, 1.4,
-                (0, 0, 0), 6, cv2.LINE_AA)
-    cv2.putText(img, line2, (tx, ty2), cv2.FONT_HERSHEY_SIMPLEX, 1.4,
-                ink, 3, cv2.LINE_AA)
+        imgio.draw_text(img, line1, (tx, ty1), ink, size)
+    imgio.draw_text(img, line2, (tx, ty2), ink, size)
 
 
 def _compose_compare_evidence(cur_bgr, ref_bgr, x1, y1, x2, y2, pct_txt,
-                              sim_line, verdict, base_name="", target_w=1500):
+                              sim_line, verdict, base_name="", target_w=1500,
+                              line2=None, caption=None):
     """把「基准图 | 当前画面」并排合成**一张**对比证据图(用户 2026-10-16)。
 
     ★ 为什么要合: 以前证据图上只有"当前画面 + 范围矩形", 看报告的人得自己在脑子里
@@ -182,36 +196,37 @@ def _compose_compare_evidence(cur_bgr, ref_bgr, x1, y1, x2, y2, pct_txt,
     left[band:] = ref_show
     right[band:] = cur_bgr
 
-    def _bar(img, title, color):
-        cv2.rectangle(img, (0, 0), (img.shape[1], band), (32, 32, 32), -1)
-        cv2.putText(img, title, (12, band - 16), cv2.FONT_HERSHEY_SIMPLEX, 1.25,
-                    (0, 0, 0), 7, cv2.LINE_AA)
-        cv2.putText(img, title, (12, band - 16), cv2.FONT_HERSHEY_SIMPLEX, 1.25,
-                    color, 2, cv2.LINE_AA)
+    from core import imgio
 
-    _bar(left, f"基准图: {base_name or 'baseline'}", (200, 200, 200))
-    _bar(right, f"当前画面 {w_cur}x{h_cur}", (0, 220, 255))
+    def _bar(img, title, color, fallback):
+        cv2.rectangle(img, (0, 0), (img.shape[1], band), (32, 32, 32), -1)
+        imgio.draw_text(img, title, (12, 8), color, size=32, fallback=fallback)
+
+    _bar(left, f"基准图：{base_name or '基准'}", (200, 200, 200),
+         f"BASELINE: {base_name or '-'}")
+    _bar(right, f"当前画面 {w_cur}×{h_cur}", (0, 220, 255),
+         f"CURRENT {w_cur}x{h_cur}")
 
     # 同一个范围矩形画在两块图上(左: 中性色, 右: 结论色) + 右侧写相似度/阈值
     oy1, oy2 = y1 + band, y2 + band
     cv2.rectangle(left, (x1, oy1), (x2 - 1, oy2 - 1), (200, 200, 200), 3)
     _draw_region_annotation(right, x1, oy1, x2, oy2, pct_txt,
-                            sim_line=sim_line, verdict=verdict)
+                            sim_line=sim_line, verdict=verdict,
+                            line2_override=line2)
 
     gap = np.full((h_cur + band, 8, 3), 90, dtype=np.uint8)
     body = np.hstack([left, gap, right])
 
+    caption = caption or f"{verdict} | {sim_line or ''} | 范围 {pct_txt}"
     cap_img = np.full((cap, body.shape[1], 3), 32, dtype=np.uint8)
     cap_img.flags.writeable = True
     ink = (0, 220, 255) if verdict != "FAIL" else (80, 80, 255)
-    title = f"{verdict} | {sim_line or ''} | area {pct_txt}"
     # 字号按图宽自适应: 窄图也保证整句结论不被截断(结论带了就是要能读完)
-    fs = min(1.6, max(0.5, (cap_img.shape[1] - 32) / max(len(title) * 20, 1)))
-    thick = max(2, int(round(fs * 2)))
-    cv2.putText(cap_img, title, (16, 62), cv2.FONT_HERSHEY_SIMPLEX, fs,
-                (0, 0, 0), thick + 4, cv2.LINE_AA)
-    cv2.putText(cap_img, title, (16, 62), cv2.FONT_HERSHEY_SIMPLEX, fs,
-                ink, thick, cv2.LINE_AA)
+    fs = 34
+    while fs > 16 and imgio.text_width(caption, fs) > cap_img.shape[1] - 32:
+        fs -= 2
+    imgio.draw_text(cap_img, caption, (16, (cap - fs) // 2), ink, size=fs,
+                    fallback=f"{verdict} | {sim_line or ''} | {pct_txt}")
     out = np.vstack([body, cap_img])
     if target_w and out.shape[1] > target_w:      # 缩放保持可读 + 控制体积
         scale = target_w / out.shape[1]
@@ -298,9 +313,10 @@ def compare_screen(runner, baseline, threshold=0.6, inverse=False, region=None):
             #   否则会被重拍成一张**没有标注**的图, 对比结果就看不到了
             # ★ 「基准图 | 当前画面」并排 + 底部结论带(用户 2026-10-16): 一眼看出
             #   是拿什么比的、当时什么样、差在哪 —— 不必自己在脑子里对照两张图
+            _l1, _l2, _cap = _compare_labels(similarity, threshold, verdict, pct_txt)
             vis = _compose_compare_evidence(
                 screen, ref_vis, x1, y1, x2, y2, pct_txt,
-                sim_line=f"sim {similarity:.1%} / thr {threshold:.0%}",
+                sim_line=_l1, line2=_l2, caption=_cap,
                 verdict=verdict, base_name=os.path.basename(baseline))
             path = runner._step_shot_path(getattr(runner, "_cur_step_desc", "") or "compare")
             from core import imgio

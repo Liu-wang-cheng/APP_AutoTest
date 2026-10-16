@@ -60,3 +60,76 @@ def annotate(path, draw):
     except Exception:
         return False
     return imwrite(path, img)
+
+
+#: 中文字体候选(Windows 自带; 打包版也读系统字体目录)
+_CJK_FONTS = ("C:/Windows/Fonts/msyh.ttc",        # 微软雅黑
+              "C:/Windows/Fonts/msyhbd.ttc",
+              "C:/Windows/Fonts/simhei.ttf",      # 黑体
+              "C:/Windows/Fonts/simsun.ttc")      # 宋体
+_font_cache = {}
+
+
+def cjk_font(size):
+    """中文字体(按字号缓存); 系统里一个都没有 → None(调用方退回 cv2 的 ASCII 画法)"""
+    if size in _font_cache:
+        return _font_cache[size]
+    font = None
+    try:
+        from PIL import ImageFont
+        for path in _CJK_FONTS:
+            if os.path.isfile(path):
+                font = ImageFont.truetype(path, size)
+                break
+    except Exception:
+        font = None
+    _font_cache[size] = font
+    return font
+
+
+def draw_text(img, text, org, color=(255, 255, 255), size=34, outline=(0, 0, 0),
+              fallback=None):
+    """在 BGR 图上写**中文**(用户 2026-10-16: 证据图上的标注要能读懂)。
+
+    ★ 为什么不能用 cv2.putText: 它的 Hershey 字体只有 ASCII —— 中文会画成一串问号/方块。
+      所以走 PIL + 系统字体(msyh/simhei), 带黑描边保证任何底色上都可读。
+    ★ 找不到中文字体时退回 cv2 画 `fallback`(纯 ASCII 文案) —— 宁可写成英文, 也不要
+      在图上画一堆方块。
+    org: 文本**左上角**坐标(与 cv2.putText 的左下角不同, 这里按左上角更好排版)。
+    返回实际用掉的宽高 (w, h)。
+    """
+    if not text:
+        return 0, 0
+    font = cjk_font(size)
+    if font is None:
+        cv2.putText(img, str(fallback or text), (int(org[0]), int(org[1] + size)),
+                    cv2.FONT_HERSHEY_SIMPLEX, size / 26.0, outline, max(2, size // 8),
+                    cv2.LINE_AA)
+        cv2.putText(img, str(fallback or text), (int(org[0]), int(org[1] + size)),
+                    cv2.FONT_HERSHEY_SIMPLEX, size / 26.0, color, max(1, size // 14),
+                    cv2.LINE_AA)
+        return len(str(fallback or text)) * size // 2, size
+    from PIL import Image, ImageDraw
+    pil = Image.fromarray(img[:, :, ::-1])          # BGR → RGB
+    d = ImageDraw.Draw(pil)
+    x, y = int(org[0]), int(org[1])
+    stroke = max(1, size // 14)
+    d.text((x, y), str(text), font=font, fill=tuple(int(c) for c in color[::-1]),
+           stroke_width=stroke, stroke_fill=tuple(int(c) for c in outline[::-1]))
+    img[:, :, :] = np.array(pil)[:, :, ::-1]        # 写回原图(原地)
+    try:
+        bbox = d.textbbox((x, y), str(text), font=font, stroke_width=stroke)
+        return bbox[2] - bbox[0], bbox[3] - bbox[1]
+    except Exception:
+        return len(str(text)) * size, size
+
+
+def text_width(text, size):
+    """这段中文按字号算多宽(排版用); 没有中文字体时按半角估"""
+    font = cjk_font(size)
+    if font is None:
+        return len(str(text)) * size // 2
+    try:
+        return int(font.getlength(str(text)))
+    except Exception:
+        return len(str(text)) * size

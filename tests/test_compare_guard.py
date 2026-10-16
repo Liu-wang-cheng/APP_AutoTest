@@ -464,3 +464,25 @@ def test_compare_evidence_is_side_by_side_baseline_and_current(tmp_path):
     # 底部结论带(96px 高): 深色底 + 结论色文字(FAIL 用红)
     cap = img[-96:, :]
     assert _has_color(cap, RED_INK), "底部结论带要写出 FAIL"
+
+
+def test_compare_annotation_text_is_chinese():
+    """★ 证据图上的标注用中文(用户 2026-10-16: "图像对比组合的图上能不能用中文标注呢")
+
+    中文没法用像素断言, 所以文案抽成纯函数 _compare_labels() 单独断言; 绘制走
+    core.imgio.draw_text(PIL + 系统字体) —— cv2.putText 画不了中文(会成方块)。
+    """
+    from core.actions.asserts import _compare_labels
+    from core import imgio
+
+    l1, l2, cap = _compare_labels(0.973, 0.6, "PASS", "10%,30%-90%,80%(百分比)")
+    assert l1 == "相似度 97.3% / 阈值 60%", l1
+    assert l2 == "通过 | 范围 10%,30%-90%,80%(百分比)", l2
+    assert cap == "通过 | 相似度 97.3% / 阈值 60% | 范围 10%,30%-90%,80%(百分比)", cap
+    _l1, _l2, cap_fail = _compare_labels(0.5, 0.9, "FAIL", "0,0-100,200(像素)")
+    assert cap_fail.startswith("未通过"), cap_fail
+    # 中文绘制可用(系统有中文字体): 画上去必须真的改变了像素
+    assert imgio.cjk_font(30) is not None, "本机找不到中文字体, 中文标注会退回英文"
+    img = np.zeros((60, 400, 3), dtype=np.uint8)
+    imgio.draw_text(img, "相似度 97.3%", (10, 10), (0, 220, 255), 30)
+    assert int((img > 0).sum()) > 200, "中文没画上去"
