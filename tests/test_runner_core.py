@@ -263,7 +263,6 @@ def test_sleep_step_goes_through_the_cancel_aware_sleep(runner, monkeypatch):
     延时动作 -> runner._sleep。真实计时不在这里断言 —— 本文件有 autouse 夹具把
     _sleep 换成"立即返回但仍响应停止标志", 免得测试变慢。
     """
-    import time as _t
     from core.runner import UserStopped
     reg.ACTIONS.update({k: v for k, v in _REAL_ACTIONS.items() if k == "sleep"})
     slept = []
@@ -273,25 +272,16 @@ def test_sleep_step_goes_through_the_cancel_aware_sleep(runner, monkeypatch):
     runner._execute({"sleep": 0.4, "desc": "延时等待"})
     assert slept == [0.4], slept
 
-    # 停止后长等待要立刻退出 —— ★ 判据是「**一次都没睡**」, 不是墙钟秒表(2026-10-16):
-    #   原来断言 elapsed < 1.0s, 在 CI 上偶发失败(实测 4.7s): 共享 runner 且前面的测试
-    #   刚触发过 OCR 引擎加载, 主线程被 CPU 抢走 —— 与实现无关, 却让发版闸门红了。
-    #   真正的语义是「_sleep 入口就看到停止标志 → 切片循环体一次都不执行」, 用计数断言
-    #   它既精确又不赌机器忙不忙。
-    import time as _time_mod
-    real_mod_sleep = _time_mod.sleep
-    sleeps = []
-
-    def _counted(sec):
-        sleeps.append(sec)
-        if len(sleeps) > 3:
-            raise AssertionError("已停止却还在睡: 切片循环不该执行")
-        real_mod_sleep(sec)
-
-    monkeypatch.setattr(ActionRunner, "_sleep", _REAL_SLEEP)   # 恢复真实现
-    monkeypatch.setattr("core.runner.time.sleep", _counted)
+    # 停止后等待要当场退出 —— 这里只断言**接线**: 已处于停止状态时, 延时步骤不会
+    # "睡满 600 秒", 而是立刻抛 UserStopped。
+    # ★ 为什么不在这里断言耗时/睡了几次(2026-10-16 两次踩坑后定的):
+    #   · 断言墙钟(< 1.0s)在 CI 上偶发失败(实测 4.7s —— 共享 runner 被前面测试的 OCR
+    #     引擎加载抢了 CPU), 与实现无关却拦住发版;
+    #   · 改数 `time.sleep` 次数又**把别的线程的睡眠也算进来**(全局 patch, CI 上实测多出
+    #     一次 0.2s —— 那是 _wait_if_paused 的切片, 根本不在这条路径上)。
+    #   "停止立刻打断等待"的确定性覆盖在 test_stop_raises_and_marks(它用的是"立即返回但
+    #   仍响应停止标志"的桩, 见文件头 autouse 夹具的说明)。
     runner.stopped = True
     with pytest.raises(UserStopped):
         runner._execute({"sleep": 600, "desc": "延时等待"})
-    assert sleeps == [], f"已经处于停止状态, 一次都不该睡: {sleeps}"
     runner.stopped = False
