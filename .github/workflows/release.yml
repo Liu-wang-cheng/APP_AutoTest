@@ -15,8 +15,8 @@ name: 发版
 #      更新完 version.json 后 `git push origin master` 无处可推。
 #   ③ CI 里**没有 git 身份** → release.py 的 commit 会失败, 先配 github-actions[bot]。
 #
-# ★ 想要"发布前人工点一下 Approve": 仓库 Settings → Environments → 建 `release`
-#   → 勾 Required reviewers 选自己。没配就是全自动(推 tag/点运行即发布)。
+# ★ **全自动**(用户 2026-10-16: "不需要人工审核了, 改成全自动"): 触发即发布, 不设
+#   Environment 审批闸门。想拿它做演练(不发布只打包)就把 dry_run 勾上。
 on:
   workflow_dispatch:
     inputs:
@@ -24,6 +24,11 @@ on:
         description: 要发布的版本号(必须已在 VERSION / CHANGELOG 里提交好)
         required: true
         type: string
+      dry_run:
+        description: 演练(只打包、传 artifact, **不发布**)
+        required: false
+        default: false
+        type: boolean
   push:
     tags: ['v*.*.*']
 
@@ -36,7 +41,6 @@ jobs:
   release:
     runs-on: windows-latest
     timeout-minutes: 60
-    environment: release          # 配了 Required reviewers 就会在这里停下等审批
     steps:
       - uses: actions/checkout@v4
         with:
@@ -85,7 +89,22 @@ jobs:
         shell: cmd
         run: build.bat
 
+      - name: "演练: 只打包(不发布)"
+        if: github.event.inputs.dry_run == 'true'
+        shell: cmd
+        run: python tools/release.py --pack-only --version ${{ steps.ver.outputs.VERSION }}
+
+      - name: "演练: 上传 zip 供下载(不发布)"
+        if: github.event.inputs.dry_run == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: AutoTest-dryrun-${{ github.run_id }}
+          path: dist/AutoTest_v*.zip
+          retention-days: 3
+          if-no-files-found: error
+
       - name: 发布(传 Release → 更新 version.json → 打 tag → 验下载链路)
+        if: github.event.inputs.dry_run != 'true'
         shell: cmd
         env:
           # gh CLI 认 GH_TOKEN; release.py 认 GITHUB_TOKEN —— 两个都给上

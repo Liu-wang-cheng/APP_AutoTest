@@ -68,7 +68,10 @@ def test_release_workflow_permissions_and_guards():
     data, text = _load("release.yml")
     assert (data.get("permissions") or {}).get("contents") == "write", \
         "建 Release/推提交需要 contents: write(写在 workflow 里, 不动仓库默认设置)"
-    assert "environment:" in text, "留出 Environment 审批的位置(加了 reviewers 就人工确认)"
+    # ★ 全自动(用户 2026-10-16): 不设 Environment 审批闸门; 但要有 dry_run 演练路径,
+    #   否则"验证流水线"就等于"真发一版"
+    assert "environment:" not in text, "用户要求全自动, 不该有审批闸门"
+    assert "dry_run" in text and "--pack-only" in text, "要有 dry_run 演练(只打包不发布)"
     assert "rev-list -n 1" in text, "tag 触发时要确认 tag 指向 master HEAD, 避免发错提交"
     job = data["jobs"]["release"]
     assert job.get("timeout-minutes"), "发版 job 要有超时, 免得卡住占着 runner"
