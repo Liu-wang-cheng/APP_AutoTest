@@ -487,9 +487,14 @@ def test_prepare_items_announces_every_item_before_running_it(monkeypatch):
 
 def test_prepare_items_waits_interval_between_items(monkeypatch):
     """★ 执行间隔(用户 2026-10-16: "每个前置检测的执行间隔设置成默认5s"): 两项之间等 5s,
-    **第一项前不等**(那时还没有"上一项", 白等只是拖延); 每项都能自己改。"""
+    **第一项前不等**(那时还没有"上一项", 白等只是拖延); 每项都能自己改。
+
+    ★ 盯的是 `session._sleep`(前置间隔真正走的那条), 不是 `time.sleep` ——
+      后者是**全局 time 模块**的桩, CI 上别的后台线程(界面/扫描)在这期间睡一觉就会被
+      记进来, 断言随机变红(实测: 本地怎么跑都过, CI 上收到一个 [2])。
+    """
     slept = []
-    monkeypatch.setattr(session.time, "sleep", lambda s: slept.append(s))
+    monkeypatch.setattr(session, "_sleep", lambda s, cancel=None: (slept.append(s), True)[1])
     _stub_items(monkeypatch, {"restart": True, "charging": True, "battery": True})
     session.prepare_items(FakeDev(), {}, [{"type": "restart", "enabled": True},
                                           {"type": "charging", "enabled": True},
@@ -498,9 +503,9 @@ def test_prepare_items_waits_interval_between_items(monkeypatch):
 
 
 def test_item_interval_is_configurable(monkeypatch):
-    """间隔可配: 0 = 不等(旧配置/老用例不受影响)"""
+    """间隔可配: 0 = 不等(旧配置/老用例不受影响)。同样盯 `session._sleep`(见上一条)"""
     slept = []
-    monkeypatch.setattr(session.time, "sleep", lambda s: slept.append(s))
+    monkeypatch.setattr(session, "_sleep", lambda s, cancel=None: (slept.append(s), True)[1])
     _stub_items(monkeypatch, {"charging": False, "battery": True})
     session.prepare_items(FakeDev(), {}, [{"type": "charging", "enabled": True,
                                            "interval": 0},
