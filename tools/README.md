@@ -8,6 +8,7 @@
 | 脚本 | 谁在用 | 作用 |
 |---|---|---|
 | `verify_package.py` | `build.bat` | 打包后校验产物完整性(exe / _internal / 关键数据文件在不在) |
+| `prune_releases.py` | `.github/workflows/prune.yml`(每月自动) | 存储瘦身: 删掉「最近 N 个」之外的 GitHub Release(只删 Release 与资产, **不动 tag/历史**); 默认演练, `--apply` 才真删 |
 | `release.py` | `build.bat`、`docs/RELEASE.md` | 发版: 版本一致性闸门 → 走 CI → 传 GitHub Release → 更新 version.json → 打 tag → 校验下载链路 |
 | `verify_release.py` | 上面 release 的收尾 | 站在**用户视角**验证: 取清单 → sha256 → 资产 → zip 头 |
 | `check_compat.py` | 测试参数化调用 | 兼容性检查(依赖/接口/配置项) |

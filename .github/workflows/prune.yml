@@ -1,0 +1,54 @@
+name: 存储瘦身(清理老 Release)
+
+# 为什么要有它(2026-10-16): 每个分发包 ~225MB, 发到 34 个版本就是 **7.65GB** —— 公共仓库的
+# 存储大头全在这儿, 而且**没人会主动去看**。这里每月自动把"最近 N 个"之外的 Release 删掉。
+#
+# ★ 只删 Release 与其资产, **不动 tag、不动源码历史** —— 需要老版本随时
+#   `git checkout v1.7 && build.bat` 重建; 更新器也只读 version.json 指向的那一个包,
+#   老资产不参与任何自动流程(见 tools/prune_releases.py 的说明)。
+# ★ 手动触发**默认演练**(dry_run=true): 点一下不会删东西, 看清列表再决定。
+on:
+  schedule:
+    - cron: '17 3 1 * *'      # 每月 1 号 03:17 UTC(避开整点, 别跟全世界的定时任务挤)
+  workflow_dispatch:
+    inputs:
+      keep:
+        description: 保留最近几个 Release
+        required: false
+        default: '5'
+        type: string
+      dry_run:
+        description: 演练(只打印要删哪些, 不真删)
+        required: false
+        default: true
+        type: boolean
+
+permissions:
+  contents: write             # 删 Release 需要写权限(与推分支无关, 不受 ruleset 影响)
+
+concurrency:
+  group: ${{ github.workflow }}     # 定时与手动别叠着跑
+  cancel-in-progress: false
+
+jobs:
+  prune:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: "演练 只列出会删哪些"
+        if: github.event_name == 'workflow_dispatch' && inputs.dry_run
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python tools/prune_releases.py --keep ${{ inputs.keep }}
+
+      - name: "真删(定时任务, 或手动把 dry_run 取消勾选)"
+        if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && !inputs.dry_run)
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python tools/prune_releases.py --keep "${{ inputs.keep || '5' }}" --apply

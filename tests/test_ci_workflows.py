@@ -279,3 +279,40 @@ def test_no_secrets_in_step_if_conditions():
                     assert "secrets." not in cond, (
                         f"{name}:{job} 的步骤「{step.get('name')}」在 if: 里用了 secrets —— "
                         f"workflow 会解析失败(422), 请改用 run: 里的 env 判断")
+
+
+# ── 存储瘦身(清理老 Release, 2026-10-16) ──
+
+def test_prune_workflow_is_gated_and_safe():
+    """★ 「存储瘦身」workflow 的三条底线:
+    ① 定时(每月)+ 手动触发都留着;
+    ② **手动触发默认演练**(dry_run 默认 true)—— 点一下不能就把包删了;
+    ③ 真删那一步才带 `--apply`(脚本本身默认演练, 见 tools/prune_releases.py);
+    ④ 手动传的 keep 要有兜底(定时触发时 inputs 是空的)。
+    """
+    _data, text = _load("prune.yml")
+    assert "cron:" in text and "workflow_dispatch" in text
+    assert "dry_run:" in text and "default: true" in text, "手动触发必须默认演练"
+    assert "--apply" in text, "真删那一步要显式 --apply"
+    assert "inputs.keep || '5'" in text, "定时触发时 keep 为空, 要有兜底"
+    assert "contents: write" in text, "删 Release 需要写权限"
+
+
+def test_all_workflow_step_names_are_quoted_when_needed():
+    """★ `name:` 值里带「冒号+空格」会被 YAML 1.1 当成映射 → 解析直接失败(踩过 3 次)。
+
+    这条扫**所有** workflow 的步骤名: 值里出现 ": " 就必须是带引号的字符串。
+    (release.yml / static.yml 里都靠加引号躲过, prune.yml 又踩了一次 —— 与其每次人肉记着,
+    不如让测试直接拦下来。)
+    """
+    for p in sorted(WF.glob("*.yml")):
+        raw = p.read_text(encoding="utf-8")
+        for i, line in enumerate(raw.splitlines(), 1):
+            st = line.strip()
+            if not st.startswith("- name:") and not st.startswith("name:"):
+                continue
+            val = st.split(":", 1)[1].strip()
+            if val.startswith(("'", '"')):
+                continue
+            assert ": " not in val, (
+                f"{p.name}:{i} 的 name 值里有「冒号+空格」会被 YAML 截断, 请加引号: {val!r}")

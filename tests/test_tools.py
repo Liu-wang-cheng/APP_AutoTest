@@ -141,3 +141,36 @@ def test_每个工具脚本都在_tools_README_里登记():
     assert not missing, (
         f"这些脚本没在 tools/README.md 里登记用途: {missing} —— "
         "请在对应小节补一行(自动流程调用 / 手动排查用)")
+
+
+def test_prune_releases_selection_keeps_newest_and_current():
+    """★ 清理老 Release 的判据(纯函数, 不联网):
+
+    永远保留 ① 最近 N 个(按创建时间倒序) ② version.json 里的当前版本 ——
+    后者是双保险: 万一"最近 N 个"的排序被 API 弄乱, 当前版本也绝不会被删掉
+    (删了用户就更新不到了)。
+    """
+    from tools.prune_releases import releases_to_delete
+    rels = [{"tag_name": f"v2.0.{i}", "id": i} for i in (27, 26, 25, 24, 23, 22, 21)]
+    # 留最近 5 个 → 删 22、21
+    assert [r["tag_name"] for r in releases_to_delete(rels, 5)] == ["v2.0.22", "v2.0.21"]
+    # 留 0 个 → 全删
+    assert len(releases_to_delete(rels, 0)) == len(rels)
+    # 留得比总数还多 → 不删
+    assert releases_to_delete(rels, 99) == []
+    # 当前版本排在很后面也不许删(双保险)
+    got = releases_to_delete(rels, 3, keep_tag="v2.0.21")
+    assert "v2.0.21" not in [r["tag_name"] for r in got], got
+    assert len(got) == 3, got
+
+
+def test_prune_releases_script_defaults_to_dry_run():
+    """★ 脚本默认**演练**(不加 --apply 只打印) —— 免得谁手滑跑一下就删了包。"""
+    import subprocess
+    import sys as _sys
+    from pathlib import Path
+    root = Path(__file__).resolve().parent.parent
+    r = subprocess.run([_sys.executable, "tools/prune_releases.py", "--help"],
+                       cwd=str(root), capture_output=True, text=True)
+    assert r.returncode == 0
+    assert "--apply" in r.stdout and "演练" in r.stdout
