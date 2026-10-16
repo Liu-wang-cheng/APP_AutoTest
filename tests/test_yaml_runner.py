@@ -49,7 +49,7 @@ def count_steps(steps):
     return len(steps or []), len(all_steps)
 
 
-def collect_cases(name_filter=""):
+def collect_cases(name_filter="", group_filter=""):
     """扫 Test_cases/ 下**组目录**(<APP名>/*.yaml)与根目录 → [(module, case, steps, priority, wait)]
 
     组目录 = APP 分组(如 涂鸦智能/);文件按顶层 case_order 升序(GUI 拖动
@@ -76,7 +76,8 @@ def collect_cases(name_filter=""):
             order = data.get("case_order") if isinstance(data, dict) else None
             if not isinstance(order, (int, float)):   # 缺失/非法一律按未排序处理
                 order = None
-            entries.append(((order is None, order or 0, fn), data, fn, full))
+            entries.append(((order is None, order or 0, fn), data, fn,
+                            full, group_name))   # 带上 APP 组名, 供 --group 筛
 
     # 组目录(APP 分组)优先,根目录散落文件兼容收集
     for sub in sorted(os.listdir(cases_dir)):
@@ -85,10 +86,12 @@ def collect_cases(name_filter=""):
             _scan(sub_full, sub)
     _scan(cases_dir, "")
     entries.sort(key=lambda e: e[0])
-    for _, data, fn, full in entries:
+    for _, data, fn, full, group_name in entries:
         for module, cases in iter_modules(data, fn):
             for case in cases:
                 name = case.get("name", "")
+                if group_filter and group_filter != group_name:
+                    continue          # ★ 按 APP 组目录精确筛选(见 conftest --group)
                 if name_filter and name_filter not in (name + module):
                     continue
                 out.append((module, name, case.get("steps") or [],
@@ -101,7 +104,8 @@ def pytest_generate_tests(metafunc):
     if "case_name" in metafunc.fixturenames:
         metafunc.parametrize(
             "module,case_name,steps,priority,case_wait,case_path",
-            collect_cases(metafunc.config.getoption("--case")),
+            collect_cases(metafunc.config.getoption("--case"),
+                          metafunc.config.getoption("--group")),
             ids=lambda v: str(v)[:30])
 
 

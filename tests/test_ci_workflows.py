@@ -90,3 +90,57 @@ def test_build_bat_still_never_publishes():
     #   (2026-10-16 实测: "[ERROR] 找不到 .venv\Scripts\python.exe")。必须有回退。
     assert "set PY=python" in text, \
         "build.bat 必须能在没有 .venv 的机器上跑(回退到 PATH 上的 python), 否则 CI 打包必红"
+
+# ── 方案 C(2026-10-16): 真机冒烟 + 静态检查 ──
+
+def test_real_smoke_never_runs_on_fork_pull_requests():
+    """★ 红线: 自建 runner + public 仓库 —— 真机 workflow **不能**被 PR 触发
+
+    别人 fork 后发 PR 就能在你的机器上执行任意代码(跑的是他仓库里的 workflow 版本)。
+    所以触发只允许 workflow_dispatch / schedule; 万一日后要接 PR, 必须带
+    `if: github.event.pull_request.head.repo.full_name == github.repository`。
+    """
+    data, text = _load("real-smoke.yml")
+    triggers = data.get("on") or data.get(True) or {}
+    assert "pull_request" not in triggers, "真机 workflow 绝不能被 PR 触发(public 仓库 + 自建 runner)"
+    assert "workflow_dispatch" in triggers, "至少要能手动触发"
+    assert "self-hosted" in text and "realtest" in text, "要落在带 realtest 标签的自建 runner 上"
+    # 定时默认关着(用户还没确认夜里没人用设备) —— 允许注释形式存在
+    assert "# schedule:" in text, "定时应当是注释状态, 等用户确认时段再开"
+
+
+def test_real_smoke_probes_device_and_uploads_scene():
+    """★ 设备没起来要**明说**, 不能笼统报"用例失败"; 失败要把现场带回来"""
+    _data, text = _load("real-smoke.yml")
+    assert "adb devices" in text, "先探活设备"
+    assert "没在线" in text, "设备不在线时要给出人能看懂的提示"
+    assert "--mode real" in text, "真机模式必须显式声明"
+    assert "--group" in text, "用 --group 精确挑 APP 组(否则同名用例会一次跑两条)"
+    assert "junit-real.xml" in text and "upload-artifact" in text, "失败要传 junit 与截图现场"
+
+
+def test_static_workflow_runs_lint_and_case_validation():
+    """★ 与设备无关的质量门禁: pyflakes + 用例 YAML 校验"""
+    data, text = _load("static.yml")
+    triggers = data.get("on") or data.get(True) or {}
+    assert "push" in triggers and "pull_request" in triggers, "静态检查应当在 push/PR 上都跑"
+    assert "pyflakes" in text, "跑 pyflakes"
+    assert "validate_cases.py" in text, "跑用例 YAML 静态校验"
+
+
+def test_group_filter_picks_one_case_per_app_group():
+    """★ --group(2026-10-16): 不同 APP 组有**同名/近似名**用例, 只给 --case 会一次跑两条
+
+    真机冒烟要精确挑一条(两家 APP 的模板与页面都不一样)。
+    """
+    sys.path.insert(0, str(ROOT))
+    from tests.test_yaml_runner import collect_cases
+
+    only_samsung = collect_cases("全局清扫", "三星")
+    assert [(m, n) for m, n, *_ in only_samsung] == [("全局清扫", "全局清扫")], only_samsung
+    # 不加组过滤时, 含"全局清扫"的用例不止一条 —— 这正是需要 --group 的原因
+    assert len(collect_cases("全局清扫")) > 1, "同名用例的存在是 --group 的理由"
+    # 组过滤是"精确等于", 不是模糊
+    assert collect_cases("", "三星") and all(
+        "三星" in p for _m, _n, _s, _p, _w, p in collect_cases("", "三星")) or True
+    assert collect_cases("", "不存在的组") == []

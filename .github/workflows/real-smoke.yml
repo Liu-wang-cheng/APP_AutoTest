@@ -1,0 +1,85 @@
+name: 真机冒烟
+
+# 方案 C2(2026-10-16): 在**自建 runner**(那台连着模拟器/真机的机器)上跑一条真机用例,
+# 目的只有一个 —— 每天/每次改动后确认"APP + 机器人这条链路还通不通"。
+#
+# ★ 触发**故意只留手动和定时**, 没有 pull_request —— 本仓库是 public,
+#   自建 runner 一旦被 fork 的 PR 触发, 别人就能在你的机器上执行任意代码。
+#   将来若要接 PR, 必须加: if: github.event.pull_request.head.repo.full_name == github.repository
+#
+# ★ 冒烟集(用户 2026-10-16 定): 三星 APP 的「全局清扫」(11 步) ——
+#   覆盖点击 / 模板点击 / 断言(清扫中、暂停、继续) / back, 对"链路通不通"最有代表性。
+#   为什么用 --group 而不是只给 --case: 涂鸦组也有含"全局清扫"字样的用例,
+#   只给 --case 会一次跑两条(两家 APP 的模板与页面都不一样)。
+on:
+  workflow_dispatch:
+    inputs:
+      case:
+        description: 跑哪条用例(模糊匹配, 留空=默认冒烟集)
+        required: false
+        default: ''
+      group:
+        description: APP 组目录名(精确, 留空=三星)
+        required: false
+        default: ''
+  # ★ 定时默认**关着**(用户还没确认夜里没人用设备)。确认后取消下面两行注释:
+  #   注意 cron 是 **UTC** —— 北京 02:00 = UTC 18:00
+  # schedule:
+  #   - cron: '0 18 * * *'
+
+jobs:
+  smoke:
+    # 只落在注册时带 realtest 标签的那台机器上(云端 runner 连不到你的设备)
+    runs-on: [self-hosted, windows, realtest]
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1          # 用户数据(config/config.yaml、用例)在 runner 本机, 不被覆盖
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+          cache: pip
+
+      - name: 安装依赖
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: "探活设备(设备没起来就明说, 别让用例背锅)"
+        shell: pwsh
+        run: |
+          $dev = "${{ vars.SMOKE_DEVICE }}"
+          if (-not $dev) { $dev = "127.0.0.1:7555" }
+          adb connect $dev | Write-Host
+          $out = adb devices | Out-String
+          Write-Host $out
+          if ($out -notmatch ([regex]::Escape($dev) + "\s+device")) {
+            throw "模拟器/真机没在线($dev) —— 请先启动模拟器再重跑本 workflow(可用仓库变量 SMOKE_DEVICE 改地址)"
+          }
+          "SMOKE_DEV=$dev" >> $env:GITHUB_ENV
+
+      - name: 跑真机冒烟
+        shell: pwsh
+        run: |
+          $group = "${{ github.event.inputs.group }}"
+          if (-not $group) { $group = "三星" }
+          $case = "${{ github.event.inputs.case }}"
+          if (-not $case) { $case = "全局清扫" }
+          Write-Host "冒烟: 组=$group 用例=$case 设备=$env:SMOKE_DEV"
+          python -m pytest tests/test_yaml_runner.py -q -rs `
+            --mode real --device "$env:SMOKE_DEV" --group "$group" --case "$case" `
+            --junit-xml=reports/junit-real.xml
+
+      - name: "失败时上传现场(junit + 截图 + 调试产物)"
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: real-failure-${{ github.run_id }}
+          path: |
+            reports/junit-real.xml
+            Test_cases/*/screenshots/**
+            Test_img/debug/**
+          retention-days: 7
+          if-no-files-found: ignore

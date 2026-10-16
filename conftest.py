@@ -32,6 +32,10 @@ def pytest_addoption(parser):
     parser.addoption("--mode", default="mock", choices=["mock", "real"],
                      help="mock=Mock服务, real=真实设备")
     parser.addoption("--case", default="", help="指定用例名(模糊匹配),空=全部")
+    # ★ 按 APP 组目录筛选(2026-10-16): 不同组可能有**同名用例**
+    #   (如 三星/全局清扫 与 涂鸦智能T4/全局清扫完整流程 都含"全局清扫") ——
+    #   只给 --case 会一次跑两条。真机冒烟要精确挑一条时用 --group 三星。
+    parser.addoption("--group", default="", help="指定 APP 组目录名(精确),空=全部")
 
 
 def pytest_collection_modifyitems(config, items):
