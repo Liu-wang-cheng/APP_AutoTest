@@ -250,7 +250,11 @@ def test_release_precheck_is_not_a_dry_run():
     cmds = [ln for ln in text.splitlines() if not ln.lstrip().startswith("#")]
     assert not [ln for ln in cmds if "push --dry-run" in ln],         "dry-run 不触发服务端规则, 当预检等于没预检"
     assert "RELEASE_DEPLOY_KEY" in text, "要用有 bypass 的部署密钥发版(ruleset 里已有 DeployKey 一条)"
-    assert "git push origin \"HEAD:refs/heads/$b\"" in text, "预检②要真推探针分支"
+    # ★ 必须推**两次**: 第 1 次若在建分支会被 do_not_enforce_on_create 豁免(默认 token 也过),
+    #   第 2 次("往已存在分支推新提交")才与推 master 同等待遇 —— 对照实验实测:
+    #   默认 token 第 2 次被 GH013 拒, 部署密钥第 2 次 `Bypassed rule violations` 通过。
+    assert text.count('git push origin "HEAD:refs/heads/$b"') == 2,         "预检要推两次(建分支那次会被豁免, 判据在第 2 次)"
+    assert "git reset --hard HEAD~2" in text, "两次探针提交都要回退掉"
     # checkout 必须带上部署密钥 —— 否则 release.py 的 push 还是走 token
     assert "ssh-key: ${{ secrets.RELEASE_DEPLOY_KEY }}" in text
 

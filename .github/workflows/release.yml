@@ -71,7 +71,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-      - name: "预检: 推送身份必须是 ruleset bypass 名单里的部署密钥(+ 真推一次验证能写)"
+      - name: "预检: 推送身份必须是 ruleset bypass 名单里的部署密钥(+ 真推两次验证过规则)"
         # ★ 为什么要有它: release.py 的顺序是「先建 Release/传资产, 再推 version.json」——
         #   万一推被仓库规则拦住, 就会留下「Release 已经发出去、但用户看到的清单还是旧的」
         #   这种半成品(v2.0.27 就这么中过一次: Release 有了、version.json 没更新, 用户
@@ -96,14 +96,23 @@ jobs:
           git config user.name  "release-precheck"
           git config user.email "release-precheck@users.noreply.github.com"
           $b = "__release_probe"
-          git commit --allow-empty -m "probe: 发版预检能否推送(不发布)" | Write-Host
+          # ★ 必须推**两次**(2026-10-16 对照实验实测):
+          #   第 1 次若在创建分支, 规则按 do_not_enforce_on_create **豁免** —— 默认 token 也过;
+          #   第 2 次是"往已存在分支推新提交", 与推 master 同等待遇:
+          #     默认 token → GH013 被拒; 部署密钥 → `Bypassed rule violations` 通过。
+          #   所以判据取**第 2 次**的结果。
+          git commit --allow-empty -m "probe: 发版预检能否推送 ① (不发布)" | Write-Host
+          $out1 = git push origin "HEAD:refs/heads/$b" 2>&1
+          Write-Host "预检 push#1 exit=$LASTEXITCODE (建分支时可能被豁免, 不作为判据)"
+          git commit --allow-empty -m "probe: 发版预检能否推送 ② (不发布)" | Write-Host
           $out = git push origin "HEAD:refs/heads/$b" 2>&1
           $code = $LASTEXITCODE
-          git reset --hard HEAD~1 | Write-Host
+          git reset --hard HEAD~2 | Write-Host
           git push --quiet origin --delete $b 2>&1 | Write-Host   # 清理, 失败不影响判定
+          $out1 | Write-Host
           $out | Write-Host
           if ($code -ne 0) {
-            throw "部署密钥推不了这个仓库(检查它是否还在这台仓库的 Deploy keys 里、是否有写权限、secret RELEASE_DEPLOY_KEY 是否与它配对)"
+            throw "部署密钥过不了仓库规则(第 2 次推送被拒) —— 检查它是否还在这台仓库的 Deploy keys 里(要有写权限)、secret RELEASE_DEPLOY_KEY 是否与它配对、ruleset 的 bypass 名单里那条 DeployKey 是否还在"
           }
 
       - name: tag 触发时先确认"tag 就在 master 上"(避免发错提交)
