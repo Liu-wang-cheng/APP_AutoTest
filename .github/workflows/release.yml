@@ -1,0 +1,94 @@
+name: 发版
+
+# 方案 B(用户 2026-10-16): **全自动 CD** —— 把"已经提交好的版本"发出去。
+# 触发二选一:
+#   · Actions 页面手动 Run workflow(填 version, 如 2.0.27)  ← 推荐, 不会和 tag 打架
+#   · 推 tag: git tag v2.0.27 && git push origin v2.0.27
+# 版本号三处(VERSION / core/version.py / CHANGELOG 该节)由 release.py 自己把闸 ——
+# 不一致直接拒绝(轻则界面版本号不对, 重则用户更新不到)。
+#
+# ★ 三个必须写清的坑(本地发版时逐个踩过, 别再踩):
+#   ① **不能**让 release.py 自己查 CI 闸门: 它查的是"这个提交的 check runs", 而此刻跑的
+#      就是它自己(状态还是 in_progress) → 自我卡死。测试由同一 job 里的 build.bat
+#      (pytest 不过就 exit /b 1, 后续步骤不会执行)兜住, 所以这里用 --no-ci-check。
+#   ② tag 触发的运行默认是 **detached HEAD** → 必须显式 checkout master, 否则 release.py
+#      更新完 version.json 后 `git push origin master` 无处可推。
+#   ③ CI 里**没有 git 身份** → release.py 的 commit 会失败, 先配 github-actions[bot]。
+#
+# ★ 想要"发布前人工点一下 Approve": 仓库 Settings → Environments → 建 `release`
+#   → 勾 Required reviewers 选自己。没配就是全自动(推 tag/点运行即发布)。
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 要发布的版本号(必须已在 VERSION / CHANGELOG 里提交好)
+        required: true
+        type: string
+  push:
+    tags: ['v*.*.*']
+
+# 建 Release、推 version.json 提交与 tag 都需要写权限。用 job 级最小权限声明,
+# **不需要**把仓库默认的 workflow 权限改成 read/write。
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    environment: release          # 配了 Required reviewers 就会在这里停下等审批
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: master             # 见坑 ②: 发版要基于 master
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+          cache: pip
+
+      - name: 安装依赖
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: 配 git 身份(见坑 ③)
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: tag 触发时先确认"tag 就在 master 上"(避免发错提交)
+        if: github.event_name == 'push'
+        shell: pwsh
+        run: |
+          git fetch --tags --force origin
+          $tag = "${{ github.ref_name }}"
+          $tagCommit = (git rev-list -n 1 $tag).Trim()
+          $head = (git rev-parse HEAD).Trim()
+          if ($tagCommit -ne $head) {
+            throw "tag $tag 指向 $tagCommit, 而 master HEAD 是 $head —— 拒绝发布(请先把 tag 推到 master HEAD 上)"
+          }
+
+      - name: 定版本号(手动填的优先, 否则取 tag 名去掉 v)
+        id: ver
+        shell: pwsh
+        run: |
+          $v = "${{ github.event.inputs.version }}"
+          if (-not $v) { $v = "${{ github.ref_name }}".TrimStart('v') }
+          if (-not $v) { throw "拿不到版本号" }
+          Write-Host "将发布: $v"
+          "VERSION=$v" >> $env:GITHUB_OUTPUT
+
+      # ★ name 值里不能有「冒号+空格」(会被 YAML 当成映射) —— 带冒号时一律加引号
+      - name: "测试 + 打包(build.bat: pytest → PyInstaller → 产物校验 → 打 zip)"
+        shell: cmd
+        run: build.bat
+
+      - name: 发布(传 Release → 更新 version.json → 打 tag → 验下载链路)
+        shell: cmd
+        env:
+          # gh CLI 认 GH_TOKEN; release.py 认 GITHUB_TOKEN —— 两个都给上
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python tools/release.py --version ${{ steps.ver.outputs.VERSION }} --no-ci-check

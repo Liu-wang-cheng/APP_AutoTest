@@ -1,0 +1,44 @@
+name: 打包自检
+
+# 方案 A(用户 2026-10-16): 只证明"**这个提交能出包**" —— 走完整 build.bat
+# (pytest → PyInstaller → 产物校验 → 打分发 zip), 然后把 zip 传成 artifact 供下载。
+#
+# ★ 刻意**不碰** GitHub Release / version.json / tag: 不可能发出坏包
+#   (发出去的版本收不回来)。想真发版走 `release.yml`(方案 B)。
+# ★ 为什么不挂在每次 push: 打包要跑 PyInstaller(几分钟), 没必要每次提交都做;
+#   推 tag 或手动点时跑就够了。
+on:
+  workflow_dispatch:            # Actions 页面手动点一下
+  push:
+    tags: ['v*']                # 推任何 v 开头的 tag 都先自检一遍
+
+jobs:
+  package:
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+          cache: pip
+
+      - name: 安装依赖
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: 一键打包
+        # shell: cmd —— build.bat 是批处理, 用 cmd 跑才能正确传回退出码
+        # (它内部: pytest 不过 / 产物校验不过 / 打 zip 失败 都会 exit /b 1)
+        shell: cmd
+        run: build.bat
+
+      - name: 上传分发包(7 天后自动清理)
+        uses: actions/upload-artifact@v4
+        with:
+          name: AutoTest-zip-${{ github.run_id }}
+          path: dist/AutoTest_v*.zip
+          retention-days: 7
+          if-no-files-found: error
