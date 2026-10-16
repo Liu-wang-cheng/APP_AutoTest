@@ -50,7 +50,9 @@ Auto_test/
 ├── vlm/backend.py           VisionBackend 协议 + VisionRouter(预留,后端未实现)
 ├── gui/                     PySide6 用例编排器
 ├── Test_cases/              YAML 用例
-├── Test_img/templates/      模板图(需从真机截图裁剪)
+├── Test_img/templates/      模板图(需从真机截图裁剪; ★ 与**该设备同尺度**, 且只裁
+│                          图标主体 —— 别把按钮外的背景裁进去: 尺度不符/带背景的模板
+│                          放大匹配后会与**同形按钮**互相误匹配, 见 core/vision 尺度预警)
 ├── config/                  config.example.yaml(入库) + locators.yaml
 ├── mock_server/             Flask 假后端(mock 模式)
 ├── tests/                   单元测试(除 test_yaml_runner 外都无需设备)

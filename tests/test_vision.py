@@ -180,3 +180,36 @@ def test_resolve_template_path_with_separator_uses_group_dir(tmp_path, monkeypat
 def test_resolve_template_absolute_path_untouched(tmp_path):
     p = str(tmp_path / "x.png")
     assert vision.resolve_template(p) == p
+
+
+def test_off_native_scale_match_warns_about_template_scale(tmp_path, caplog):
+    """★ 模板要靠**大幅缩放**才匹配得上时, 日志要明确预警(用户 2026-10-16 实测):
+
+    三星那三个圆按钮的模板与真机界面差了约 0.7 倍尺度 —— 放大 1.5× 后图标细节被插值糊掉,
+    于是"暂停""回充"模板都能命中"启动"按钮(0.663 / 0.984), 表现为"三个模板都指到同一位置"。
+    这不是算法能救的(该重截模板), 但要能自己喊出来, 否则只能靠人盯着图才发现。
+    """
+    import logging
+    base = _glyph(40)
+    tpl_p = tmp_path / "small.png"
+    cv2.imwrite(str(tpl_p), base)                     # 小模板
+    screen = _screen(500, 400)
+    big = cv2.resize(base, (80, 80), interpolation=cv2.INTER_CUBIC)   # 屏幕上放大 2 倍
+    _paste_noise(screen, big, 150, 100)
+
+    recs = []
+
+    class _H(logging.Handler):
+        def emit(self, record):
+            recs.append(record.getMessage())
+
+    h = _H(level=logging.WARNING)
+    vision.log.addHandler(h)
+    old = vision.log.level
+    vision.log.setLevel(logging.WARNING)
+    try:
+        assert vision._find_by_ncc(screen, str(tpl_p)) is not None   # 仍然能匹配(行为不变)
+    finally:
+        vision.log.removeHandler(h)
+        vision.log.setLevel(old)
+    assert any("模板尺度" in m for m in recs), recs

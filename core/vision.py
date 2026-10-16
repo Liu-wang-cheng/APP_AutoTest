@@ -309,6 +309,16 @@ def _find_by_ncc(screen_gray, template_path):
             best_score, best_loc, best_size = score, loc, (rw, rh)
     if best_loc is None or best_score < NCC_MIN_SCORE:
         return None
-    log.info("[NCC兜底] score=%.2f scale=%.2f", best_score,
-             best_size[0] / max(tw, 1))
+    scale = best_size[0] / max(tw, 1)
+    log.info("[NCC兜底] score=%.2f scale=%.2f", best_score, scale)
+    # ★ 尺度预警(用户 2026-10-16 实测踩到): 模板与**真机界面**不是同一尺度时, 只能靠放大
+    #   逼近 —— 放大把图标细节插值糊掉, 剩下的圆盘/色块形状会让**同形按钮互相误匹配**
+    #   (三星那三个圆按钮: 暂停模板 0.663、回充模板 0.984 都命中了"启动"按钮)。
+    #   这不是算法能救的: 该重截模板。所以这里只**明确喊一声**, 不改判定(多尺度是给
+    #   半分辨率截图那类模板用的, 收紧阈值会误伤它们)。
+    if scale > 1.25 or scale < 0.8:
+        log.warning("[模板尺度] 这个模板要缩放到 %.2fx 才匹配得上(真机原生尺度=1.00) —— "
+                    "多半是模板与设备界面尺度不一致, 容易出现同形按钮互相误匹配; "
+                    "建议在该设备上重截(只裁图标主体, 别带按钮外的背景)",
+                    scale)
     return (best_loc[0] + best_size[0] // 2, best_loc[1] + best_size[1] // 2)
