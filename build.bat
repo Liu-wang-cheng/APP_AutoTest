@@ -7,9 +7,18 @@ cd /d "%~dp0"
 
 set PY=.venv\Scripts\python.exe
 if not exist "%PY%" (
-    echo [ERROR] 找不到 %PY%
-    echo         请先: python -m venv .venv ^&^& .venv\Scripts\pip install -r requirements.txt
-    exit /b 1
+    REM ★ CI 里没有 .venv(依赖装在 runner 自带的 Python 里), 退回 PATH 上的 python ——
+    REM   否则 GitHub Actions 跑这条会直接 exit 1(2026-10-16 实测: 打包自检全红:
+    REM   "[ERROR] 找不到 .venv\Scripts\python.exe")。
+    REM   本地仍优先用 .venv; 真没有时给一句提醒, 免得以为"随便哪个 python 都行"。
+    where python >nul 2>&1
+    if errorlevel 1 (
+        echo [ERROR] 既没有 %PY%, PATH 上也找不到 python
+        echo         请先: python -m venv .venv ^&^& .venv\Scripts\pip install -r requirements.txt
+        exit /b 1
+    )
+    set PY=python
+    echo [WARN] 没找到 .venv, 改用 PATH 里的 python(CI 正常; 本地建议按上面那行建虚拟环境)
 )
 
 echo [1/4] 打包依赖检查...

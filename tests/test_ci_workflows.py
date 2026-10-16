@@ -85,3 +85,8 @@ def test_build_bat_still_never_publishes():
     assert "--version %APPVER%" in text or "release.py --pack-only" in text
     assert "gh release" not in text and "create_release" not in text, \
         "build.bat 里不该出现任何发布动作"
+
+    # ★ CI 里没有 .venv(依赖装在 runner 的 Python 里) —— 写死 .venv 会让打包自检直接红
+    #   (2026-10-16 实测: "[ERROR] 找不到 .venv\Scripts\python.exe")。必须有回退。
+    assert "set PY=python" in text, \
+        "build.bat 必须能在没有 .venv 的机器上跑(回退到 PATH 上的 python), 否则 CI 打包必红"
