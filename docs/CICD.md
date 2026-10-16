@@ -218,10 +218,26 @@ jobs:
 用的是 Actions 自己的 `GITHUB_TOKEN`（`github-actions[bot]`）—— 它不在 ruleset 的 bypass
 名单里，于是"新增提交"的推送被服务端拒绝（本机推得动，是因为 `RepositoryRole(admin)` 在名单里）。
 
-**两种修法（二选一，配好之后 CD 才真能无人值守）**：
-1. 仓库 Settings → Rules → 「合入规则」的 **Bypass list** 里加上 **GitHub Actions**；
-2. 或者建一个 PAT（fine-grained，Contents: Read and write）存成仓库 secret **`RELEASE_TOKEN`**
-   —— `release.yml` 的 checkout 会优先用它（`secrets.RELEASE_TOKEN || github.token`）。
+**已采用的修法（2026-10-16 落地，实测通过）：写权限部署密钥**。
+ruleset 的 bypass 名单里本来就有一条 `DeployKey`（`actor_id: null` = 任何部署密钥都放行），
+所以走 SSH 部署密钥就绕过了这条规则：
+
+1. `ssh-keygen -t ed25519` 生成密钥对（私钥备份在桌面 `AutoTest_部署密钥\`）；
+2. 仓库 Settings → Deploy keys 添加**公钥**并勾 **Allow write access**；
+3. 仓库 Settings → Secrets and variables → Actions 建 secret **`RELEASE_DEPLOY_KEY`**（值=私钥）；
+4. `release.yml` 的 checkout 带上 `ssh-key: ${{ secrets.RELEASE_DEPLOY_KEY }}` —— 之后
+   `release.py` 的 `git push` 全部走这把密钥。
+
+**对照实验（实测数据，别再凭感觉）**：往**探针分支**推两次，第 2 次（往已存在分支推新提交）
+与推 master 同等待遇（第 1 次在建分支，被 `do_not_enforce_on_create` 豁免）：
+
+| 推送身份 | 第 1 次（建分支） | 第 2 次（推新提交） |
+|---|---|---|
+| 默认 `GITHUB_TOKEN` | 通过（豁免） | **被拒** `GH013 Required status check "pytest" is expected` |
+| 部署密钥 | 通过 | 通过，服务端明说 `Bypassed rule violations …` |
+
+**另外两种没采用的备选**：① ruleset 的 bypass 名单里加 **GitHub Actions**（注意：应用 id 是
+**15368**，名单里那条 4518051 不是它）；② 建 PAT 存成 secret 供 checkout 用。
 
 **万一已经卡在这一步（补完的办法）**：
 ```bash
@@ -240,10 +256,15 @@ PY
 python tools/verify_release.py --version 2.0.27 --pkg <刚下载的 zip>
 ```
 
-**已经被假预检放过一次（2026-10-16 修）**：`release.yml` 原来的预检是
-`git push --dry-run origin HEAD:refs/heads/master` —— 推**当前 HEAD** 是个 no-op
-（Everything up-to-date），仓库规则根本不会评估它，于是"预检通过、正式推送被拒"。
-现在改成先造一个空提交再 dry-run 推，失败即提前中止（不会留下半成品）。
+**预检被"假阳性"坑过两次（2026-10-16 定稿）**：
+- 第 1 版是 `git push --dry-run origin HEAD:refs/heads/master` —— 推**当前 HEAD** 是 no-op
+  （Everything up-to-date），规则根本没机会拦；
+- 第 2 版"造个空提交再 dry-run 推"**照样是假阳性** —— 本地造一个拒绝一切的 pre-receive 钩子
+  实测：`git push --dry-run` **完全不触发服务端钩子/规则**，依然返回 0。**dry-run 不能当预检。**
+
+现在的预检是两步：① 没配 `RELEASE_DEPLOY_KEY` → 直接拦（这种身份必被拒，说清怎么修）；
+② 配了就**真推两次**探针分支（见上面的对照实验），第 2 次的成败才是判据。`tests/test_ci_workflows.py`
+里有一条守护盯着："命令行里不许出现 `push --dry-run`" + "必须推两次"。
 
 ---
 
