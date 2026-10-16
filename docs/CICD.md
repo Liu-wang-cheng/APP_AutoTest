@@ -207,6 +207,44 @@ jobs:
 - **"模拟器/真机没在线"** → 启动模拟器，或改 `vars.SMOKE_DEVICE`；
 - 用例失败但设备正常 → 就是真 bug，看 artifact 里的截图与 junit（这正是这套东西的价值）。
 
+### 5.1 发版"半成品"：Release 有了、`version.json` 没更新
+
+**症状**：`发版` workflow 红在第 12 步（`发布…`），日志尾是
+`remote: error: GH013: Repository rule violations found for refs/heads/master … Required status check "pytest" is expected`。
+此时 **Release 与 zip 资产已经传上去了**，但 `version.json` 还是上一版 → 用户在"检查更新"里
+**看不到新版**（OTA 读的就是仓库根这份清单）。v2.0.27 中过一次。
+
+**原因**：仓库 ruleset「合入规则」要求 `pytest` 状态检查，而 `release.py` 推 `version.json`
+用的是 Actions 自己的 `GITHUB_TOKEN`（`github-actions[bot]`）—— 它不在 ruleset 的 bypass
+名单里，于是"新增提交"的推送被服务端拒绝（本机推得动，是因为 `RepositoryRole(admin)` 在名单里）。
+
+**两种修法（二选一，配好之后 CD 才真能无人值守）**：
+1. 仓库 Settings → Rules → 「合入规则」的 **Bypass list** 里加上 **GitHub Actions**；
+2. 或者建一个 PAT（fine-grained，Contents: Read and write）存成仓库 secret **`RELEASE_TOKEN`**
+   —— `release.yml` 的 checkout 会优先用它（`secrets.RELEASE_TOKEN || github.token`）。
+
+**万一已经卡在这一步（补完的办法）**：
+```bash
+# ① 下载**已上传**的资产并算 sha256(清单必须与资产一致, 不能拿本地重打包的包顶替)
+# ② 用 release.py 内部那一步补齐(它做的事就是: 写 version.json → commit → tag -f → push)
+python - <<'PY'
+import sys; sys.path.insert(0, ".")
+import tools.release as R
+v, zip_path = "2.0.27", r"<刚下载的 zip>"
+R.update_version_json_and_tag(
+    "Liu-wang-cheng/APP_AutoTest", v, R.compute_sha256(zip_path),
+    f"https://github.com/Liu-wang-cheng/APP_AutoTest/releases/download/v{v}/AutoTest_v{v}.zip",
+    R.load_changelog_section("CHANGELOG.md", v)[1])
+PY
+# ③ 验一遍用户那条链路(把下载来的包当 --pkg, 这样 sha 才对得上)
+python tools/verify_release.py --version 2.0.27 --pkg <刚下载的 zip>
+```
+
+**已经被假预检放过一次（2026-10-16 修）**：`release.yml` 原来的预检是
+`git push --dry-run origin HEAD:refs/heads/master` —— 推**当前 HEAD** 是个 no-op
+（Everything up-to-date），仓库规则根本不会评估它，于是"预检通过、正式推送被拒"。
+现在改成先造一个空提交再 dry-run 推，失败即提前中止（不会留下半成品）。
+
 ---
 
 ## 6. 红线与风险

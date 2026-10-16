@@ -230,3 +230,20 @@ def test_static_job_installs_what_the_validator_imports():
         f"static.yml 没装 validate_cases.py 需要的依赖: {missing}\n"
         f"(该脚本模块级导入链上的第三方库: {sorted(third)})")
     assert "python tools/validate_cases.py" in text, "静态校验那一步没了?"
+
+
+def test_release_precheck_probes_a_real_push():
+    """★ 发版的"预检能不能推 master"必须是**真实的新提交**探针(2026-10-16 修)。
+
+    原来的预检 `git push --dry-run origin HEAD:refs/heads/master` 推的是**当前 HEAD** ——
+    那是个 no-op(Everything up-to-date), 仓库规则根本不会评估它, 于是"预检通过、正式推送
+    被 GH013 拒", 留下"Release 已经发出去、version.json 还是旧版"的半成品(v2.0.27 中过)。
+    现在: 造一个空提交 → dry-run 推 → 立刻 reset 掉。
+    """
+    _data, text = _load("release.yml")
+    assert "--allow-empty" in text and "reset --hard HEAD~1" in text, \
+        "预检要造一个真实提交再 dry-run 推, 推完 reset 掉"
+    assert "push --dry-run" in text
+    # 也钉住"可以用 PAT 发版"这条出路(默认令牌推不动时)
+    assert "RELEASE_TOKEN" in text, \
+        "checkout 要支持用 RELEASE_TOKEN(PAT) —— 仓库规则不放行 Actions 身份时的出路"

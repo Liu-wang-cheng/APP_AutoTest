@@ -46,6 +46,11 @@ jobs:
         with:
           ref: master             # 见坑 ②: 发版要基于 master
           fetch-depth: 0
+          # ★ 推 version.json 与 tag 用的是 checkout 存下的凭据(见坑 ④)。
+          #   仓库规则(ruleset「合入规则」要求 pytest 状态检查)会拦下**新增提交**的推送,
+          #   除非推送身份在 bypass 名单里 —— 所以要么在 ruleset 里给 GitHub Actions 放行,
+          #   要么配一个 RELEASE_TOKEN(PAT) 并用它 checkout。没配就退回默认 token(行为不变)。
+          token: ${{ secrets.RELEASE_TOKEN || github.token }}
 
       - uses: actions/setup-python@v5
         with:
@@ -65,14 +70,21 @@ jobs:
       - name: "预检: 这个身份能不能推 master(不能就先停下, 别建 Release)"
         # ★ 为什么要有它: release.py 的顺序是「先建 Release/传资产, 再推 version.json」——
         #   万一推被仓库规则拦住, 就会留下「Release 已经发出去、但用户看到的清单还是旧的」
-        #   这种半成品(用户更新不到, 得手工补)。先用 --dry-run 探一次: 它只跟服务器协商、
-        #   不真的创建任何 ref; 能推才继续(而且放在打包之前, 早失败早省时间)。
+        #   这种半成品(v2.0.27 就这么中过一次: Release 有了、version.json 没更新, 用户
+        #   在检查更新里看不到新版)。能推才继续, 放在打包之前, 早失败早省时间。
+        # ★ 探针必须是**一个真实的新提交**(2026-10-16 修): 原来直接 dry-run 推当前 HEAD,
+        #   那是个 no-op(Everything up-to-date), 仓库规则根本没机会拦 —— 于是"预检通过、
+        #   正式推送被 GH013 拒绝"。这里先造一个空提交再 dry-run 推, 推完立刻 reset 掉;
+        #   --dry-run 只跟服务器协商, 不会真的在远端留下任何东西。
         shell: pwsh
         run: |
+          git commit --allow-empty -m "probe: 预检能否推送 master(不发布)" | Write-Host
           $out = git push --dry-run origin "HEAD:refs/heads/master" 2>&1
+          $code = $LASTEXITCODE
+          git reset --hard HEAD~1 | Write-Host
           $out | Write-Host
-          if ($LASTEXITCODE -ne 0) {
-            throw "当前身份推不了 master(多半是仓库规则要求状态检查) —— 请在 ruleset 的 bypass 名单里加上 GitHub Actions, 或改用带权限的 PAT 发版"
+          if ($code -ne 0) {
+            throw "当前身份推不了 master(仓库规则要求 pytest 状态检查, 而新增提交必须过它) —— 二选一: ① 在 ruleset 的 bypass 名单里加上 GitHub Actions; ② 配一个 RELEASE_TOKEN(PAT) 供 checkout 使用"
           }
 
       - name: tag 触发时先确认"tag 就在 master 上"(避免发错提交)
