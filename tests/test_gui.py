@@ -81,6 +81,25 @@ def test_status_words_dialog_saves_to_config_and_runtime(win, monkeypatch, tmp_p
     assert "new_idle" in session._status_words["idle"], session._status_words
 
 
+def test_precondition_running_row_is_reused_even_if_desc_grows(win):
+    """★ 前置项的「执行中」行要能被完成行**就地改写** —— 哪怕描述变了。
+
+    用户 2026-10-16: "充电检测已经通过了, 跑后面的电量检测时, 执行结果中为何没有显示
+    电量检测的执行中状态" —— 那一项开始时要先插一行「执行中」; 而完成时 `_emit_pre_result`
+    会给充电/电量类描述追加"(当前电量 45%)", **desc 与开始时不相等**。界面是拿
+    `_running_row` 就地改写、**不比对 desc** 的 —— 这条把它钉住: 不能变成两行。
+    """
+    win.result_table.setRowCount(0)
+    win.on_step_started({"desc": "前置-电量门槛≥50%", "attempt": 1})
+    win.on_step_done({"desc": "前置-电量门槛≥50%(当前电量 45%)", "passed": True,
+                      "error": "", "screenshot": "", "elapsed": 1.2})
+    rows = win.result_table.rowCount()
+    assert rows == 1, [win.result_table.item(r, 2).text() for r in range(rows)]
+    assert win.result_table.item(0, 2).text() == "前置-电量门槛≥50%(当前电量 45%)"
+    assert win.result_table.item(0, 3).text() == "执行中" or \
+        "PASS" in win.result_table.item(0, 3).text(), win.result_table.item(0, 3).text()
+
+
 def test_if_parent_row_appears_before_substeps(win):
     """★ if 父行必须排在子步骤**之前**(用户 2026-10-15: "if 判断的步骤会在子步骤
     后面…执行结果顺序也是"): 子步骤(sub=True)追加新行, 不占用父 if 的"执行中"占位。"""

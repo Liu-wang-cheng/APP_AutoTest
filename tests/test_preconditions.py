@@ -455,6 +455,36 @@ def test_enter_device_and_map_load_default_to_not_blocking(monkeypatch):
     assert session.item_is_soft({"type": "map_load", "soft": False}) is False, "显式取消优先"
 
 
+def test_prepare_items_announces_every_item_before_running_it(monkeypatch):
+    """★ 每条前置项**开始**都要吭一声(用户 2026-10-16: "充电检测已经通过了, 跑后面的
+    电量检测时, 执行结果中为何没有显示电量检测的执行中状态")。
+
+    原来只有「自定义步骤」型会发开始事件(它内部每一步各发一次), 等待充电/电量门槛/
+    地图加载这些从头到尾不吭声 —— 那一行要等整项跑完才冒出来; 电量门槛这种"等几十分钟"
+    的项, 期间结果表一片空白, 看着像卡死。
+
+    两条判据: ① 非 steps 型**逐条**发开始事件, desc 与完成行的 desc 一致(item_label);
+             ② steps 型**不发**父项的开始事件(它内部步骤行已经是"执行中", 再发会让
+                完成时的父行另起一行 → 两行)。
+    """
+    monkeypatch.setattr(session.time, "sleep", lambda s: None)
+    _stub_items(monkeypatch, {"restart": True, "charging": True, "battery": True})
+    started = []
+    session.prepare_items(FakeDev(), {}, [
+        {"type": "restart", "enabled": True},
+        {"type": "charging", "enabled": True},
+        {"type": "steps", "enabled": True, "name": "结束烘干",
+         "steps": [{"desc": "点", "back": True}]},
+        {"type": "battery", "enabled": True},
+    ], on_step_start=lambda desc, attempt=1: started.append(desc))
+    assert started[0:2] == ["重启 APP", "等待充电"], started
+    # 第 3 项是 steps 型: 只有它**内部**那一步(带父项名前缀), 没有父项自己那一条
+    assert started[2].startswith("结束烘干(1步): "), started
+    assert "结束烘干(1步)" not in started, f"steps 型不该发父项开始事件: {started}"
+    # 第 4 项(电量门槛)照旧要有 —— 这正是用户看不到"执行中"的那一项
+    assert started[3] == "电量门槛≥50%", started
+
+
 def test_prepare_items_waits_interval_between_items(monkeypatch):
     """★ 执行间隔(用户 2026-10-16: "每个前置检测的执行间隔设置成默认5s"): 两项之间等 5s,
     **第一项前不等**(那时还没有"上一项", 白等只是拖延); 每项都能自己改。"""
@@ -1404,6 +1434,90 @@ def test_page_sample_falls_back_to_ocr_when_tree_is_sparse(monkeypatch):
                         lambda d, use_cache=True, exclude=None:
                         (seen.setdefault("exclude", exclude), [("干燥拖布中", (1, 2)),
                                                                ("电量 45%", (3, 4))])[1])
-    got = _s._page_sample(D())
+    got = _s.page_sample(D())
     assert "正在清洁" in got and "干燥拖布中" in got, got
     assert "exclude" in seen, "OCR 取样要带上系统 UI 屏蔽区域(状态栏不该被当成页面内容)"
+
+
+def test_battery_wait_logs_only_when_level_changes(monkeypatch, caplog):
+    """★ 用户 2026-10-16: "电量等待的打印太频繁了, 要按电量变化才打印, 不要按等待时间"
+    + "但是等待时间也要同步打印出来"。
+
+    判据两条: ① 电量不变的轮次**不打印**; ② 每次打印的那一行**带着已等秒数**。
+    """
+    from core import session as _s
+    monkeypatch.setattr(session.time, "sleep", lambda s: None)
+    monkeypatch.setattr(session, "get_battery_level",
+                        lambda d: 40)          # 一直 40% → 除首行外不该再有行
+    with caplog.at_level("INFO"):
+        session.ensure_battery(FakeDev(), min_level=50, timeout=0.6, interval=1)
+    lines = [r.getMessage() for r in caplog.records if "等待电量达标" in r.getMessage()]
+    assert len(lines) == 1, f"电量没变不该反复打印: {lines}"
+    assert "已等" in lines[0] and "40%" in lines[0], lines[0]
+
+    caplog.clear()
+    seq = iter([40, 40, 40, 39, 39, 38])       # 只在 39 / 38 变化时打印
+    monkeypatch.setattr(session, "get_battery_level", lambda d: next(seq, 38))
+    with caplog.at_level("INFO"):
+        session.ensure_battery(FakeDev(), min_level=50, timeout=0.6, interval=1)
+    lines = [r.getMessage() for r in caplog.records if "等待电量达标" in r.getMessage()]
+    assert [l.split("电量 ")[-1].rstrip("%") for l in lines] == ["40", "39", "38"], lines
+    assert all("已等" in l for l in lines), lines
+
+
+def test_charging_wait_logs_only_when_level_changes(monkeypatch, caplog):
+    """★ 等待充电同理(它的轮询已缩到 5s, 按时间打点会 12 行/分钟)"""
+    monkeypatch.setattr(session, "is_charging", lambda d, text=None: False)
+    monkeypatch.setattr(session, "click_template", lambda d, n, **kw: (1, 2))
+    monkeypatch.setattr(session.time, "sleep", lambda s: None)
+    monkeypatch.setattr(session, "get_battery_level", lambda d: 55)     # 一直不变
+    with caplog.at_level("INFO"):
+        session.ensure_charging(FakeDev(), timeout=0.6, interval=5)
+    lines = [r.getMessage() for r in caplog.records if "等待充电中" in r.getMessage()]
+    assert len(lines) == 1, f"电量没变不该反复打印: {lines}"
+    assert "已等" in lines[0] and "55%" in lines[0], lines[0]
+
+
+# ── 未命中留痕(用户 2026-10-16: "前置检测的测试项中还有哪些没加命中和未命中信息") ──
+
+def _miss_lines(caplog, key):
+    return [r.getMessage() for r in caplog.records if key in r.getMessage()]
+
+
+def test_map_load_failure_logs_searched_texts_and_page_sample(monkeypatch, caplog):
+    """地图加载失败: 要说清"就绪/加载中文本都未出现" + 当时页面上有什么"""
+    monkeypatch.setattr(session.time, "sleep", lambda s: None)
+    monkeypatch.setattr(session, "warm_webview", lambda d: '<node text="设置页"/>')
+    monkeypatch.setattr(session, "text_present_detail",
+                        lambda d, texts, xml=None, round_no=None: (None, "", "", None))
+    with caplog.at_level("INFO"):
+        session.ensure_map_loaded(FakeDev(), timeout=0, rounds=1,
+                                  ready_text="地图编辑", loading_text="地图正在加载")
+    line = _miss_lines(caplog, "仍未就绪")
+    assert line and "就绪文本「地图编辑」" in line[0] and "当前页面文本" in line[0] \
+        and "设置页" in line[0], line
+
+
+def test_enter_device_failure_logs_searched_texts_and_page_sample(monkeypatch, caplog):
+    """进入设备页失败: 确认文本都未出现 + 当时页面上有什么"""
+    monkeypatch.setattr(session.time, "sleep", lambda s: None)
+    monkeypatch.setattr(session, "_wait_texts", lambda d, texts, timeout, cancel=None: None)
+    monkeypatch.setattr(session, "_enter_device_page", lambda d, name, cancel=None: False)
+    monkeypatch.setattr(session, "warm_webview", lambda d: '<node text="设备列表"/>')
+    with caplog.at_level("INFO"):
+        session.ensure_device_page(FakeDev(), device_name="机器人", ready_text="设备控制",
+                                   timeout=0, rounds=1)
+    line = _miss_lines(caplog, "仍未确认进入设备页")
+    assert line and "确认文本「设备控制」" in line[0] and "设备列表" in line[0], line
+
+
+def test_text_check_timeout_logs_searched_texts_and_page_sample(monkeypatch, caplog):
+    """文本检查超时: 说清查了什么(等待出现/消失) + 当时页面上有什么"""
+    monkeypatch.setattr(session.time, "sleep", lambda s: None)
+    monkeypatch.setattr(session, "warm_webview", lambda d: '<node text="首页"/>')
+    with caplog.at_level("INFO"):
+        session.ensure_text_check(FakeDev(), wait_text="清洁中,正在吸尘",
+                                  absent_text="正在加载", timeout=0, name="清扫态")
+    line = _miss_lines(caplog, "内未满足条件")
+    assert line and "等待出现「清洁中、正在吸尘」" in line[0] \
+        and "等待消失「正在加载」" in line[0] and "首页" in line[0], line

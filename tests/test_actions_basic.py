@@ -1083,3 +1083,19 @@ def test_sleep_log_shows_integer_seconds_without_dot_zero(caplog):
     txt = "\n".join(r.getMessage() for r in caplog.records)
     assert "等待 5 秒" in txt, txt
     assert "实际 5 秒" in txt and "5.0 秒" not in txt, txt
+
+
+def test_assert_timeout_message_carries_page_sample(runner, monkeypatch):
+    """★ 用例步骤的"未命中"也要留痕(用户 2026-10-16: "以及正常测试步骤中的"):
+
+    断言超时的报错行直接带上**当时页面文本**, 不用再去翻 [FAIL诊断] 那一大段
+    (那里仍有完整的前 30 条 + OCR 文本)。
+    """
+    from core import session as _s
+    monkeypatch.setattr(_s, "warm_webview", lambda d: '<node text="正在清洁"/><node text="电量 40%"/>')
+    monkeypatch.setattr(runner, "_poll_sleep", lambda n: 0.0)
+    with pytest.raises(AssertionError) as ei:
+        runner._assert_locator("干燥拖布", timeout=0.2)
+    msg = str(ei.value)
+    assert "未找到: 干燥拖布" in msg, msg
+    assert "当时页面文本" in msg and "正在清洁" in msg, msg

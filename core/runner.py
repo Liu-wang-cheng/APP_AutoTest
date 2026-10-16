@@ -16,7 +16,22 @@ from core import actions as _actions      # 导入即注册全部动作(见 core
 _actions.load_all()                       # 幂等: 显式调用一次, 免得这行被当成笔误删掉
 from core.driver import BASE_DIR, split_texts
 from core.session import (text_present_detail, warm_webview,  # noqa: E501  判断统一入口 + WebView 预热
-                          scan_status_words, set_status_words, FaultStateError)
+                          scan_status_words, set_status_words, FaultStateError,
+                          page_sample as _page_sample)
+
+
+def _page_tail(d, limit=6):
+    """超时报错里附一句"当时页面上有什么" —— 空串(取不到)时不要给报错文案添乱。
+
+    ★ 用户 2026-10-16: "前置检测的测试项…以及正常测试步骤中的"都要有命中/未命中信息 ——
+      前置那几项已经在日志里写了页面样本, 用例步骤也照办: 报错行自带一句,
+      不用再去翻 [FAIL诊断] 那一大段(那里仍有完整的前 30 条 + OCR 文本)。
+    """
+    try:
+        sample = _page_sample(d, limit=limit)
+    except Exception:
+        return ""
+    return f" ← 当时页面文本: {sample}" if sample else ""
 from core.sentinel import ignore_packages as _ignore_packages,     set_ignore_packages as _set_ignore_packages, tag_is_system_ui as _tag_is_system_ui
 from core.logger import get_logger
 from vlm.backend import VisionRouter
@@ -473,7 +488,8 @@ class ActionRunner:
         ocr_last = 0.0
         while True:
             if end_time and time.time() >= end_time:
-                raise AssertionError(f"超时({timeout}s)未找到可点击元素: {value}")
+                raise AssertionError(f"超时({timeout}s)未找到可点击元素: {value}"
+                                     + _page_tail(self.d))
             warm_webview(self.d)     # ★ 同上: WebView 文本预热(见 _assert_locator)
             el = self._find_element(value)
             if el.exists(timeout=1):
@@ -841,7 +857,8 @@ class ActionRunner:
         check_count = 0
         while True:
             if end_time and time.time() >= end_time:
-                raise AssertionError(f"超时({timeout}s)未找到: {value}")
+                raise AssertionError(f"超时({timeout}s)未找到: {value}"
+                                     + _page_tail(self.d))
             # ★ WebView 内容预热: 插件页的文本要完整层级 dump 才会进无障碍树,
             #   轻量 exists() 不触发 —— 不预热会一直读到空页(真机实测 30s 白等)
             xml = warm_webview(self.d)

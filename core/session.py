@@ -108,7 +108,7 @@ def _safe_battery(d):
         return -1
 
 
-def _page_sample(d, xml=None, limit=10):
+def page_sample(d, xml=None, limit=10):
     """页面上现在有哪些文本(给"未命中"留证据);取不到返回 []。
 
     ★ 为什么要它(用户 2026-10-16): "我给了 充电,满电 两个文本为何都识别不到" ——
@@ -348,7 +348,9 @@ def ensure_device_page(d, device_name="", ready_text=DEFAULT_DEVICE_READY_TEXT,
             return True
         log.warning(f"[前置] 第 {r + 1}/{rounds} 次未确认进入设备页, 重新执行进入操作...")
         _enter_device_page(d, device_name, should_cancel)
-    log.warning(f"[前置] {rounds} 轮仍未确认进入设备页({ready_text}), 继续执行——后续步骤会暴露")
+    # ★ 未命中留痕(用户 2026-10-16): 查了哪些确认文本 + 当时页面上有什么
+    log.warning(f"[前置] {rounds} 轮仍未确认进入设备页(确认文本「{'、'.join(texts)}」"
+                f"都未出现) ← 当前页面文本: {page_sample(d)}, 继续执行——后续步骤会暴露")
     return False
 
 
@@ -394,7 +396,7 @@ def ensure_charging(d, timeout=1200, on_progress=None, should_cancel=None,
     # ★ 未命中也要留痕(用户 2026-10-16): 查了哪些判定词 + 页面上真正有什么文本。
     #   只写"未充电"时, "我给了 充电,满电 两个词为何都识别不到" 只能靠人复现去猜。
     try:
-        sample = _page_sample(d)
+        sample = page_sample(d)
         log.info(f"[前置] 未命中充电判定文本「{'、'.join(texts)}」"
                  f"(判定: 任一命中即算充电) ← 当前页面文本: {sample}")
     except Exception as e:
@@ -438,6 +440,7 @@ def ensure_charging(d, timeout=1200, on_progress=None, should_cancel=None,
     end = time.time() + timeout
     start_batt = _safe_battery(d)              # 起点电量(超时时用来说明"到底有没有回充")
     hinted = False
+    last_batt, last_report = None, 0
     while time.time() < end:
         if is_charging(d, ready_text):
             log.info("[前置] 设备已进入充电状态"
@@ -449,10 +452,16 @@ def ensure_charging(d, timeout=1200, on_progress=None, should_cancel=None,
             return False
         elapsed = int(time.time() - end) + timeout
         batt = get_battery_level(d)
-        msg = f"等待充电中... 已等 {elapsed}s, 电量 {batt}%"
-        log.info(f"[前置] {msg}")
-        if on_progress:
-            on_progress(msg)
+        # ★ 同"电量门槛": 只在**电量变化**时打点(用户 2026-10-16), 但那一行照旧带等待时间
+        #   (`已等 {elapsed}s, 电量 {batt}%`)。轮询间隔已经缩到 5s(见
+        #   PRECONDITION_INTERVAL_DEFAULT), 再按时间打点会 12 行/分钟地刷屏。
+        #   读不到电量(<0)时退回按时间打点, 否则等待期会一片空白。
+        if (batt != last_batt) or (batt < 0 and elapsed - last_report >= 30):
+            last_batt, last_report = batt, elapsed
+            msg = f"等待充电中... 已等 {elapsed}s, 电量 {batt}%"
+            log.info(f"[前置] {msg}")
+            if on_progress:
+                on_progress(msg)
         # 点了回充 1 分钟还没充上 → 提示"可能没点中"(一次就够, 别刷屏)
         if not hinted and clicked and elapsed >= 60:
             hinted = True
@@ -771,7 +780,12 @@ def ensure_map_loaded(d, timeout=10, device_name="", rounds=6,
             if d(text=device_name).exists(timeout=10):
                 d(text=device_name).click()
                 _sleep(5, should_cancel)
-    log.warning(f"[前置] 地图 {rounds} 轮重进后仍未就绪,继续执行")
+    # ★ 未命中留痕(用户 2026-10-16: "前置检测的测试项中还有哪些没加命中和未命中信息"):
+    #   说清查了哪些就绪/加载中文本 + 当时页面上有什么文本 —— 只写"未就绪"没法判断是
+    #   文案配错了、还是页面真没加载出来。
+    log.warning(f"[前置] 地图 {rounds} 轮重进后仍未就绪(就绪文本「{'、'.join(ready)}」"
+                f"都未出现, 加载中文本「{'、'.join(loading)}」)"
+                f" ← 当前页面文本: {page_sample(d)}, 继续执行")
     return False
 
 
@@ -833,7 +847,14 @@ def ensure_text_check(d, wait_text="", absent_text="", timeout=60,
         if on_progress:
             on_progress(f"等待 {label}...")
         time.sleep(2)
-    log.warning(f"[前置] {label}: {timeout}s 内未满足条件")
+    # ★ 未命中留痕(用户 2026-10-16): 说清查了哪些文本 + 当时页面上有什么
+    want = []
+    if waits:
+        want.append("等待出现「" + "、".join(waits) + "」")
+    if absents:
+        want.append("等待消失「" + "、".join(absents) + "」")
+    log.warning(f"[前置] {label}: {timeout}s 内未满足条件({'; '.join(want)})"
+                f" ← 当前页面文本: {page_sample(d)}")
     # 超时后的操作(用户配置): none=仅报告失败 / back=按返回键 / click:文本=点击该文本
     if on_timeout == "back":
         d.press("back")
@@ -866,7 +887,7 @@ def ensure_battery(d, min_level=50, timeout=1800, on_progress=None, should_cance
     start_batt = battery
     log.info(f"[前置] 电量 {battery}%,不足 {min_level}%,等待充电...")
     end = time.time() + timeout
-    last_report = 0.0
+    last_batt, last_report = None, 0.0
     while time.time() < end:
         if should_cancel and should_cancel():
             log.info("[前置] 收到停止请求,中断电量等待")
@@ -876,8 +897,12 @@ def ensure_battery(d, min_level=50, timeout=1800, on_progress=None, should_cance
         if battery >= min_level or battery <= 0:
             break
         waited = int(timeout - (end - time.time()))
-        if waited - last_report >= 30:      # 每 30s 报一次, 别把日志刷满
-            last_report = waited
+        # ★ 只在**电量变化**时打点(用户 2026-10-16: "电量等待的打印太频繁了, 要按电量变化
+        #   才打印, 不要按等待时间" —— 但"等待时间也要同步打印出来")。所以还是同一行:
+        #   `已等 {waited}s, 电量 {battery}%`, 只是**触发时机**改成电量变了才打。
+        #   读不到电量(<0)时退回按时间打点: 那种情况下"电量变化"永远等不到, 会一片空白。
+        if (battery != last_batt) or (battery < 0 and waited - last_report >= 30):
+            last_batt, last_report = battery, waited
             msg = f"等待电量达标({min_level}%)... 已等 {waited}s, 电量 {battery}%"
             log.info(f"[前置] {msg}")
             if on_progress:
@@ -1109,8 +1134,13 @@ def prepare_items(d, cfg, items, on_progress=None, should_cancel=None,
     shot_subdir: 「自定义步骤」型前置的内部截图目录名(screenshots/ 下) ——
     不给则退回用前置名当目录(每轮同路径互相覆盖, 且封顶清理不认, 审查 2026-10-12)。
 
-    on_step_start(desc, attempt): 「自定义步骤」型前置的**每一步开始**时回调
-    (desc 已带前置项名前缀) —— GUI 用它插"执行中"行(2026-10-13, 与用例同体验)。
+    on_step_start(desc, attempt): **开始执行**时回调, GUI 用它插「执行中」行
+    (2026-10-13, 与用例同体验)。两处会调:
+      · 每一条**非**「自定义步骤」型前置项开始跑时 —— desc 就是 `item_label(item)`
+        (2026-10-16 补: 原来只有自定义步骤型会吭声, 电量门槛这种"等几十分钟"的项
+        期间结果表一片空白, 看着像卡死);
+      · 「自定义步骤」型前置**内部每一步**开始时 —— desc 形如 `自定义步骤(2步): 点击X`
+        (父项自己那行不在此列, 由完成时的结果行给出, 避免多出一行)。
 
     ★ on_item_done(result): **每执行完一条立刻回调** —— GUI 用它把结果逐条落表,
       用户要求"一条一条显示结果和耗时, 而不是全部执行完再一次性刷出来"。
@@ -1158,6 +1188,21 @@ def prepare_items(d, cfg, items, on_progress=None, should_cancel=None,
                 _finish(i, desc, False, skipped=True)      # 间隔中收到停止 → 未执行
                 continue
         ran += 1
+        # ★ 除「自定义步骤」型之外的每条前置项, **开始时就插一行「执行中」**
+        #   (用户 2026-10-16: "充电检测已经通过了, 跑后面的电量检测时, 执行结果中为何
+        #    没有显示电量检测的执行中状态")。原来只有自定义步骤型有开始事件(它内部每一步
+        #    各发一次), 其余类型(等待充电/电量门槛/地图加载/进入设备页...)从头到尾不吭声,
+        #    结果表里那一行要等整项跑完才冒出来 —— 电量门槛这种"等几十分钟"的项, 期间界面
+        #    看着就像卡住了。
+        #   · 不动「自定义步骤」型: 它内部的步骤行已经是"执行中"指示, 再给父项插一行,
+        #     完成时的父行会另起一行 → 变成两行(界面按 _running_row 就地改写, 不留占位);
+        #   · 完成时 `_emit_pre_result` 会把这一行**就地**改成 PASS/FAIL(界面不比对 desc),
+        #     所以"电量门槛≥50%"→"…(当前电量 45%)"这种描述变化不会造成重复行。
+        if on_step_start and item.get("type") != "steps":
+            try:
+                on_step_start(desc, 1)
+            except Exception as e:          # 界面回调异常不能影响前置执行本身
+                log.debug(f"[前置] 开始回调异常(忽略): {e}")
         t0 = time.time()
         sub = []
         try:
