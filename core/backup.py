@@ -7,7 +7,7 @@
   丢了只能手工重建。备份是这条链路上唯一的兜底。
 
 ★ 备份什么
-  `config/config.yaml` + `Test_cases/` + `Test_preconditions/` + `Test_img/templates/`
+  `config/config.yaml` + `Test_cases/`(含各组 `templates/` 模板图) + `Test_preconditions/`
   —— 都是"人做出来的、丢了要重做"的东西。
   不备份截图/调试图/报告: 那是可再生的运行产物, 体积还大(一屏就几 MB)。
 

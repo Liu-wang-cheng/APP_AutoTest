@@ -315,6 +315,7 @@ class RunWorker(QThread):
                     failed = [(f"{r['desc']}({r['reason']})" if r.get("reason")
                                else r["desc"]) for r in pre_results
                               if not r["ok"] and not r.get("skipped")]
+                    retry_base = 0        # 重试批次在 items 里的起点(见下面 first_failed 的换算)
                     while failed and not self._stop_requested:
                         detail = "、".join(failed)
                         self.log_line.emit(f"[前置] 未通过,已暂停等待处理: {detail}")
@@ -338,8 +339,14 @@ class RunWorker(QThread):
                                              if not r["ok"]
                                              and r["key"].startswith("pre")
                                              and r["key"][3:].isdigit()), None)
-                        retry_items = items[first_failed:]                             if first_failed is not None else []
-                        self.status.emit(f"重试前置(从第 {first_failed + 1} 项起, "
+                        # ★ 序号是"这一批"里的下标 —— 重试时那一批是 items 的**切片**,
+                        #   必须加回起点才是 items 里的真实下标(2026-10-16 修: 之前第二次
+                        #   重试会拿着切片下标去切 items, 把已经通过的项重跑或整段漏跑)。
+                        idx = (retry_base + first_failed) if first_failed is not None else None
+                        retry_items = items[idx:] if idx is not None else []
+                        if idx is not None:
+                            retry_base = idx
+                        self.status.emit(f"重试前置(从第 {(idx or 0) + 1} 项起, "
                                          f"共 {len(retry_items)} 项)…")
                         pre_results = session.prepare_items(
                             d, cfg, retry_items,

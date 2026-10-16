@@ -109,3 +109,35 @@ def test_step_summary_else_badge():
 
 def test_unknown_action_reported():
     assert schema.validate_step({"desc": "啥也不是", "unknown_key": 1})
+
+
+def test_swipe_direction_does_not_need_end_point():
+    """★ 方向滑动不需要「结束点位」(2026-10-16 修): `swipe: up` / `fast-left` 由引擎
+    自己算起止点(core/actions/basic.do_swipe), 一刀切必填会把合法步骤判成"必填缺失"
+    —— tools/validate_cases.py 报的 4 个假问题、CI「静态检查」一直红就是这么来的。
+    写成坐标时才必须同时给结束点位。
+    """
+    assert schema.validate_step({"desc": "滑", "swipe": "up"}) == []
+    assert schema.validate_step({"desc": "滑", "swipe": "fast-left"}) == []
+    assert schema.validate_step({"desc": "滑", "swipe": "100,500"}) == ["「结束点位」必填"]
+    assert schema.validate_step({"desc": "滑", "swipe": "100,500",
+                                 "swipe_end": "100,1500"}) == []
+    # 全角逗号也算坐标(与 split_texts/parse_xy 的口径一致)
+    assert schema.validate_step({"desc": "滑", "swipe": "100，500"}) == ["「结束点位」必填"]
+    assert schema.validate_step({"desc": "滑", "swipe": "100,500",
+                                 "swipe_end": "100，1500"}) == []
+
+
+def test_float_values_display_without_trailing_dot_zero():
+    """★ 用户 2026-10-16: YAML 里 `sleep: 5.0` / `wait: 10.0` 这类浮点, 显示要按人写的
+    样子收干净(5s / +10s), 别出现 5.0s —— 2026-10-14 只修了数值分支, 字符串 "5.0"
+    (老用例/手写 YAML 常见)还漏着。"""
+    assert schema.step_summary({"desc": "等", "sleep": 5.0}) == "等 · 5s"
+    assert schema.step_summary({"desc": "等", "sleep": "5.0"}) == "等 · 5s"
+    assert schema.step_summary({"desc": "等", "sleep": 180.0}) == "等 · 180s"
+    assert schema.step_summary({"desc": "等", "sleep": 5.5}) == "等 · 5.5s"   # 真小数不动
+    assert schema.step_summary({"wait": 5.0}) == "延时等待 5s"
+    s = {"desc": "点它", "click": "a.png", "wait": 10.0}
+    assert "+10s" in schema.step_summary(s), schema.step_summary(s)
+    # 非数字文本原样显示(别被 fmt_num 吃掉)
+    assert schema.step_summary({"desc": "滑", "swipe": "fast-left"}) == "滑 · fast-left"

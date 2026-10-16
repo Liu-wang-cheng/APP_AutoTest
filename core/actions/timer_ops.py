@@ -368,4 +368,6 @@ def do_sleep(runner, step):
         log.info(f"[sleep] 等待 {seconds:g} 秒")
         t0 = time.time()
         runner._sleep(seconds)          # 中途被停止会抛 UserStopped(不打印结束行)
-        log.info(f"[sleep] 等待结束(实际 {time.time() - t0:.1f} 秒)")
+        # ★ 整数秒不显示小数点(用户 2026-10-16: "延迟等待这里为何还是5.0的秒数显示"):
+        #   用时本来可能是 5.3s 这种, 但 5.0 就该写 5 —— 与界面上的写法一致
+        log.info(f"[sleep] 等待结束(实际 {round(time.time() - t0, 1):g} 秒)")

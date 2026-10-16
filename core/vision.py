@@ -172,7 +172,7 @@ def template_shape(template_path):
     return _tpl_shape_cache[key]
 
 
-def find_in_gray(screen_gray, template_path, min_matches=4, ratio=0.7):
+def find_in_gray(screen_gray, template_path, min_matches=4, ratio=0.7, detail=None):
     """模板定位主入口:SIFT 几何匹配优先,失败自动落全屏 NCC 兜底。
 
     - SIFT+RANSAC+NCC 二次验证:抗缩放/旋转,大中型模板的主力通道
@@ -180,14 +180,18 @@ def find_in_gray(screen_gray, template_path, min_matches=4, ratio=0.7):
       展开清扫数据 42x42),特征点屈指可数,几何匹配天然不可靠;但设备
       分辨率固定、UI 渲染确定,原生尺度互相关极稳 —— 实测同链路帧 1.000、
       跨截图链路 1.000、负样本 ≤0.48,判据非常干净
+
+    detail(用户 2026-10-16): 传一个 dict 进来 → 填 {"score","scale","source"}。
+    "点错了按钮"(回充点成启动)这类问题只看返回坐标是看不出来的 —— 日志里带上
+    分数/尺度, 才看得出"0.62 分, 一点余量都没有"和"要靠放大 1.2 倍才命中"。
     """
-    pos = _find_by_sift(screen_gray, template_path, min_matches, ratio)
+    pos = _find_by_sift(screen_gray, template_path, min_matches, ratio, detail=detail)
     if pos is not None:
         return pos
-    return _find_by_ncc(screen_gray, template_path)
+    return _find_by_ncc(screen_gray, template_path, detail=detail)
 
 
-def _find_by_sift(screen_gray, template_path, min_matches, ratio):
+def _find_by_sift(screen_gray, template_path, min_matches, ratio, detail=None):
     """SIFT 特征匹配:RANSAC 单应校验 + NCC 二次验证,返回模板中心或 None"""
     kp1, des1 = template_features(template_path)
     if des1 is None or len(des1) < 2:
@@ -258,6 +262,9 @@ def _find_by_sift(screen_gray, template_path, min_matches, ratio):
             best_size = (rw, rh)
     if best_tl is None or best_score < 0.5:
         return None
+    if detail is not None:
+        detail.update(score=float(best_score), scale=float(best_size[0] / max(tw, 1)),
+                      source="sift")
     return (best_tl[0] + best_size[0] // 2, best_tl[1] + best_size[1] // 2)
 
 
@@ -282,7 +289,7 @@ def _template_native(template_path):
     return _tpl_native_cache[key]
 
 
-def _find_by_ncc(screen_gray, template_path):
+def _find_by_ncc(screen_gray, template_path, detail=None):
     """全屏多尺度归一化互相关:小图标兜底,只在 SIFT 失败后触发。
 
     与 SIFT 通道互补:SIFT 抗缩放/旋转但依赖特征点数量;NCC 不依赖特征点,
@@ -316,9 +323,15 @@ def _find_by_ncc(screen_gray, template_path):
     #   (三星那三个圆按钮: 暂停模板 0.663、回充模板 0.984 都命中了"启动"按钮)。
     #   这不是算法能救的: 该重截模板。所以这里只**明确喊一声**, 不改判定(多尺度是给
     #   半分辨率截图那类模板用的, 收紧阈值会误伤它们)。
-    if scale > 1.25 or scale < 0.8:
+    #   阈值 2026-10-16 从「>1.25 或 <0.8」收紧到「≥1.2 或 ≤0.8」: 用户的日志里那次
+    #   "点了回充却没回充"的匹配正是 scale=1.20 —— 旧阈值刚好把它放过去了(引擎的尺度阶梯
+    #   是 0.6/0.8/1.0/1.2/1.5/2.0, 所以 1.2 意味着模板与界面差 20%, 足以让圆盘边缘
+    #   盖过图标细节, 出现"同形按钮互相点错")。
+    if scale >= 1.2 or scale <= 0.8:
         log.warning("[模板尺度] 这个模板要缩放到 %.2fx 才匹配得上(真机原生尺度=1.00) —— "
                     "多半是模板与设备界面尺度不一致, 容易出现同形按钮互相误匹配; "
-                    "建议在该设备上重截(只裁图标主体, 别带按钮外的背景)",
+                    "建议在该设备上用「裁剪模板」重截(把整个按钮盘裁进去)",
                     scale)
+    if detail is not None:
+        detail.update(score=float(best_score), scale=float(scale), source="ncc")
     return (best_loc[0] + best_size[0] // 2, best_loc[1] + best_size[1] // 2)

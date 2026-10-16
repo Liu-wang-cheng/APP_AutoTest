@@ -12,7 +12,8 @@ import yaml
 
 from core import registry as reg
 from core import ocr
-import core.actions  # noqa: F401  导入即注册全部动作(见 core/actions/__init__.py)
+from core import actions as _actions      # 导入即注册全部动作(见 core/actions/__init__.py)
+_actions.load_all()                       # 幂等: 显式调用一次, 免得这行被当成笔误删掉
 from core.driver import BASE_DIR, split_texts
 from core.session import (text_present_detail, warm_webview,  # noqa: E501  判断统一入口 + WebView 预热
                           scan_status_words, set_status_words, FaultStateError)

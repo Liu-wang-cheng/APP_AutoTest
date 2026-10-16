@@ -85,12 +85,83 @@ def is_charging(d, text=None):
     return _any_present(d, texts, xml=xml)
 
 
-def click_template(d, img_name, timeout=10, should_cancel=None):
+#: 前置检测的**执行间隔**(秒) —— 用户 2026-10-16: "每个前置检测的执行间隔设置成默认5s"。
+#: 两个地方都用它:
+#:   ① 前置项之间: 上一项结束 → 等这么久再跑下一项(设备页/插件页要时间稳定下来);
+#:   ② 等待型检查(等待充电 / 电量门槛)的**轮询间隔** —— 原来写死 30s: 设备刚回到充电座
+#:      也要等半分钟才被发现, 日志里也只看到每 30s 一条, "它到底在等什么"看不出来。
+#: 每个前置项都能在自己的参数里改(见 PRECONDITION_COMMON_PARAMS)。
+PRECONDITION_INTERVAL_DEFAULT = 5
+
+#: 回充按钮模板的**最低可信分** —— 低于它就多半点错了按钮(见 ensure_charging 的预警)。
+#: 引擎阈值是 0.62(命中即算), 但"刚好压线"的命中在真机上就是"点错按钮":
+#: 用户 2026-10-16 的日志里回充模板 0.62 命中在"启动"按钮上, 机器人反而继续清扫。
+RECHARGE_MIN_SCORE = 0.75
+
+
+def _safe_battery(d):
+    """读电量(只给日志留痕用): 读不到返回 -1, **绝不**因为读电量把前置搞崩"""
+    try:
+        return get_battery_level(d)
+    except Exception as e:
+        log.debug(f"[前置] 读电量失败(忽略): {e}")
+        return -1
+
+
+def _page_sample(d, xml=None, limit=10):
+    """页面上现在有哪些文本(给"未命中"留证据);取不到返回 []。
+
+    ★ 为什么要它(用户 2026-10-16): "我给了 充电,满电 两个文本为何都识别不到" ——
+      只写"未命中"的话, 人只能自己去复现; 把**当时页面上的文本**记下来, 一眼就能看出
+      "那会儿页面显示的是『正在清洁』, 根本没在充电", 而不是"文本配置写错了"。
+
+    ★ 与 `runner` 的 [FAIL诊断]「当前页面文本」**故意不同**: 那边不过滤系统 UI(排查时
+      要全屏都看到了什么); 这里要过滤 —— 手机状态栏的「正在充电，已完成百分之 97」要是
+      混进来, 恰好会把"机器人到底在不在充电"这件事看反(那正是这条日志要回答的问题)。
+    """
+    out, seen = [], set()
+
+    def _add(v):
+        v = (v or "").strip()
+        if v and v not in seen:
+            seen.add(v)
+            out.append(v)
+
+    try:
+        xml = warm_webview(d) if xml is None else xml
+        for text, desc, _pos in visible_nodes(xml):
+            _add(text)
+            _add(desc)
+            if len(out) >= limit:
+                return out
+        # ★ 无障碍树里没几条文本时补一次截图识别(插件页/WebView 常见): 只看树的话,
+        #   日志可能只写得出"页面文本: []" —— 那等于没留证据(OCR 兜底本来就在文本
+        #   判定链路上, 见 text_present 的 sparse 处理)。
+        if len(out) < 3:
+            try:
+                from core import ocr
+                from core.sentinel import system_ui_regions
+                for t, _pos in ocr.screen_texts(
+                        d, exclude=system_ui_regions(xml)):
+                    _add(t)
+                    if len(out) >= limit:
+                        break
+            except Exception as e:      # OCR 兜底拿不到就算了(它只是日志增强)
+                log.debug(f"[前置] 页面文本 OCR 取样失败(忽略): {e}")
+    except Exception as e:              # 取样只是日志增强, 不能影响前置本身的判定
+        log.debug(f"[前置] 页面文本取样失败(忽略): {e}")
+    return out
+
+
+def click_template(d, img_name, timeout=10, should_cancel=None, detail=None):
     """SIFT 定位并点击模板图片,成功返回坐标,失败返回 None
 
     ★ should_cancel(结构守护 2026-10-15): 这里原来用**裸 time.sleep(2)** 轮询 ——
       前置里点模板按钮(回充/开始清扫等)时按「停止」, 得等满 timeout 才响应。本模块
       10 行之下就有可中断的 `_sleep(seconds, should_cancel)`, 之前漏用了。
+    ★ detail(用户 2026-10-16): 传入一个 dict 时, 把**匹配分/尺度**填进去 —— 用户日志里
+      "点了回充却一直在放电"这类问题, 只看坐标看不出是"点错了按钮"; 有分数才看得出
+      (实测: 回充模板 0.62 分命中在"启动"按钮上, 0.62 就是引擎阈值本身, 一点余量都没有)。
     """
     img_path = vision.resolve_template(img_name)
     end = time.time() + timeout
@@ -99,7 +170,8 @@ def click_template(d, img_name, timeout=10, should_cancel=None):
             log.info("[前置] 收到停止请求, 中止模板点击")
             return None
         screen = d.screenshot(format="opencv")
-        pos = vision.find_in_gray(cv2.cvtColor(screen, cv2.COLOR_BGR2GRAY), img_path)
+        pos = vision.find_in_gray(cv2.cvtColor(screen, cv2.COLOR_BGR2GRAY), img_path,
+                                  detail=detail)
         if pos:
             d.click(*pos)
             return pos
@@ -290,23 +362,28 @@ def ensure_device_page(d, device_name="", ready_text=DEFAULT_DEVICE_READY_TEXT,
 
 def ensure_charging(d, timeout=1200, on_progress=None, should_cancel=None,
                     ready_text=None, device_name="", recharge_tpl=None,
-                    recharge_text=None):
+                    recharge_text=None, interval=PRECONDITION_INTERVAL_DEFAULT):
     """确保设备处于充电状态(未充电则回充),默认超时 20 分钟;should_cancel 可中断等待
 
     ready_text:    充电判定文本(可配置, 多个用逗号/顿号分隔);留空用默认「充电」
     recharge_tpl:  回充按钮的**模板名**(按当前 APP 组的模板目录解析);
                    留空用默认「开始回充.png」
     recharge_text: 回充按钮的**文本**(可选)。填了就先用文本点, 文本命不中再落到模板。
+    interval:      轮询间隔(秒, 默认 5) —— 见 PRECONDITION_INTERVAL_DEFAULT。
 
     ★ 为什么回充按钮要能配(2026-10-11 用户要求): 各 APP 的按钮/图标不一样, 有的组
       就是拿本组的模板图去点的 —— 写死「开始回充.png」时, 换个组就得改代码。
+
+    ★ 留痕(用户 2026-10-16): "未命中"也要说清**查了哪些词、页面上当时有什么**; 等超时
+      还要说清**电量是升是降**(不升反降 = 回充根本没生效, 不是"状态文本没更新")。
+      原来只写一句"超时 20 分钟", 用户只能猜是设备问题还是模板问题。
     """
+    texts = _split_texts(ready_text) or _split_texts(DEFAULT_CHARGING_TEXT)
     charging = is_charging(d, ready_text)
     if charging:
         # ★ 命中信息(用户 2026-10-15): 多判定词时看得出按哪个判的(与断言留痕同思路)。
         #   判定仍以 is_charging 为准(测试桩接口不动); 这里只为日志补细节, 失败忽略。
         try:
-            texts = _split_texts(ready_text) or _split_texts(DEFAULT_CHARGING_TEXT)
             xml = warm_webview(d)
             hit, _src, raw, _pos = text_present_detail(d, texts, xml=xml)
         except Exception:
@@ -314,6 +391,14 @@ def ensure_charging(d, timeout=1200, on_progress=None, should_cancel=None,
         log.info("[前置] 设备处于充电状态"
                  + (f": 命中「{hit}」← {raw!r}" if hit else ""))
         return True
+    # ★ 未命中也要留痕(用户 2026-10-16): 查了哪些判定词 + 页面上真正有什么文本。
+    #   只写"未充电"时, "我给了 充电,满电 两个词为何都识别不到" 只能靠人复现去猜。
+    try:
+        sample = _page_sample(d)
+        log.info(f"[前置] 未命中充电判定文本「{'、'.join(texts)}」"
+                 f"(判定: 任一命中即算充电) ← 当前页面文本: {sample}")
+    except Exception as e:
+        log.debug(f"[前置] 页面文本取样失败(忽略): {e}")
     tpl = (recharge_tpl or "").strip() or "开始回充.png"
     text = (recharge_text or "").strip()
     log.info(f"[前置] 设备未充电,点击回充按钮(文本:{text or '未配'}, 模板:{tpl})...")
@@ -327,10 +412,22 @@ def ensure_charging(d, timeout=1200, on_progress=None, should_cancel=None,
         else:
             log.info(f"[前置] 没找到文本「{text}」的回充按钮, 改用模板「{tpl}」")
     if not clicked:
-        pos = click_template(d, tpl, should_cancel=should_cancel)
+        info = {}
+        pos = click_template(d, tpl, should_cancel=should_cancel, detail=info)
         if pos:
             clicked = True
-            log.info(f"[前置] 已按模板点击回充按钮「{tpl}」@ ({pos[0]}, {pos[1]})")
+            score, scale = info.get("score"), info.get("scale")
+            extra = (f", 匹配分 {score:.2f}"
+                     + (f"@尺度 {scale:.2f}x" if scale else "")) if score is not None else ""
+            log.info(f"[前置] 已按模板点击回充按钮「{tpl}」@ ({pos[0]}, {pos[1]}){extra}")
+            # ★ 低置信度预警(用户 2026-10-16 的真实事故): 那台设备的回充模板只有 0.62 分
+            #   (== 引擎阈值, 零余量)、还要放大 1.2 倍才命中 —— 结果点在了"启动"按钮上,
+            #   机器人没去回充反而继续清扫(电量 45%→34%), 而日志看不出来。
+            if score is not None and score < RECHARGE_MIN_SCORE:
+                log.warning(
+                    "[前置] 回充按钮**匹配置信度低**(%.2f < %.2f) —— 很可能点错了按钮; "
+                    "请在该设备上用用例编辑区的「裁剪模板」重截「%s」"
+                    "(把整个按钮盘连图标一起裁进去)", score, RECHARGE_MIN_SCORE, tpl)
         else:
             # 不直接判失败: 机器可能已经在回充路上(只是状态文本还没变), 继续等更稳
             log.warning(f"[前置] 文本/模板都没点到回充按钮(模板:{tpl}), 继续等待充电状态")
@@ -339,9 +436,13 @@ def ensure_charging(d, timeout=1200, on_progress=None, should_cancel=None,
         d(textContains="确认").click()
         log.info("[前置] 已点击确认弹窗")
     end = time.time() + timeout
+    start_batt = _safe_battery(d)              # 起点电量(超时时用来说明"到底有没有回充")
+    hinted = False
     while time.time() < end:
         if is_charging(d, ready_text):
-            log.info("[前置] 设备已进入充电状态")
+            log.info("[前置] 设备已进入充电状态"
+                     + (f"(命中判定文本「{ready_text or DEFAULT_CHARGING_TEXT}」)"
+                        if ready_text else ""))
             return True
         if should_cancel and should_cancel():
             log.info("[前置] 收到停止请求,中断充电等待")
@@ -352,8 +453,25 @@ def ensure_charging(d, timeout=1200, on_progress=None, should_cancel=None,
         log.info(f"[前置] {msg}")
         if on_progress:
             on_progress(msg)
-        time.sleep(30)
-    log.warning(f"[前置] 超时 {timeout // 60} 分钟,设备仍未进入充电状态")
+        # 点了回充 1 分钟还没充上 → 提示"可能没点中"(一次就够, 别刷屏)
+        if not hinted and clicked and elapsed >= 60:
+            hinted = True
+            log.warning(f"[前置] 已点击回充按钮 {elapsed}s 仍未进入充电状态 —— "
+                        f"按钮可能没点中/点错(模板「{tpl}」); 可继续等待, 也可按停止后"
+                        f"用「裁剪模板」重截该模板")
+        time.sleep(max(1, int(interval)))
+    batt_end = _safe_battery(d)
+    log.warning(f"[前置] 超时 {timeout // 60} 分钟,设备仍未进入充电状态"
+                f"(判定文本「{'、'.join(texts)}」始终未出现)")
+    if start_batt >= 0 and batt_end >= 0:
+        if batt_end < start_batt:
+            log.warning(f"[前置] 等待期间电量 {start_batt}% → {batt_end}%(不升反降) —— "
+                        f"回充**没有生效**: 机器人多半还在清扫/执行任务。请确认回充按钮"
+                        f"(模板「{tpl}」)在当前状态下点对了位置, 或用「裁剪模板」重截")
+        elif batt_end >= start_batt:
+            log.warning(f"[前置] 等待期间电量 {start_batt}% → {batt_end}%(未下降) —— "
+                        f"回充可能已生效但状态文本没更新; 建议把该状态的文案加进"
+                        f"「充电判定文本」(当前: {'、'.join(texts)})")
     return False
 
 
@@ -434,12 +552,24 @@ def tap_blank(d, point=None):
 #: 节点标签 / 属性解析(判断类要用 bounds 判断"是否真的渲染了")
 # ── 设备状态哨兵(词表/连续计数/可见节点扫描)已抽到 core/sentinel.py(结构整理 2026-10-15):
 #    纯逻辑一整块搬走, 这里 re-export 保持 `session.X` 的老用法不变 ──
-from core.sentinel import (                                       # noqa: F401
+from core.sentinel import (
     _NODE_ATTR_RE, _NODE_RE, _ZERO_BOUNDS, DEFAULT_FAULT_STREAK,
     DEFAULT_FAULT_WORDS, DEFAULT_IDLE_STREAK, DEFAULT_IDLE_WORDS, _clamp_streak,
     fingerprint_xml, reset_status_words, scan_status_words, set_status_words,
     _status_words, _streak_counters, streak_status_word, visible_nodes, _word_in,
 )
+
+# ★ 转出去的名字要"被用一次", 静态检查 (pyflakes) 才不当它是笔误(它不认 noqa;
+#   2026-10-16 之前 CI 的静态检查就是被这一行绊红的)。列进 `__all__` 是 Python 里
+#   表达"这些是本模块对外提供的名字"的标准写法。
+#   注: 本模块的 `__all__` 只列这批**转出去的**名字 —— 所以别在本项目里写
+#   `from core.session import *`(tests/test_gui_structure_guard.py 的
+#   test_no_star_imports_anywhere 会把 `import *` 直接拦下)。
+__all__ = ["_NODE_ATTR_RE", "_NODE_RE", "_ZERO_BOUNDS", "DEFAULT_FAULT_STREAK",
+           "DEFAULT_FAULT_WORDS", "DEFAULT_IDLE_STREAK", "DEFAULT_IDLE_WORDS",
+           "_clamp_streak", "fingerprint_xml", "reset_status_words",
+           "scan_status_words", "set_status_words", "_status_words",
+           "_streak_counters", "streak_status_word", "visible_nodes", "_word_in"]
 
 
 class FaultStateError(AssertionError):
@@ -718,8 +848,14 @@ def ensure_text_check(d, wait_text="", absent_text="", timeout=60,
     return False
 
 
-def ensure_battery(d, min_level=50, timeout=1800, on_progress=None, should_cancel=None):
-    """确保电量达标,默认 >50%,兜底 30 分钟防止无限等待;should_cancel 可中断等待"""
+def ensure_battery(d, min_level=50, timeout=1800, on_progress=None, should_cancel=None,
+                   interval=PRECONDITION_INTERVAL_DEFAULT):
+    """确保电量达标,默认 >50%,兜底 30 分钟防止无限等待;should_cancel 可中断等待
+
+    interval: 轮询间隔(秒, 默认 5, 见 PRECONDITION_INTERVAL_DEFAULT)。
+    ★ 等待过程要**可见**(用户 2026-10-16): 原来只有开头一句"不足 50%,等待充电..." +
+      结尾一句 —— 用户日志里那 6 分钟是一片空白, 分不清"在等"还是"卡死"。
+    """
     battery = get_battery_level(d)
     if battery < 0:
         log.info("[前置] 未读取到电量信息,跳过电量检查")
@@ -727,18 +863,65 @@ def ensure_battery(d, min_level=50, timeout=1800, on_progress=None, should_cance
     if battery >= min_level:
         log.info(f"[前置] 电量 {battery}%,达标")
         return True
+    start_batt = battery
     log.info(f"[前置] 电量 {battery}%,不足 {min_level}%,等待充电...")
     end = time.time() + timeout
+    last_report = 0.0
     while time.time() < end:
         if should_cancel and should_cancel():
             log.info("[前置] 收到停止请求,中断电量等待")
             return False
-        time.sleep(30)
+        time.sleep(max(1, int(interval)))
         battery = get_battery_level(d)
         if battery >= min_level or battery <= 0:
             break
+        waited = int(timeout - (end - time.time()))
+        if waited - last_report >= 30:      # 每 30s 报一次, 别把日志刷满
+            last_report = waited
+            msg = f"等待电量达标({min_level}%)... 已等 {waited}s, 电量 {battery}%"
+            log.info(f"[前置] {msg}")
+            if on_progress:
+                on_progress(msg)
     log.info(f"[前置] 电量等待结束,当前 {battery}%")
+    if battery < min_level and battery > 0 and battery < start_batt:
+        log.warning(f"[前置] 等待期间电量 {start_batt}% → {battery}%(不升反降) —— "
+                    f"设备没在充电, 请检查回充是否成功")
     return battery >= min_level or battery <= 0
+
+
+#: 每个前置项都带的**通用参数**(GUI 的编辑框里跟在类型参数后面一起显示)。
+#: 用户 2026-10-16: "每个前置检测的执行间隔设置成默认5s" + "超时了也没暂停用例也没弹窗
+#: 提醒, 还会继续后面的前置检测" —— 前者落到 interval, 后者落到 soft。
+PRECONDITION_COMMON_PARAMS = [
+    {"key": "interval", "label": "执行间隔(秒)", "default": PRECONDITION_INTERVAL_DEFAULT,
+     "type": "int",
+     "hint": "本项**开始前**的等待(第一项不加), 也是等待型检查(等待充电/电量门槛)的"
+             "轮询间隔; 默认 5"},
+    {"key": "soft", "label": "失败不阻断(继续后面的前置)", "default": False, "type": "bool",
+     "hint": "默认不勾: 本项未通过就停下来等你处理(弹窗: 重试/取消), 后面的前置项不再执行"},
+]
+
+
+def item_interval(item):
+    """前置项的执行间隔(秒, 默认 5) —— 用户可改;<=0 表示不等"""
+    try:
+        v = int(float(item.get("interval", PRECONDITION_INTERVAL_DEFAULT)))
+    except (TypeError, ValueError):
+        v = PRECONDITION_INTERVAL_DEFAULT
+    return max(0, v)
+
+
+def item_is_soft(item):
+    """本项失败是否"不阻断"(继续跑后面的前置项)?
+
+    默认按**类型**给: 进入设备页/地图加载这两个从设计上就是"确认不了也继续执行 ——
+    后续步骤会暴露"(见 ensure_device_page/ensure_map_loaded 的注释), 所以它们默认不阻断,
+    免得把原来能跑完的流程改成"卡在弹窗上等人"。其余类型默认阻断(用户 2026-10-16 要求)。
+    """
+    if "soft" in item:
+        return bool(item.get("soft"))
+    spec = PRECONDITION_TYPES.get(item.get("type")) or {}
+    return bool(spec.get("soft_default", False))
 
 
 # GUI「添加前置条件」可选的类型 → 展示名 + 可编辑参数(字段: 键/标签/默认值/类型)
@@ -758,7 +941,8 @@ PRECONDITION_TYPES = {
         {"key": "recharge_text", "label": "回充按钮文本(可选)", "default": "",
          "type": "text",
          "hint": "填了就**先用文本点**(如 回充); 文本命不中再落到模板。留空只用模板"}]},
-    "map_load": {"label": "等待地图加载", "params": [
+    # soft_default: 见 item_is_soft() —— 这两项历史上就是"确认不了也继续执行"
+    "map_load": {"label": "等待地图加载", "soft_default": True, "params": [
         {"key": "timeout", "label": "单轮超时(秒)", "default": 10, "type": "int"},
         {"key": "rounds", "label": "重试轮数", "default": 6, "type": "int"},
         {"key": "ready_text", "label": "就绪文本", "default": "地图编辑", "type": "text",
@@ -769,7 +953,7 @@ PRECONDITION_TYPES = {
     "battery": {"label": "电量门槛", "params": [
         {"key": "min_level", "label": "最低电量(%)", "default": 50, "type": "int"},
         {"key": "timeout", "label": "超时(秒)", "default": 1800, "type": "int"}]},
-    "enter_device": {"label": "进入设备页(按文本确认)", "params": [
+    "enter_device": {"label": "进入设备页(按文本确认)", "soft_default": True, "params": [
         {"key": "device_name", "label": "设备名称", "default": "", "type": "text",
          "hint": "留空 = 用配置里的「设备名称」"},
         {"key": "ready_text", "label": "已进入的判定文本", "default": DEFAULT_DEVICE_READY_TEXT,
@@ -826,7 +1010,8 @@ def _run_one(d, cfg, item, on_progress, should_cancel, collect=None,
                                ready_text=item.get("ready_text"),
                                device_name=cfg.get("target_device", ""),
                                recharge_tpl=item.get("recharge_tpl"),
-                               recharge_text=item.get("recharge_text"))
+                               recharge_text=item.get("recharge_text"),
+                               interval=item_interval(item))
     if t == "enter_device":
         return ensure_device_page(
             d,
@@ -846,7 +1031,8 @@ def _run_one(d, cfg, item, on_progress, should_cancel, collect=None,
     if t == "battery":
         return ensure_battery(d, min_level=int(item.get("min_level", 50)),
                               timeout=int(item.get("timeout", 1800)),
-                              on_progress=on_progress, should_cancel=should_cancel)
+                              on_progress=on_progress, should_cancel=should_cancel,
+                              interval=item_interval(item))
     if t == "tap_blank":
         return tap_blank(d, _parse_point(item.get("point")))
     if t == "steps":
@@ -928,6 +1114,13 @@ def prepare_items(d, cfg, items, on_progress=None, should_cancel=None,
 
     ★ on_item_done(result): **每执行完一条立刻回调** —— GUI 用它把结果逐条落表,
       用户要求"一条一条显示结果和耗时, 而不是全部执行完再一次性刷出来"。
+
+    ★ 第一项未通过就**停**: (用户 2026-10-16 实际事故) "等待充电"超时后, 后面的
+      "电量门槛"接着跑了 6 分钟, 直到人手动按停止 —— 前置项之间是有依赖的
+      (没充上电, 后面的电量门槛必然也是白等), 继续跑只会把失败拖长、把日志搅浑。
+      现在: 某条未通过且**不是**"失败不阻断"(soft)的项 → 后面所有项记成"未执行"
+      (中性, 与"停止后剩下的项"同一套语义)并立刻返回, 由调用方弹窗/暂停处理。
+      个别项确实"失败了也无所谓"时, 在它自己的参数里勾「失败不阻断」。
     """
     results = []
 
@@ -948,13 +1141,23 @@ def prepare_items(d, cfg, items, on_progress=None, should_cancel=None,
                 log.warning(f"[前置] 结果回调异常(忽略): {e}")
         return r
 
+    blocked = None                      # 已有一条未通过且不"失败不阻断" → 后面的都不跑
+    ran = 0                             # 真跑过的项数(间隔只加在两项之间)
     for i, item in enumerate(items or []):
         if not item.get("enabled", True):
             continue
         desc = item_label(item)
-        if should_cancel and should_cancel():
-            _finish(i, desc, False, skipped=True)   # 未执行(用户停止), 不是失败
+        if (should_cancel and should_cancel()) or blocked is not None:
+            _finish(i, desc, False, skipped=True)   # 未执行(停止/前面已失败), 不是失败
             continue
+        # ★ 执行间隔(用户 2026-10-16): 上一项收尾后设备页还要稳定一下再查下一项。
+        #   只加在**两项之间** —— 第一项前不加(那时还没有"上一项", 白等 5s 只是拖延)。
+        if ran:
+            gap = item_interval(item)
+            if gap and not _sleep(gap, should_cancel):
+                _finish(i, desc, False, skipped=True)      # 间隔中收到停止 → 未执行
+                continue
+        ran += 1
         t0 = time.time()
         sub = []
         try:
@@ -965,10 +1168,15 @@ def prepare_items(d, cfg, items, on_progress=None, should_cancel=None,
             #   原文)进结果与报告**, 不再只有干巴巴的"超时或失败"
             log.warning(f"[前置] {desc}: {e}")
             _finish(i, desc, False, time.time() - t0, sub=sub, reason=str(e))
+            blocked = blocked or desc
             continue
         if ok is None:
             continue                    # 该项跳过(如未配置文本)
         _finish(i, desc, ok, time.time() - t0, sub=sub)
+        if not ok and not item_is_soft(item):
+            blocked = desc
+            log.warning(f"[前置] {desc}: 未通过 → 后续前置项不再执行, "
+                        f"停下来等你处理(可在该项参数里勾「失败不阻断」改这个行为)")
     return results
 
 
@@ -1014,6 +1222,11 @@ def item_label(item):
         extra = f"({x},{y})"
     elif t == "enter_device":
         extra = f"确认文本: {item.get('ready_text') or DEFAULT_DEVICE_READY_TEXT}"
+    # ★ 「失败不阻断」要在列表里看得出来(用户 2026-10-16): 否则只有点开编辑框才知道
+    #   为什么这一项失败后流程还在继续。默认不阻断的类型(见 item_is_soft)只在用户
+    #   显式勾/取消时标注 —— 免得默认配置的每一项后面都挂一个尾巴。
+    if "soft" in item and item.get("soft"):
+        extra = f"{extra}[失败不阻断]"
     return f"{base}{extra}"
 
 

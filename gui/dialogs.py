@@ -5,13 +5,16 @@
 
 # 只导入本模块用到的名字(结构整理 2026-10-15)
 import os
+
+import numpy as np
 from PySide6.QtCore import QEvent, Qt
 from PySide6.QtGui import QAction, QPixmap
-from PySide6.QtWidgets import (QAbstractItemView, QComboBox, QDialog, QFormLayout,
+from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QDialog, QFormLayout,
                                 QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMenu,
                                 QMessageBox, QPlainTextEdit, QPushButton,
                                 QScrollArea, QSpinBox, QTableWidget,
                                 QTableWidgetItem, QVBoxLayout, QWidget)
+from core import vision
 from core.logger import get_logger
 from gui.step_card import _StepsEditor
 from gui.style import STYLESHEET
@@ -259,8 +262,9 @@ class PreconditionEditDialog(QDialog):
 
     def __init__(self, item=None, parent=None, app_group=""):
         super().__init__(parent)
-        from core.session import PRECONDITION_TYPES
+        from core.session import PRECONDITION_COMMON_PARAMS, PRECONDITION_TYPES
         self._types = PRECONDITION_TYPES
+        self._common = PRECONDITION_COMMON_PARAMS
         self._app_group = app_group
         self._item = dict(item) if item else None
         self.setWindowTitle("编辑前置条件" if item else "添加前置条件")
@@ -338,8 +342,22 @@ class PreconditionEditDialog(QDialog):
                 w.deleteLater()
         spec = self._types.get(self.type_combo.currentData()) or {}
         self._edits = {}
-        for prm in spec.get("params", []):
-            cur = (self._item or {}).get(prm["key"], prm.get("default"))
+        # ★ 通用参数(执行间隔 / 失败不阻断)跟在类型参数后面 —— 每一项都有
+        #   (用户 2026-10-16: 前置检测的执行间隔默认 5s; 失败要能选"不阻断")
+        for prm in list(spec.get("params", [])) + list(self._common):
+            cur = (self._item or {}).get(prm["key"], None)
+            if cur is None:
+                # ★ 没配过 → 用**类型默认**(如 enter_device/map_load 的 soft_default=True),
+                #   否则一编辑保存就把"确认不了也继续"的老行为改成"卡住等人"了
+                cur = spec.get(f"{prm['key']}_default", prm.get("default"))
+            if prm["type"] == "bool":
+                e = QCheckBox()
+                e.setChecked(bool(cur))
+                if prm.get("hint"):
+                    e.setToolTip(prm["hint"])
+                self.form.addRow(prm["label"], e)
+                self._edits[prm["key"]] = (e, prm)
+                continue
             if prm["type"] == "text_area":
                 # ★ 卡片式步骤编辑(与用例编辑区同一套组件: 动作菜单/卡片/
                 #   参数表单/else 子步骤), 不再是 YAML 文本框(用户要求)
@@ -368,6 +386,9 @@ class PreconditionEditDialog(QDialog):
                 if parsed:
                     item["steps"] = [dict(x) for x in parsed]
                 continue
+            if prm["type"] == "bool":
+                item[k] = bool(e.isChecked())
+                continue
             txt = e.text().strip()
             if prm["type"] == "int":
                 try:
@@ -393,8 +414,11 @@ class PreconditionsDialog(QDialog):
         self._label = item_label
         self.items = [dict(x) for x in items]
         v = QVBoxLayout(self)
+        # ★ 说明里点出两条**默认行为**(用户 2026-10-16): 每条前置之间默认等 5s;
+        #   哪条没通过就停下弹窗等处理(后面那条不再跑), 想放行就勾「失败不阻断」。
         self._hint_label = QLabel(
-            "按顺序依次执行(用 ↑↓ 调整顺序); 取消勾选则不执行; 参数用「编辑」调整")
+            "按顺序依次执行(用 ↑↓ 调整顺序); 取消勾选则不执行; 参数用「编辑」调整\n"
+            "每条之间默认间隔 5s; 未通过的项会暂停并弹窗(勾「失败不阻断」可继续后面几项)")
         v.addWidget(self._hint_label)
         self.table = QTableWidget(0, 4)
         self.table.setHorizontalHeaderLabels(["启用 / 前置条件", "顺序", "编辑", "删除"])
@@ -574,3 +598,321 @@ class NewCaseDialog(QDialog):
     def values(self):
         return (self.name_edit.text().strip(),
                 self.group_combo.currentText().strip())
+
+
+# ── 裁剪模板(用户 2026-10-16) ──────────────────────────────────────────────
+
+class _CropView(QWidget):
+    """截图 + 裁剪框: 点一下定位、按住拖动、滚轮调大小(都换算回**原图像素**)"""
+
+    def __init__(self, frame, box, scale, on_change):
+        super().__init__()
+        self.frame = frame
+        self.box = box            # [x, y, w, h] 原图坐标
+        self.scale = scale        # 显示缩放(≤1)
+        self.on_change = on_change
+        self._drag = None         # 拖动起点(框内偏移)
+        self.setFixedSize(int(frame.shape[1] * scale), int(frame.shape[0] * scale))
+        self.setMouseTracking(True)
+        self.setCursor(Qt.CrossCursor)
+
+    def to_img(self, pos):
+        return int(pos.x() / self.scale), int(pos.y() / self.scale)
+
+    def _clamp(self):
+        # ★ 必须**原地**改(不要 self.box = [...]): 弹窗那边持有同一个列表当裁剪依据,
+        #   重新绑定会让它拿到旧框 —— 拖动一次之后裁出来的就不是框里的东西了(测试逮到过)
+        x, y, w, h = self.box
+        H, W = self.frame.shape[:2]
+        w, h = max(8, min(int(w), W)), max(8, min(int(h), H))
+        x = max(0, min(int(x), W - w))
+        y = max(0, min(int(y), H - h))
+        self.box[:] = [x, y, w, h]
+
+    def center_at(self, cx, cy):
+        self.box[0] = cx - self.box[2] // 2
+        self.box[1] = cy - self.box[3] // 2
+        self._clamp()
+        self.on_change()
+
+    def resize_box(self, w, h):
+        cx = self.box[0] + self.box[2] // 2
+        cy = self.box[1] + self.box[3] // 2
+        self.box[:] = [0, 0, int(w), int(h)]        # 原地改(见 _clamp 的说明)
+        self.center_at(cx, cy)
+
+    def mousePressEvent(self, ev):
+        x, y = self.to_img(ev.pos())
+        bx, by, bw, bh = self.box
+        if bx <= x <= bx + bw and by <= y <= by + bh:
+            self._drag = (x - bx, y - by)          # 点框内 → 拖动
+        else:
+            self._drag = (bw // 2, bh // 2)        # 点框外 → 以该点为心重新定位
+            self.center_at(x, y)
+
+    def mouseMoveEvent(self, ev):
+        if self._drag is None:
+            return
+        x, y = self.to_img(ev.pos())
+        self.box[0], self.box[1] = x - self._drag[0], y - self._drag[1]
+        self._clamp()
+        self.on_change()
+
+    def mouseReleaseEvent(self, ev):
+        self._drag = None
+
+    def wheelEvent(self, ev):
+        step = 4 if ev.angleDelta().y() > 0 else -4
+        self.resize_box(self.box[2] + step, self.box[3] + step)
+
+    def paintEvent(self, ev):
+        from PySide6.QtGui import QColor, QPainter, QPen
+        p = QPainter(self)
+        p.scale(self.scale, self.scale)
+        p.drawImage(0, 0, _to_qimage(self.frame))
+        x, y, w, h = self.box
+        p.setPen(QPen(QColor(0, 220, 255), max(2, int(2 / self.scale))))
+        p.drawRect(x, y, w - 1, h - 1)
+        p.setPen(QPen(QColor(255, 0, 255), max(1, int(1 / self.scale))))
+        p.drawLine(x + w // 2, y, x + w // 2, y + h)
+        p.drawLine(x, y + h // 2, x + w, y + h // 2)
+
+
+def _to_qimage(frame_bgr):
+    """numpy BGR → QImage(拷贝一份, 免得源数组被回收后花屏)"""
+    import cv2
+    from PySide6.QtGui import QImage
+    rgb = np.ascontiguousarray(cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB))
+    h, w = rgb.shape[:2]
+    return QImage(rgb.data, w, h, 3 * w, QImage.Format_RGB888).copy()
+
+
+def validate_template(frame_bgr, crop_bgr, min_score=0.62):
+    """**当场校验模板** —— 用户 2026-10-16: "自动校验模板的准确性, 直接给匹配百分比结果"。
+
+    指标都在**整屏**上算(不是跟自己比 —— 那永远是 100%, 没有信息量):
+      · 原生匹配分: 模板照原尺寸在屏上找到几分(1.0 = 像素级一致);
+      · 是否要靠缩放: 引擎是多尺度匹配, 但"要放大 1.5x/2.0x 才命中"通常意味着模板尺度与
+        设备界面不一致(见 core/vision 的尺度预警);
+      · **屏上还有几处也像它**(≥ 引擎阈值 min_score 的其它峰): 这才是"点错按钮"的根源 ——
+        三星三个圆按钮的旧模板就是这样, 互相都过阈值;
+      · 模板纹理强度: 几乎同色的模板既没用、又会让 NCC 在平坦区给出假高分。
+    返回 (给人看的结论文本, 是否合格, 明细 dict)。
+    """
+    import cv2
+    gray = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY) if frame_bgr.ndim == 3 else frame_bgr
+    tpl = cv2.cvtColor(crop_bgr, cv2.COLOR_BGR2GRAY) if crop_bgr.ndim == 3 else crop_bgr
+    th, tw = tpl.shape[:2]
+    H, W = gray.shape[:2]
+    out = {"原生匹配": 0.0, "最佳尺度": 1.0, "次高峰": 0.0, "区分度": 0.0,
+           "其它命中": [], "模板标准差": float(tpl.std())}
+
+    def _top_peaks(mat, n=4):
+        """前 n 个峰: 每找到一个只压掉**它自己那个框**(+4px 边距), 免得同一个目标被数多次。
+
+        ★ 抑制窗口不能开大: 早先按 3×3 个模板面积压, 把屏幕上**相邻的另一个按钮**一起
+          抹掉了 —— 于是"屏上还有几处也像它"永远报 0, 恰好把最该报的漏了。
+          (两个真目标比模板还近时本来就该算同一个目标, 所以边距给 4px 就够。)"""
+        m = mat.copy()
+        peaks = []
+        for _ in range(n):
+            _, sc, _, loc = cv2.minMaxLoc(m)
+            if sc <= -1:
+                break
+            peaks.append((float(sc), (loc[0] + tw // 2, loc[1] + th // 2)))
+            # 抑制窗口 = loc ± 半个模板(等价于"中心相距不到半个模板的算同一个目标")。
+            # ★ 两种错法都踩过:
+            #   · 按 loc 往右扩一个模板(2 倍宽) → 把 1.3 个模板宽以外的**另一个按钮**
+            #     一起抹掉, 恰好漏掉最该报的那条;
+            #   · 以峰中心画一个模板大小的框 → 连 **loc 差 1px 的同目标峰**都没盖住,
+            #     于是同一个按钮被数成 3、4 处"别的目标"(假警报)。
+            m[max(0, loc[1] - th // 2):loc[1] + th // 2,
+              max(0, loc[0] - tw // 2):loc[0] + tw // 2] = -1
+        return peaks
+
+    peaks = _top_peaks(cv2.matchTemplate(gray, tpl, cv2.TM_CCOEFF_NORMED))
+    n_score, n_center = peaks[0] if peaks else (0.0, (0, 0))
+    second = peaks[1][0] if len(peaks) > 1 else 0.0
+    others = [p for p in peaks[1:] if p[0] >= min_score]
+
+    best_scale, best_score = 1.0, n_score
+    for f in getattr(vision, "NCC_SCALES", (1.0,)):
+        if f == 1.0:
+            continue
+        rw, rh = int(round(tw * f)), int(round(th * f))
+        if rw < 8 or rh < 8 or rw >= W or rh >= H:
+            continue
+        _, sc, _, _ = cv2.minMaxLoc(cv2.matchTemplate(gray, cv2.resize(tpl, (rw, rh)),
+                                                     cv2.TM_CCOEFF_NORMED))
+        if sc > best_score:
+            best_scale, best_score = f, float(sc)
+    out.update({"原生匹配": n_score, "最佳尺度": best_scale, "次高峰": second,
+                "区分度": n_score - second, "其它命中": others, "命中中心": n_center})
+
+    flat = float(tpl.std()) < 5
+    ok = True
+    tips = []
+    if flat:
+        tips.append("模板几乎没有纹理(几乎同色) —— 匹配不可靠, 请裁到有内容的区域")
+        ok = False
+    elif n_score < 0.9:
+        tips.append("在屏上都找不到它自己(原生匹配 %.0f%%, 偏低)" % (n_score * 100))
+        ok = False
+    if best_scale != 1.0:
+        tips.append("要缩放到 %.2fx 才命中最准 —— 多半模板尺度与设备界面不一致" % best_scale)
+    # ★ 判据用**区分度**(最佳 - 次高), 不是"次高有没有过引擎阈值":
+    #   实测真机上正确的整盘模板也有 55~67% 的次高(那是屏幕上的另一个按钮/相似图标),
+    #   按绝对阈值会天天误报; 而真正危险的模板是"和别处几乎一样"—— 次高贴着最佳
+    #   (旧暂停模板 0.663 命中"启动"按钮、与它的最佳只差 0.04, 这就是点错按钮的来源)。
+    margin_ok = (n_score - second) >= 0.25 and second < 0.9
+    if not margin_ok and not flat:
+        tips.append("屏上**另有 %d 处也像它**(最高 %.0f%%, 与最佳仅差 %.0f%%) —— 真机上容易"
+                    "点错按钮, 建议把整个按钮盘(含图标)裁进去, 别带按钮外的背景"
+                    % (max(1, len(others)), second * 100, (n_score - second) * 100))
+        ok = False
+    txt = "匹配 %.1f%% · 命中 %s · 次高 %.1f%% · %s" % (
+        n_score * 100, n_center, second * 100,
+        ("原生尺度 ✓" if best_scale == 1.0 else "需缩放 %.2fx ⚠" % best_scale))
+    if tips:
+        txt += "\n· " + "\n· ".join(tips)
+    return txt, ok, out
+
+
+class TemplateCropDialog(QDialog):
+    """裁剪模板(用户 2026-10-16): 用**当前 APP 页面**的截图点选位置 → 自动裁 → 命名 →
+    保存到本 APP 组的 templates/, 并**当场给出匹配百分比**校验。
+
+    为什么要有它: 模板与真机界面尺度/内容对不上, 匹配就会"同形按钮互相误匹配"
+    (实测: 三星三个圆按钮的旧模板都要放大 1.5~2 倍才命中, 于是互相串位)。
+    在该设备上、看着当前画面裁, 是唯一能根治的办法。
+
+    交互: 点一下 = 以该点为中心裁当前尺寸; 按住拖动 = 移动; 滚轮 = 调大小(每档 4px);
+          也可用右侧"宽/高"输入框精确调。右侧实时显示裁出来的像素与校验结论。
+    保存: 自动补 .png、清洗非法字符; 重名会问是否覆盖(否则自动加 _2/_3)。
+    """
+
+    DEFAULT_SIZE = 96      # 一个按钮盘的直径(真机实测 92) —— 见 README 的模板规范
+
+    def __init__(self, frame, templates_dir, default_name="", parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("裁剪模板 - 点选位置, 自动裁切")
+        self._frame = frame
+        self._dir = templates_dir
+        self.saved_name = ""
+        H, W = frame.shape[:2]
+        size = min(self.DEFAULT_SIZE, W, H)
+        self._box = [W // 2 - size // 2, H // 2 - size // 2, size, size]
+
+        view_w = min(760, W)
+        view_h = min(880, H)
+        scale = min(view_w / W, view_h / H, 1.0)
+
+        root = QHBoxLayout(self)
+        self.view = _CropView(frame, self._box, scale, self._on_box_changed)
+        root.addWidget(self.view, 0)
+
+        side = QVBoxLayout()
+        root.addLayout(side, 1)
+        side.addWidget(QLabel("裁出来的模板:"))
+        self.preview = QLabel(alignment=Qt.AlignCenter)
+        self.preview.setMinimumSize(240, 240)
+        self.preview.setStyleSheet("background:#1b1b1b;border:1px solid #444;")
+        side.addWidget(self.preview)
+
+        form = QFormLayout()
+        self.w_spin = QSpinBox()
+        self.w_spin.setRange(8, W)
+        self.w_spin.setSuffix(" px")
+        self.h_spin = QSpinBox()
+        self.h_spin.setRange(8, H)
+        self.h_spin.setSuffix(" px")
+        self.w_spin.setValue(size)
+        self.h_spin.setValue(size)
+        form.addRow("宽", self.w_spin)
+        form.addRow("高", self.h_spin)
+        self.name_edit = QLineEdit(default_name or "")
+        self.name_edit.setPlaceholderText("模板名(自动补 .png)")
+        form.addRow("文件名", self.name_edit)
+        side.addLayout(form)
+        self.w_spin.valueChanged.connect(self._on_spin)
+        self.h_spin.valueChanged.connect(self._on_spin)
+
+        self.verdict = QLabel()
+        self.verdict.setWordWrap(True)
+        side.addWidget(self.verdict)
+        side.addWidget(QLabel(
+            "提示: 点一下定位 / 拖动移动 / 滚轮或上面输入框调大小。\n"
+            "★ 建议把**整个按钮盘(含图标)**裁进去, 别带按钮外的背景 —— 只裁图标会因图标\n"
+            "  尺寸变化而失配, 带大片背景则会让同形按钮互相误匹配(见 README 模板规范)。"))
+        side.addStretch()
+
+        btns = QHBoxLayout()
+        ok_btn = QPushButton("保存模板")
+        ok_btn.setDefault(True)
+        cancel = QPushButton("取消")
+        ok_btn.clicked.connect(self._save)
+        cancel.clicked.connect(self.reject)
+        btns.addStretch()
+        btns.addWidget(cancel)
+        btns.addWidget(ok_btn)
+        side.addLayout(btns)
+
+        self._refresh()
+
+    # ── 状态同步 ──
+    def _crop(self):
+        x, y, w, h = self._box
+        return self._frame[y:y + h, x:x + w]
+
+    def _on_spin(self):
+        self.view.resize_box(self.w_spin.value(), self.h_spin.value())
+        self._refresh()
+
+    def _on_box_changed(self):
+        self.w_spin.blockSignals(True)
+        self.h_spin.blockSignals(True)
+        self.w_spin.setValue(self._box[2])
+        self.h_spin.setValue(self._box[3])
+        self.w_spin.blockSignals(False)
+        self.h_spin.blockSignals(False)
+        self._refresh()
+
+    def _refresh(self):
+        self.view.update()
+        crop = self._crop()
+        pix = QPixmap.fromImage(_to_qimage(crop))
+        if pix.width() > 240 or pix.height() > 240:
+            pix = pix.scaled(240, 240, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        self.preview.setPixmap(pix)
+        txt, ok, _detail = validate_template(self._frame, crop)
+        self.verdict.setText(("✅ 校验通过\n" if ok else "⚠ 建议调整\n") + txt)
+        self.verdict.setStyleSheet(
+            "font-weight:600;color:%s;" % ("#2e9e4f" if ok else "#c9701a"))
+
+    # ── 保存 ──
+    def _save(self):
+        from core import imgio, paths as _paths
+        name = self.name_edit.text().strip() or "未命名模板"
+        stem = name[:-4] if name.lower().endswith(".png") else name
+        stem = _paths.safe_name(stem)
+        fname = stem + ".png"
+        try:
+            os.makedirs(self._dir, exist_ok=True)
+        except OSError as e:
+            QMessageBox.warning(self, "裁剪模板", f"目录不可写: {e}")
+            return
+        path = os.path.join(self._dir, fname)
+        if os.path.exists(path):
+            r = QMessageBox.question(self, "模板已存在", f"{fname} 已存在, 覆盖它吗?")
+            if r != QMessageBox.Yes:
+                i = 2
+                while os.path.exists(os.path.join(self._dir, f"{stem}_{i}.png")):
+                    i += 1
+                fname = f"{stem}_{i}.png"
+                path = os.path.join(self._dir, fname)
+        if not imgio.imwrite(path, self._crop()):
+            QMessageBox.warning(self, "裁剪模板", "写入失败(见日志)")
+            return
+        self.saved_name = fname
+        log.info("[裁剪模板] 已保存 %s (%dx%d)", path, self._box[2], self._box[3])
+        self.accept()

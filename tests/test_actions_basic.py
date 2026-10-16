@@ -1037,3 +1037,26 @@ def test_branch_substeps_are_labelled_in_results(runner):
                      "then": [{"desc": "取反后成立", "click": [33, 44]}]})
     assert runner._pending_sub_results[-1]["desc"] == "[条件成立] 取反后成立", \
         runner._pending_sub_results
+
+
+def test_sleep_log_shows_integer_seconds_without_dot_zero(caplog):
+    """★ 用户 2026-10-16: "延迟等待这里为何还是5.0的秒数显示" —— 日志里那句
+    「等待结束(实际 5.0 秒)」在小数位为 0 时要写成 5 秒(5.3 秒这种真小数照旧)。
+
+    只动显示格式, 等待时长本身不变。
+    """
+    from core.actions import timer_ops
+    clock = iter([100.0, 105.0])          # t0 → 结束时刻, 正好 5 秒
+    orig_time = timer_ops.time.time
+    timer_ops.time.time = lambda: next(clock)
+    try:
+        class _R:
+            def _sleep(self, s):
+                pass
+        with caplog.at_level("INFO"):
+            timer_ops.do_sleep(_R(), {"desc": "等", "sleep": 5.0})
+    finally:
+        timer_ops.time.time = orig_time
+    txt = "\n".join(r.getMessage() for r in caplog.records)
+    assert "等待 5 秒" in txt, txt
+    assert "实际 5 秒" in txt and "5.0 秒" not in txt, txt

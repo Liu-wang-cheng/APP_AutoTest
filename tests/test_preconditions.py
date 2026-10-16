@@ -117,6 +117,7 @@ def test_prepare_items_runs_in_order_and_reports(monkeypatch):
                         lambda d, **kw: calls.append("charging") or True)
     monkeypatch.setattr(session, "ensure_battery",
                         lambda d, **kw: calls.append("battery") or False)
+    monkeypatch.setattr(session.time, "sleep", lambda s: None)   # 执行间隔(默认5s)不真等
     items = [
         {"type": "restart", "enabled": True},
         {"type": "charging", "enabled": True},
@@ -202,6 +203,68 @@ def test_charging_text_first_then_template_fallback(monkeypatch):
     session.ensure_charging(dev2, timeout=0, recharge_text="回充", recharge_tpl="回充.png")
     assert dev2.clicked == []
     assert seen == ["回充.png"], f"文本没命中应落到模板: {seen}"
+
+
+# ── 充电前置的留痕(用户 2026-10-16) ──
+
+def _logs(caplog, level="INFO"):
+    """把 caplog 里的消息拼成一段文本(断言只要能看到就行)"""
+    return "\n".join(r.getMessage() for r in caplog.records
+                     if r.levelname in ("INFO", "WARNING", "ERROR"))
+
+
+def test_charging_miss_logs_searched_texts_and_page_sample(monkeypatch, caplog):
+    """★ 用户 2026-10-16: "充电前置检测没有命中和未命中内容信息" +
+    "我给了 充电,满电 两个文本为何都识别不到" ——
+    未命中时必须写出**查了哪些词**和**页面上当时有什么**, 否则只能靠人复现去猜。
+    """
+    monkeypatch.setattr(session, "is_charging", lambda d, text=None: False)
+    monkeypatch.setattr(session, "click_template", lambda d, n, **kw: None)
+    monkeypatch.setattr(session.time, "sleep", lambda s: None)
+    dev = FakeDev(present=("正在清洁", "干燥拖布中"))
+    with caplog.at_level("INFO"):
+        session.ensure_charging(dev, timeout=0, ready_text="充电，满电")
+    txt = _logs(caplog)
+    assert "未命中充电判定文本「充电、满电」" in txt, txt
+    assert "正在清洁" in txt and "干燥拖布中" in txt, f"页面当时有什么要看得到: {txt}"
+
+
+def test_charging_timeout_reports_battery_dropping(monkeypatch, caplog):
+    """★ 超时要能自己说出"回充根本没生效"(用户日志: 等了 20 分钟, 电量 45%→34%) ——
+    只写"超时"的话, 分不清是设备问题、模板问题还是状态文本没更新。"""
+    monkeypatch.setattr(session, "is_charging", lambda d, text=None: False)
+    monkeypatch.setattr(session, "click_template", lambda d, n, **kw: (966, 336))
+    monkeypatch.setattr(session.time, "sleep", lambda s: None)
+    seq = iter([45, 44, 34])
+    monkeypatch.setattr(session, "get_battery_level",
+                        lambda d: next(seq, 34))
+    with caplog.at_level("INFO"):
+        # timeout 给个极小值: sleep 被打桩成 no-op, 循环按**真实时钟**推进,
+        # 0.2s 内轮几次就够走完"起点电量 → 超时」这条路(不 busy loop 太久)
+        assert session.ensure_charging(FakeDev(), timeout=0.2) is False
+    txt = _logs(caplog)
+    assert "超时" in txt and "45% → 34%" in txt, txt
+    assert "不升反降" in txt and "回充**没有生效**" in txt, txt
+
+
+def test_charging_warns_when_recharge_template_score_is_low(monkeypatch, caplog):
+    """★ 用户 2026-10-16 的真实事故: 回充模板只有 0.62 分(引擎阈值就是 0.62, 零余量),
+    结果点在了"启动"按钮上 —— 机器人继续清扫(电量不升反降)。日志必须喊出来。"""
+    monkeypatch.setattr(session, "is_charging", lambda d, text=None: False)
+    monkeypatch.setattr(session.time, "sleep", lambda s: None)
+    monkeypatch.setattr(session, "get_battery_level", lambda d: 50)
+
+    def _click(d, name, timeout=10, should_cancel=None, detail=None):
+        if detail is not None:
+            detail.update(score=0.62, scale=1.2, source="ncc")
+        return (966, 336)
+
+    monkeypatch.setattr(session, "click_template", _click)
+    with caplog.at_level("INFO"):
+        session.ensure_charging(FakeDev(), timeout=0, recharge_tpl="开始回充.png")
+    txt = _logs(caplog)
+    assert "匹配分 0.62@尺度 1.20x" in txt, txt
+    assert "置信度低" in txt and "裁剪模板" in txt, txt
 
 
 def test_charging_recharge_settings_are_declared_and_pass_through(monkeypatch):
@@ -322,6 +385,100 @@ def test_prepare_items_reports_fault_reason(monkeypatch):
     assert _CountDev.dumps <= 3, \
         f"检测到故障应立即失败(dump 了 {_CountDev.dumps} 次)"
     session.set_status_words("", "", fault_streak=3, idle_streak=3)
+
+
+# ── 阻断即停 + 执行间隔(用户 2026-10-16) ──
+
+#: 前置类型 → 它真正调用的那个 session 函数(打桩用)
+_ITEM_FUNC = {"restart": "restart_app", "charging": "ensure_charging",
+              "battery": "ensure_battery", "map_load": "ensure_map_loaded",
+              "enter_device": "ensure_device_page"}
+
+
+def _stub_items(monkeypatch, outcomes):
+    """把各前置类型替换成可编排的桩: outcomes = {"charging": False, ...} → 调用序列"""
+    calls = []
+
+    def _mk(name):
+        def _f(d, *a, **kw):
+            calls.append(name)
+            return outcomes[name]
+        return _f
+
+    for t, val in outcomes.items():
+        monkeypatch.setattr(session, _ITEM_FUNC[t], _mk(t))
+    return calls
+
+
+def test_prepare_items_stops_at_first_blocking_failure(monkeypatch):
+    """★ 用户 2026-10-16 的日志: "等待充电"超时后, 后面的"电量门槛"接着跑了 6 分钟,
+    直到人手动停止 —— 前置项之间是有依赖的, 继续跑只会把失败拖长、把日志搅浑。
+    现在: 第一条未通过(且不是"失败不阻断")→ 后面的项记成**未执行**(中性显示),
+    立刻返回, 由调用方弹窗暂停。
+    """
+    monkeypatch.setattr(session.time, "sleep", lambda s: None)
+    calls = _stub_items(monkeypatch, {"restart": True, "charging": False,
+                                      "battery": True, "map_load": True})
+    items = [{"type": "restart", "enabled": True},
+             {"type": "charging", "enabled": True},
+             {"type": "battery", "enabled": True},
+             {"type": "map_load", "enabled": True}]
+    res = session.prepare_items(FakeDev(), {}, items)
+    assert calls == ["restart", "charging"], f"充电失败后不该再跑后面的: {calls}"
+    assert [r["ok"] for r in res] == [True, False, False, False]
+    assert res[1].get("skipped") is not True, "失败项本身不是'未执行'"
+    assert res[2].get("skipped") and res[3].get("skipped"), \
+        f"后面的项该记成'未执行'(中性): {res[2:]}"
+    assert all(r["ok"] is False for r in res[2:]), "未执行项不是'通过'"
+
+
+def test_prepare_items_continues_after_soft_failure(monkeypatch):
+    """勾了「失败不阻断」的项(如地图加载): 失败也继续跑后面的前置项"""
+    monkeypatch.setattr(session.time, "sleep", lambda s: None)
+    calls = _stub_items(monkeypatch, {"map_load": False, "battery": True})
+    items = [{"type": "map_load", "enabled": True, "soft": True},
+             {"type": "battery", "enabled": True}]
+    res = session.prepare_items(FakeDev(), {}, items)
+    assert calls == ["map_load", "battery"], f"不阻断的项失败后应继续: {calls}"
+    assert [r["ok"] for r in res] == [False, True]
+
+
+def test_enter_device_and_map_load_default_to_not_blocking(monkeypatch):
+    """★ 默认值要按**类型**给: 这两项从设计上就是"确认不了也继续执行"(见函数注释),
+    不能因为新加的阻断语义把原来能跑完的流程改成卡在弹窗上等人。
+    而"等待充电/电量门槛"这类默认就是阻断的(用户 2026-10-16 的诉求)。"""
+    assert session.item_is_soft({"type": "enter_device"}) is True
+    assert session.item_is_soft({"type": "map_load"}) is True
+    assert session.item_is_soft({"type": "charging"}) is False
+    assert session.item_is_soft({"type": "battery"}) is False
+    assert session.item_is_soft({"type": "charging", "soft": True}) is True, "显式勾选优先"
+    assert session.item_is_soft({"type": "map_load", "soft": False}) is False, "显式取消优先"
+
+
+def test_prepare_items_waits_interval_between_items(monkeypatch):
+    """★ 执行间隔(用户 2026-10-16: "每个前置检测的执行间隔设置成默认5s"): 两项之间等 5s,
+    **第一项前不等**(那时还没有"上一项", 白等只是拖延); 每项都能自己改。"""
+    slept = []
+    monkeypatch.setattr(session.time, "sleep", lambda s: slept.append(s))
+    _stub_items(monkeypatch, {"restart": True, "charging": True, "battery": True})
+    session.prepare_items(FakeDev(), {}, [{"type": "restart", "enabled": True},
+                                          {"type": "charging", "enabled": True},
+                                          {"type": "battery", "enabled": True}])
+    assert slept == [5, 5], f"两条间隔, 第一项前不睡: {slept}"
+
+
+def test_item_interval_is_configurable(monkeypatch):
+    """间隔可配: 0 = 不等(旧配置/老用例不受影响)"""
+    slept = []
+    monkeypatch.setattr(session.time, "sleep", lambda s: slept.append(s))
+    _stub_items(monkeypatch, {"charging": False, "battery": True})
+    session.prepare_items(FakeDev(), {}, [{"type": "charging", "enabled": True,
+                                           "interval": 0},
+                                          {"type": "battery", "enabled": True}])
+    assert slept == [], f"interval=0 不该等: {slept}"
+    assert session.item_interval({}) == session.PRECONDITION_INTERVAL_DEFAULT == 5
+    assert session.item_interval({"interval": "12"}) == 12
+    assert session.item_interval({"interval": "abc"}) == 5      # 写错 → 回默认, 不炸
 
 
 def test_streak_protection_requires_3_hits(monkeypatch):
@@ -656,6 +813,32 @@ def test_precondition_steps_empty_is_skipped(monkeypatch):
     items = [{"type": "steps", "enabled": True, "name": "空", "steps": []}]
     res = session.prepare_items(FakeDev(), {}, items)
     assert res[0]["ok"] is True
+
+
+def test_edit_dialog_exposes_interval_and_soft(qapp):
+    """★ 通用参数要在编辑框里能改(用户 2026-10-16):
+    「执行间隔」(默认 5s) + 「失败不阻断」—— 后者对"确认不了也继续"的老类型
+    (进入设备页/地图加载)要**默认勾上**, 免得一编辑保存就改了老行为。"""
+    from gui import main_window as mw
+    dlg = mw.PreconditionEditDialog({"type": "charging", "enabled": True,
+                                     "timeout": 1200}, None)
+    try:
+        assert "interval" in dlg._edits and "soft" in dlg._edits, dlg._edits.keys()
+        w, _prm = dlg._edits["interval"]
+        assert w.text() == "5", f"间隔默认 5s: {w.text()!r}"
+        assert dlg._edits["soft"][0].isChecked() is False
+        v = dlg.values()
+        assert v["interval"] == 5 and v["soft"] is False
+    finally:
+        dlg.close()
+
+    dlg2 = mw.PreconditionEditDialog({"type": "enter_device", "enabled": True}, None)
+    try:
+        assert dlg2._edits["soft"][0].isChecked() is True, \
+            "进入设备页默认不阻断(老行为: 确认不了也继续执行)"
+        assert dlg2.values()["soft"] is True
+    finally:
+        dlg2.close()
 
 
 def test_steps_editor_is_card_based(qapp):
@@ -1204,3 +1387,23 @@ def test_steps_precondition_gets_device_name_and_cancel():
         "steps 前置的 runner 漏传 device_name(与正式用例行为不一致)"
     assert "second_ran" not in seen, \
         "取消信号没穿透到 steps 前置(点停止后它还会跑完剩余步骤)"
+
+
+def test_page_sample_falls_back_to_ocr_when_tree_is_sparse(monkeypatch):
+    """★ 插件页/WebView 的无障碍树常常只有一两条文本 —— 只读树的话日志会写出
+    "当前页面文本: []", 等于没留证据。树里太少时补一次截图识别(OCR 兜底本来就在
+    文本判定链路上, 见 text_present 的 sparse 处理)。"""
+    from core import session as _s, ocr
+    seen = {}
+
+    class D:
+        def dump_hierarchy(self):
+            return '<node text="正在清洁"/>'
+
+    monkeypatch.setattr(ocr, "screen_texts",
+                        lambda d, use_cache=True, exclude=None:
+                        (seen.setdefault("exclude", exclude), [("干燥拖布中", (1, 2)),
+                                                               ("电量 45%", (3, 4))])[1])
+    got = _s._page_sample(D())
+    assert "正在清洁" in got and "干燥拖布中" in got, got
+    assert "exclude" in seen, "OCR 取样要带上系统 UI 屏蔽区域(状态栏不该被当成页面内容)"

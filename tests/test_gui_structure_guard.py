@@ -82,3 +82,24 @@ def test_no_definition_duplicated_across_gui_modules():
                 dup.append((n, seen[n], mod))
             seen.setdefault(n, mod)
     assert not dup, f"这些名字在多个 gui 模块里重复定义: {dup}"
+
+
+def test_no_star_imports_anywhere():
+    """★ 全项目不许 `from x import *`。
+
+    为什么单列一条守护(2026-10-16): 转发层(gui/main_window.py)与 core/session.py 里
+    有个**只列"转出去的名字"**的 `__all__` —— 那是为了让静态检查(pyflakes)别把
+    "为副作用而导入"的名字当成笔误(它不认 noqa, CI 的静态检查曾因此一直红)。
+    代价是 `import *` 拿到的将不是"该模块的全部公开名"。本项目本来就一处都没用,
+    这里把这条钉住: 谁想用 `import *`, 先把 `__all__` 补全。
+    """
+    bad = []
+    for p in ROOT.rglob("*.py"):
+        if ".venv" in p.parts or "dist" in p.parts or "build" in p.parts:
+            continue
+        for i, line in enumerate(p.read_text(encoding="utf-8",
+                                            errors="ignore").splitlines(), 1):
+            s = line.strip()
+            if s.startswith("from ") and s.endswith("import *"):
+                bad.append(f"{p.relative_to(ROOT)}:{i}")
+    assert not bad, f"这些地方用了 `import *`(会绕过 __all__ 之外的公开名): {bad}"

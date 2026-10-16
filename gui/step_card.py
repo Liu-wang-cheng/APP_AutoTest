@@ -119,7 +119,10 @@ def _make_field_widget(field, value, steps=None, exclude_index=None,
         w.setToolTip(hint)                 # 多行提示在单行 placeholder 里显示不全
         return w, _int_of(w)
     if t == "float":
-        w = QLineEdit("" if value is None else str(value))
+        # ★ 显示按人写的样子(用户 2026-10-16: "延迟等待这里为何还是5.0"): YAML 里
+        #   `sleep: 5.0` 是浮点, 但输入框里该显示 5 —— 见 schema.fmt_num(只改显示,
+        #   取回的值仍是数字, 存盘/引擎判定都不动)。
+        w = QLineEdit("" if value is None else schema.fmt_num(value))
         w.setValidator(QDoubleValidator(0, 100000, 4))
         w.setPlaceholderText(hint)
         return w, _float_of(w)
@@ -152,9 +155,13 @@ def _int_of(w):
 def _float_of(w):
     def get():
         try:
-            return float(w.text().strip())
+            v = float(w.text().strip())
         except ValueError:
             return None
+        # ★ 整数就不带小数点存(用户 2026-10-16: "延迟等待这里为何还是5.0的秒数显示"):
+        #   界面显示 5(见 schema.fmt_num), YAML 也写 `sleep: 5` —— 引擎拿到的仍是数字
+        #   (它自己 float()), 判定一字未动; 真小数(0.95 / 5.5)原样保留。
+        return int(v) if v.is_integer() else v
     return get
 
 
@@ -407,6 +414,34 @@ class StepCard(QFrame):
                                        exclude_index=self.index,
                                        preconditions=getattr(self.main,
                                                              "preconditions", None))
+        if field["type"] == "template":
+            # ★ 裁剪模板(用户 2026-10-16): 连当前设备截屏 → 在画面上点选位置自动裁 →
+            #   命名保存到本组 templates/ → 当场给匹配百分比校验 → 立刻回填本框。
+            #   为什么必须做进界面: 模板与真机界面尺度/内容对不上就会"同形按钮互相误匹配"
+            #   (实测: 三星三个圆按钮的旧模板都要放大 1.5~2 倍才命中, 于是互相串位)。
+            #   信号/宽度仍绑在**原控件** w 上; box 只负责网格布局(与 compare_area 同一套)。
+            from PySide6.QtWidgets import (
+                QPushButton as _PB, QWidget as _QW, QHBoxLayout as _HL)
+            btn = _PB("裁剪模板")
+            btn.setToolTip("连当前设备截屏 → 在截图上点一下自动裁出模板 → 命名保存\n"
+                           "保存前会给出匹配百分比与'屏上还有几处也像它'的校验\n"
+                           "(建议把整个按钮盘连同图标一起裁进去)")
+            btn.clicked.connect(lambda: self.main.crop_template_for_step(
+                getter(), on_saved=lambda name: (w.setCurrentText(name),
+                                                 self._write_back())))
+            box = _QW()
+            hb = _HL(box)
+            hb.setContentsMargins(0, 0, 0, 0)
+            hb.addWidget(w)
+            hb.addWidget(btn)
+            grid.addWidget(box, row, 1, Qt.AlignLeft)
+            self.widgets[field["key"]] = w
+            self.getters[field["key"]] = getter
+            if hasattr(w, "changed"):
+                w.changed.connect(self._write_back)
+            else:
+                w.currentIndexChanged.connect(self._write_back)
+            return row + 1
         if field["key"] == "compare_area":
             # ★ 预览对比范围(用户 2026-10-14): 点一下连当前设备截屏, 按本框现值
             #   画标注图弹窗 —— 范围合不合理, 不用跑用例就能确认。

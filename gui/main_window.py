@@ -1513,6 +1513,44 @@ class MainWindow(QMainWindow):
         if self.worker:
             self.worker.resolve_precondition_retry(box.clickedButton() is retry)
 
+    def crop_template_for_step(self, current_name="", on_saved=None):
+        """**裁剪模板**(用户 2026-10-16): 连当前设备截屏 → 在截图上点选位置自动裁切 →
+        命名 → 保存到本 APP 组的 `templates/` → 回填到步骤的模板框。
+
+        为什么要做进界面: 模板与真机界面尺度/内容对不上, 匹配就会"同形按钮互相误匹配"
+        —— 实测三星三个圆按钮的旧模板都要放大 1.5~2 倍才命中, 于是互相串位(点错按钮)。
+        在**该设备上、看着当前画面**裁, 是唯一能根治的办法; 弹窗里还会**当场给匹配百分比**
+        (含"屏上还有几处也像它"), 不合格的模板在保存前就能看出来。
+
+        on_saved: 保存成功后的回调(fn(文件名)), 用于把新模板回填到模板下拉框。
+        """
+        from PySide6.QtWidgets import QMessageBox
+        try:
+            import uiautomator2 as u2
+            dev_id = self.device_combo.currentData()
+            d = u2.connect(dev_id)
+            frame = d.screenshot(format="opencv")
+        except Exception as e:
+            QMessageBox.warning(self, "裁剪模板",
+                                f"连接设备失败: {type(e).__name__}: {e}\n"
+                                "请确认设备已连接(工具栏左上角选对设备)")
+            return
+        from core import vision as _vision
+        # TemplateCropDialog 从本模块**模块级**的名字取(见文件末尾的 re-export)
+        group = _vision.current_app_group() or "未分组"
+        tdir = _vision.group_templates_dir(group)
+        # 默认名: 用现值的名字(改一版就覆盖)/ 或按时间戳
+        default = current_name or time.strftime("模板_%m%d_%H%M%S")
+        dlg = TemplateCropDialog(frame, tdir, default_name=default, parent=self)
+        if dlg.exec() != QDialog.Accepted or not dlg.saved_name:
+            return
+        self.status_label.setText(f"模板已保存: {dlg.saved_name}({group}/templates)")
+        if on_saved:
+            try:
+                on_saved(dlg.saved_name)
+            except Exception as e:
+                log.debug(f"[裁剪模板] 回填失败: {e}")
+
     def preview_compare_area(self, region_text):
         """预览对比范围(用户 2026-10-14): 连当前设备截屏 → 按范围画标注图 → 弹窗。
         范围非法/设备未连接都转警告框, 不打断编辑。"""
@@ -1912,7 +1950,10 @@ class MainWindow(QMainWindow):
             self.case_name_edit.setText(str(c.get("name") or ""))
             pri = str(c.get("priority") or "P1")
             self.priority_combo.setCurrentIndex(max(0, self.priority_combo.findText(pri)))
-            self.case_wait_edit.setText("" if c.get("wait") is None else str(c["wait"]))
+            # ★ 显示按人写的样子(用户 2026-10-16): 用例写 `wait: 5.0` 时框里显示 5,
+            #   不显示 5.0(见 schema.fmt_num; 只改显示, 存回仍是数字)
+            self.case_wait_edit.setText(
+                "" if c.get("wait") is None else schema.fmt_num(c["wait"]))
         finally:
             self._loading = False
         # 这两步原本是 _sync_header 的副作用, 屏蔽之后要显式补上, 否则切用例后
@@ -2559,24 +2600,45 @@ class MainWindow(QMainWindow):
 # ── 从拆分出去的模块 re-export(结构整理 2026-10-15) ──
 # 这些类/常量原先就在本模块, 现在按职责搬到了 gui/style|widgets|dialogs|step_card|threads。
 # 这里显式 re-export, 好让界面/测试/工具里的 `main_window.X` 用法保持不变。
-from gui.style import (  # noqa: F401
+from gui.style import (
     CASE_STATE_COLORS, CASE_STATE_ROLE, _LAMP_SIZE, _ARROW_W, _FIELD_LABEL_W,
     _CHECK_MIN_H, make_lamp_pixmap, _LAMP_PIX, lamp_pixmap, lamp_icon,
     _safe_relpath, CATEGORY_COLORS, QUICK_ACTIONS, STYLESHEET, _ASSETS,
 )
-from gui.widgets import (  # noqa: F401
+from gui.widgets import (
     ClickableLabel, ClickableFrame, FlowLayout, make_action_menu, _FormCheckBox,
     _HistComboDelegate, _FitCombo, _FitListView, _HistCombo, CaseListWidget,
     CaseItemDelegate,
 )
-from gui.dialogs import (  # noqa: F401
+from gui.dialogs import (
     ImageViewDialog, StatusWordsDialog, PreconditionEditDialog,
-    PreconditionsDialog, NewCaseDialog,
+    PreconditionsDialog, NewCaseDialog, TemplateCropDialog, _CropView, _to_qimage,
+    validate_template,
 )
-from gui.step_card import (  # noqa: F401
+from gui.step_card import (
     _make_field_widget, _int_of, _float_of, _int4_of, StepCard, _StepsHost,
     _StepsEditor,
 )
-from gui.threads import (  # noqa: F401
+from gui.threads import (
     DeviceScanThread, UpdateCheckThread, UpdateDownloadThread,
 )
+
+# ★ 上面这批**转出去**的名字要"被用一次": pyflakes 只看"导入了却没用", 不认 noqa
+#   (2026-10-16 之前 CI 的静态检查一直被这一块绊红)。列进 `__all__` 是 Python 里
+#   表达"这些是本模块对外提供的名字"的标准写法 —— 本模块本来就是**转发层**:
+#   MainWindow 定义在这里, 其余按职责住在 gui/style|widgets|dialogs|step_card|threads。
+__all__ = [
+    "ImageViewDialog", "StatusWordsDialog", "PreconditionEditDialog",
+    "PreconditionsDialog", "NewCaseDialog", "TemplateCropDialog", "_CropView",
+    "_to_qimage", "validate_template",
+    "CASE_STATE_COLORS", "CASE_STATE_ROLE", "_LAMP_SIZE", "_ARROW_W",
+    "_FIELD_LABEL_W", "_CHECK_MIN_H", "make_lamp_pixmap", "_LAMP_PIX",
+    "lamp_pixmap", "lamp_icon", "_safe_relpath", "CATEGORY_COLORS",
+    "QUICK_ACTIONS", "STYLESHEET", "_ASSETS",
+    "ClickableLabel", "ClickableFrame", "FlowLayout", "make_action_menu",
+    "_FormCheckBox", "_HistComboDelegate", "_FitCombo", "_FitListView",
+    "_HistCombo", "CaseListWidget", "CaseItemDelegate",
+    "_make_field_widget", "_int_of", "_float_of", "_int4_of", "StepCard",
+    "_StepsHost", "_StepsEditor",
+    "DeviceScanThread", "UpdateCheckThread", "UpdateDownloadThread",
+]

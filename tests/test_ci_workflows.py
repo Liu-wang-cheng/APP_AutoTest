@@ -144,3 +144,31 @@ def test_group_filter_picks_one_case_per_app_group():
     assert collect_cases("", "三星") and all(
         "三星" in p for _m, _n, _s, _p, _w, p in collect_cases("", "三星")) or True
     assert collect_cases("", "不存在的组") == []
+
+
+def test_pyflakes_is_clean_like_the_static_job():
+    """★ 静态检查 job 跑的就是 `python -m pyflakes core gui tools vlm` 并**要求零输出**。
+
+    这里本地复刻一遍 —— 否则"静态检查挂了"只有 CI 知道(2026-10-16 之前的实况:
+    那条 job 从建好起就一直红, 因为转发层里"为副作用而导入"的名字被报成未用导入,
+    而 `# noqa` 只有 flake8 认、pyflakes 不认)。
+    修法是把这些名字列进 `__all__`(见 gui/main_window.py 与 core/session.py 的注释)。
+    """
+    import subprocess
+    pyflakes = pytest.importorskip("pyflakes")
+    assert pyflakes                                  # 只为拿到 importorskip 的语义
+    r = subprocess.run([sys.executable, "-m", "pyflakes", "core", "gui", "tools", "vlm"],
+                       cwd=str(ROOT), capture_output=True, text=True)
+    assert r.returncode == 0, (
+        "静态检查不干净(CI 的 `静态检查` job 会因此变红):\n"
+        + (r.stdout or "") + (r.stderr or ""))
+
+
+def test_shipped_cases_pass_the_validator():
+    """★ 静态检查 job 的另一半: `python tools/validate_cases.py` 对仓库里**现有**用例
+    必须全绿 —— 否则 CI 会在你什么都没改的情况下变红(2026-10-16: 涂鸦组 4 个方向滑动
+    步骤被误报「结束点位」必填, 那条 job 从建好起一直是红的)。"""
+    import subprocess
+    r = subprocess.run([sys.executable, "tools/validate_cases.py"],
+                       cwd=str(ROOT), capture_output=True, text=True)
+    assert r.returncode == 0, "用例静态校验没通过(CI 会红):\n" + (r.stdout or "") + (r.stderr or "")

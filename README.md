@@ -50,9 +50,13 @@ Auto_test/
 ├── vlm/backend.py           VisionBackend 协议 + VisionRouter(预留,后端未实现)
 ├── gui/                     PySide6 用例编排器
 ├── Test_cases/              YAML 用例
-├── Test_img/templates/      模板图(需从真机截图裁剪; ★ 与**该设备同尺度**, 且只裁
-│                          图标主体 —— 别把按钮外的背景裁进去: 尺度不符/带背景的模板
-│                          放大匹配后会与**同形按钮**互相误匹配, 见 core/vision 尺度预警)
+├── Test_cases/<组>/templates/  模板图(**按 APP 组分目录**)。★ 两条硬要求:
+│                          ① 与**该设备同尺度**(别在别的缩放/分辨率上截);
+│                          ② 把**整个按钮盘(含图标)**裁进去, 别只裁图标、也别带大片背景。
+│                          做不到这两条, 放大匹配时会与**同形按钮**互相误匹配(点错按钮),
+│                          见 core/vision 的「模板尺度」预警。最省事的做法: 用例编辑区
+│                          点「裁剪模板」按钮 —— 连当前设备截屏、点选位置自动裁、
+│                          存盘前当场给匹配百分比与"屏上还有几处也像它"的校验。
 ├── config/                  config.example.yaml(入库) + locators.yaml
 ├── mock_server/             Flask 假后端(mock 模式)
 ├── tests/                   单元测试(除 test_yaml_runner 外都无需设备)
@@ -162,7 +166,9 @@ GUI 工具栏「前置条件」四项(默认全选),对应 `core/session.py` 的
 
 ## 已知约束
 
-- **模板图需自行截取**:`Test_img/templates/` 初始为空,从真机截图裁剪目标元素放进去。
+- **模板图需自行截取**:放在 `Test_cases/<组>/templates/`(按 APP 分组,初始为空)。
+  最省事、也最不容易出错的做法: 用例编辑区 → 模板框旁的「裁剪模板」→ 连当前设备
+  截屏 → 在画面上点一下自动裁 → 命名保存(存盘前会给出匹配百分比校验结果)。
 - **企业透明加密**:若 `config.yaml` 变成密文(`%TSD-Header` 开头),用白名单进程
   (如 git)取回明文;框架会给出明确提示而不是裸报编码错误。
 - **VLM 未实现**:`vlm/backend.py` 只提供协议与路由,`config.yaml` 里 `vlm.enabled` 默认关闭。

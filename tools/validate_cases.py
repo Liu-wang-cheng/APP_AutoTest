@@ -13,7 +13,8 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from core.driver import BASE_DIR, load_yaml_file
-import core.actions            # noqa: F401  导入即注册全部动作(下面要查"一步几个主动作")
+from core import actions as _actions    # 导入即注册全部动作(下面要查"一步几个主动作")
+_actions.load_all()                     # 幂等: 显式调用一次
 from core import registry as reg
 from gui import schema
 from tests.test_yaml_runner import iter_all_steps, iter_modules

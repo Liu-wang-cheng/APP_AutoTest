@@ -2,9 +2,46 @@
 
 新增动作只需: 1) ActionRunner 加 _do_xxx + 分发表一条  2) 此处加一条声明
 """
+import re
 
 # 字段类型: text 文本 | int 整数 | float 小数 | bool 布尔 | int4 四个整数[x1,y1,x2,y2]
 #          group 组合字段(值为字典,子字段全空时退化为标量 True)
+
+#: 坐标写法: "100,500"(半角/全角逗号都可以)
+_XY_RE = re.compile(r"^\s*[-+]?\d+(?:\.\d+)?\s*[,，]\s*[-+]?\d+(?:\.\d+)?\s*$")
+
+#: 纯数字(含小数)的字符串
+_NUM_RE = re.compile(r"^\s*[-+]?(?:\d+(?:\.\d*)?|\.\d+)\s*$")
+
+
+def fmt_num(value):
+    """数值的**显示**写法: 5.0 → "5", 180.0 → "180", 1.5 → "1.5", "5.0" → "5"。
+
+    ★ 用户 2026-10-14 / 2026-10-16: 卡片摘要修过一次(显示 5s), 但「延时等待」的**秒数
+      输入框**里还是 "5.0"、用例级 wait 还会显示 "+5.0s" —— YAML 里浮点就是浮点
+      (`sleep: 5.0`), 界面上却该按人写的样子收干净。
+      只影响**显示**: 取回的值仍是数字、存盘也仍是原值, 引擎判定一字未动。
+    """
+    t = str(value).strip()
+    try:
+        f = float(t)
+    except (TypeError, ValueError):
+        return t
+    if f.is_integer() and abs(f) < 1e15:
+        return str(int(f))
+    return f"{f:g}"
+
+
+def swipe_end_required(step):
+    """滑动的「结束点位」是否必填 —— **只在写下坐标时**必填。
+
+    ★ 为什么要有条件必填(2026-10-16): `swipe: up` / `swipe: fast-left` 这类**方向名**
+      由引擎自己算起止点(core/actions/basic.do_swipe), 根本不需要结束点位; 一刀切
+      required=True 会把它们判成"必填缺失" —— tools/validate_cases.py 因此对 4 个合法
+      步骤报 FAIL, CI 的「静态检查」job 从建好起就一直红。
+    """
+    return bool(_XY_RE.match(str(step.get("swipe") or "")))
+
 
 # 所有步骤通用的附加字段(修改器)
 GENERIC_FIELDS = [
@@ -39,9 +76,14 @@ ACTIONS = [
     {"key": "back", "label": "按返回键", "category": "操作", "fields": [], "fixed_bool": True},
     {"key": "swipe", "label": "滑动", "category": "操作", "fields": [
         {"key": "swipe", "label": "开始点位", "type": "text", "required": True,
-         "hint": "起点坐标, 如 100,500"},
-        {"key": "swipe_end", "label": "结束点位", "type": "text", "required": True,
-         "hint": "终点坐标, 如 100,1500 —— 滑动路径会标注在证据截图上"},
+         "hint": "起点坐标(如 100,500), 或方向名 left/right/up/down/fast-left…"},
+        {"key": "swipe_end", "label": "结束点位", "type": "text",
+         # ★ 只在**写了坐标**时才必填(2026-10-16): 方向名(up / fast-left)由引擎自己
+         #   算起止点(见 core/actions/basic.do_swipe), 一刀切 required=True 会把合法的
+         #   方向滑动判成"必填缺失" —— tools/validate_cases.py 报的 4 个假问题、
+         #   CI「静态检查」一直红, 就是这么来的。
+         "required": True, "required_when": swipe_end_required,
+         "hint": "终点坐标, 如 100,1500 —— 滑动路径会标注在证据截图上(填了方向名则不用填)"},
     ]},
     {"key": "if_click", "label": "条件点击", "category": "操作", "fields": [
         {"key": "if_click", "label": "候选目标", "type": "text", "required": True,
@@ -287,7 +329,14 @@ def validate_step(step):
     for f in action["fields"]:
         if f["type"] == "group":
             continue
-        if f.get("required") and not str(step.get(f["key"], "")).strip():
+        # ★ 条件必填: required_when(step) 为假时这一格不是必填(见 swipe_end_required)
+        need = bool(f.get("required"))
+        if need and f.get("required_when"):
+            try:
+                need = bool(f["required_when"](step))
+            except Exception:
+                need = True          # 判定函数出错 → 保守按必填处理
+        if need and not str(step.get(f["key"], "")).strip():
             errors.append(f"「{f['label']}」必填")
     if errors and action.get("tip"):
         errors.append(action["tip"])
@@ -322,7 +371,7 @@ def step_summary(step):
     action_key = display_action_key(step)
     if action_key is None:
         if "wait" in step and len(step) <= 2:
-            return f"延时等待 {step['wait']:g}s"
+            return f"延时等待 {fmt_num(step['wait'])}s"
         return str(step)
     action = ACTION_BY_KEY[action_key]
     val = step[action_key]
@@ -330,8 +379,11 @@ def step_summary(step):
         val = ",".join(f"{k}={v}" for k, v in val.items() if v not in (None, ""))
     elif isinstance(val, list):
         val = f"[{','.join(map(str, val))}]"
-    elif isinstance(val, float):
-        val = f"{val:g}"                      # 5.0 → 5(用户 2026-10-14: 显示 5s 而非 5.0)
+    elif isinstance(val, (int, float)) or (isinstance(val, str) and _NUM_RE.fullmatch(val.strip())):
+        # ★ 数值一律按"人写的样子"显示(用户 2026-10-14 / 2026-10-16):
+        #   YAML 里 `sleep: 5.0`(浮点)在摘要里要显示成 5s, 不是 5.0s; 字符串 "5.0"
+        #   也一样(旧用例/手写 YAML 里很常见)。见 fmt_num()。
+        val = fmt_num(val)
     # ★ chip(彩色标签)已经显示动作名, summary 只显示「具体参数」, 不再重复
     detail = "" if val in (True, "") else str(val)
     if action_key == "sleep" and detail:
@@ -349,7 +401,7 @@ def step_summary(step):
     if step.get("screenshot"):
         badges.append("📷")
     if step.get("wait"):
-        badges.append(f"+{step['wait']}s")
+        badges.append(f"+{fmt_num(step['wait'])}s")     # 5.0 → +5s(见 fmt_num)
     if step.get("retry"):
         badges.append(f"↻{step['retry']}")
     if step.get("timeout"):

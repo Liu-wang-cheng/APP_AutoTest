@@ -1466,6 +1466,63 @@ def test_window_title_has_version(win):
     assert "vacuum_app_test" not in win.windowTitle(), "源项目名残留必须去掉"
 
 
+def test_runworker_pauses_right_after_first_blocking_precondition_failure(
+        qapp, monkeypatch, tmp_path):
+    """★ 用户 2026-10-16 的日志现场: "等待充电"超时后, 后面的"电量门槛"**接着跑**了 6 分钟,
+    既不暂停也不弹窗, 直到人手动按停止。
+
+    现在: 走**真实** prepare_items, 第一条阻断项失败 → 后面那条一眼都不跑, 弹窗立刻来。
+    """
+    import types
+    from gui import runner_thread as rt
+    from gui.runner_thread import RunWorker
+
+    d = tmp_path / "Test_cases" / "三星"
+    d.mkdir(parents=True)
+    case_file = d / "全局清扫.yaml"
+    case_file.write_text("module: 全局清扫\ncases:\n  - name: 冒烟\n    steps:\n"
+                         "      - desc: 等一下\n        wait: 0.1\n", encoding="utf-8")
+
+    import uiautomator2 as u2
+    monkeypatch.setattr(u2, "connect",
+                        lambda dev: types.SimpleNamespace(implicitly_wait=lambda t: None))
+    # 真实 prepare_items, 但两项都换成桩: 充电失败, 电量本该通过
+    ran = []
+    monkeypatch.setattr(rt.session, "ensure_charging",
+                        lambda d_, **kw: ran.append("charging") or False)
+    monkeypatch.setattr(rt.session, "ensure_battery",
+                        lambda d_, **kw: ran.append("battery") or True)
+    monkeypatch.setattr(rt.session.time, "sleep", lambda s: None)   # 执行间隔不真等
+    monkeypatch.setattr(rt.session, "get_battery_level", lambda d_: 42)
+    monkeypatch.setattr(rt, "load_config",
+                        lambda: {"runner": {"step_interval": 0}, "app": {"package": "p"},
+                                 "target_device": "SE3L"})
+    monkeypatch.setattr(rt, "ExcelReport",
+                        lambda: __import__("core.excel_report", fromlist=["ExcelReport"])
+                        .ExcelReport(path=str(tmp_path / "rep.xlsx")))
+
+    worker = RunWorker("fake-dev", [str(case_file)],
+                       [{"type": "charging", "enabled": True},
+                        {"type": "battery", "enabled": True}], 1)
+    steps, done, pre_retry = [], [], []
+    worker.step_done.connect(lambda r: steps.append(dict(r)))
+    worker.finished_run.connect(lambda ok, msg: done.append((ok, msg)))
+    from PySide6.QtCore import Qt as _Qt
+    worker.precondition_retry.connect(
+        lambda detail: (pre_retry.append(detail),
+                        worker.resolve_precondition_retry(False)),
+        _Qt.DirectConnection)      # 同步跑 run(): 队列投递永不到达(同上一用例)
+    worker.run()
+
+    assert ran == ["charging"], f"充电失败后**不该**再跑电量门槛: {ran}"
+    assert pre_retry and "等待充电" in pre_retry[0], f"要立刻弹窗提醒: {pre_retry}"
+    assert not [s for s in steps if not s["desc"].startswith("前置-")], "取消后不跑用例步骤"
+    pre_rows = [s for s in steps if s["desc"].startswith("前置-")]
+    assert len(pre_rows) == 1, f"只该有失败的那一条前置行(后面的没跑): {pre_rows}"
+    assert pre_rows[0]["passed"] is False and pre_rows[0]["error"], pre_rows[0]
+    assert done and not done[0][0]
+
+
 def test_runworker_precondition_failure_blocks(qapp, monkeypatch, tmp_path):
     """★ 前置检查未通过 → 阻断本轮:前置 FAIL 行落表/报告、无任何步骤行、
     precondition_failed 信号带详情、finished_run(False) 带原因(用户要求)"""
@@ -4184,3 +4241,105 @@ def test_same_name_cases_get_separate_sheets_and_dirs(qapp, monkeypatch, tmp_pat
     names = wb.sheetnames
     assert "冒烟(a)-1" in names and "冒烟(b)-1" in names, \
         f"同名用例必须各占一张表(带文件名后缀): {names}"
+
+
+def test_float_field_and_badges_show_no_trailing_dot_zero(qapp):
+    """★ 用户 2026-10-16: "还有延迟等待这里为何还是5.0的秒数显示" + "测试步骤中的显示效果
+    是不是没修复" —— 2026-10-14 那次只修了**摘要**; 卡片里的**秒数字段**与用例级 wait 的
+    "+10.0s" 角标还是老样子(YAML 里浮点就是浮点: `sleep: 5.0`)。
+    只改显示: 取回的值仍是数字, 存盘/引擎判定一字未动。
+
+    ★ 直接构造卡片(而不是走 add_step): 卡片复用时不重建字段控件, 走 win 的路径只会
+      看到**建卡那一刻**的值, 测不到"5.0 怎么显示"(同 test_template_crop 的理由)。
+    """
+    class _Main:
+        steps = [{"desc": "等待清扫记录加载", "sleep": 5.0, "wait": 10.0},
+                 {"desc": "等待拖布清洗完成", "sleep": 180.0}]
+        preconditions = []
+        expanded_key = (0,)
+        _find_action = mw.MainWindow._find_action
+
+        def on_card_edited(self):
+            pass
+
+    card = mw.StepCard(_Main(), 0)
+    try:
+        assert card.widgets["sleep"].text() == "5",             f"秒数字段应显示 5(不是 5.0): {card.widgets['sleep'].text()!r}"
+        txt = card.summary_label.text()
+        assert "5s" in txt and "5.0" not in txt and "+10s" in txt, txt
+        assert float(card.getters["sleep"]()) == 5.0, "取回的值仍是数字(只改显示)"
+        # ★ 存盘也别再写回 5.0: 整数就存 5(YAML 干净, 引擎自己 float())
+        assert card.getters["sleep"]() == 5 and isinstance(card.getters["sleep"](), int)
+    finally:
+        card.deleteLater()
+
+    from gui import schema as _s
+    assert _s.fmt_num(5.0) == "5" and _s.fmt_num("5.0") == "5"
+    assert _s.fmt_num(180.0) == "180" and _s.fmt_num(1.5) == "1.5"
+    assert _s.fmt_num(0.95) == "0.95" and _s.fmt_num("100,500") == "100,500"
+
+
+def test_precondition_retry_restarts_from_the_right_item(qapp, monkeypatch, tmp_path):
+    """★ 点「重试前置」时, 要**从失败那一项**开始重跑(用户 2026-10-15 的语义: 失败项之后
+    的前置可能依赖前面状态, 一并重跑)。
+
+    坑在这里(2026-10-16 修): prepare_items 结果里的 key 是 `pre<序号>`, 序号是**这一批**
+    里的下标 —— 重试时那一批是 items 的切片, 直接拿去切 items 就会错位(第二次重试把已经
+    通过的项重跑、或整段漏跑)。这条测试用"第一次第2项失败 → 第二次第3项失败"钉住换算。
+    """
+    import types
+    from gui import runner_thread as rt
+    from gui.runner_thread import RunWorker
+
+    d = tmp_path / "Test_cases" / "三星"
+    d.mkdir(parents=True)
+    case_file = d / "全局清扫.yaml"
+    case_file.write_text("module: 全局清扫\ncases:\n  - name: 冒烟\n    steps:\n"
+                         "      - desc: 等一下\n        wait: 0.1\n", encoding="utf-8")
+
+    import uiautomator2 as u2
+    monkeypatch.setattr(u2, "connect",
+                        lambda dev: types.SimpleNamespace(implicitly_wait=lambda t: None))
+    monkeypatch.setattr(rt, "load_config",
+                        lambda: {"runner": {"step_interval": 0}, "app": {"package": "p"},
+                                 "target_device": "SE3L"})
+    monkeypatch.setattr(rt, "ExcelReport",
+                        lambda: __import__("core.excel_report", fromlist=["ExcelReport"])
+                        .ExcelReport(path=str(tmp_path / "rep.xlsx")))
+
+    items = [{"type": "restart", "enabled": True},
+             {"type": "charging", "enabled": True},
+             {"type": "map_load", "enabled": True},
+             {"type": "battery", "enabled": True}]
+    seen, script = [], [1, 1]      # 每批里"第 1 项(0基)失败"—— 两批都在批内下标 1
+
+    def _fake_prepare(d_, cfg_, got_items, **kw):
+        seen.append(list(got_items))
+        bad = script.pop(0) if script else None
+        return [{"key": f"pre{i}", "desc": session.item_label(it), "ok": i != bad}
+                for i, it in enumerate(got_items)]
+
+    from core import session
+    monkeypatch.setattr(rt.session, "prepare_items", _fake_prepare)
+
+    worker = RunWorker("fake-dev", [str(case_file)], items, 1)
+    answers = [True, True, False]          # 重试两次后取消
+    from PySide6.QtCore import Qt as _Qt
+    worker.precondition_retry.connect(
+        lambda detail: worker.resolve_precondition_retry(answers.pop(0)),
+        _Qt.DirectConnection)
+    worker.run()
+
+    assert [len(x) for x in seen] == [4, 3, 2], \
+        f"第一次全量(4项) → 从第2项重试(3项) → 从第3项重试(2项): {[len(x) for x in seen]}"
+    assert seen[1][0]["type"] == "charging", [i["type"] for i in seen[1]]
+    assert seen[2][0]["type"] == "map_load", [i["type"] for i in seen[2]]
+
+
+def test_case_wait_field_shows_integer_without_dot_zero(win):
+    """★ 用例级「间隔s」框同理(用户 2026-10-16: "延迟等待这里为何还是5.0的秒数显示"):
+    用例写 `wait: 5.0` 时框里显示 5。"""
+    win.create_case("测试组", group="测试组")
+    win.current_case["wait"] = 5.0
+    win._load_case_into_ui()
+    assert win.case_wait_edit.text() == "5", win.case_wait_edit.text()
