@@ -1,10 +1,18 @@
 name: 静态检查
 
-# 方案 C1(2026-10-16): 与设备无关的质量门禁 —— 几十秒跑完, 拦的是"静默失效"那类问题:
+# 方案 C1(2026-10-16): 与设备无关的质量门禁 —— 一分钟左右跑完, 拦的是"静默失效"那类问题:
 #   · pyflakes: 未定义名/未用导入(比如重构后忘了改引用);
 #   · tools/validate_cases.py: 用例 YAML 里写了不存在的键、越界阈值 —— 这类错误在引擎里
 #     往往是"这一步被悄悄跳过", 真机跑完才发现少做了事。
 # ★ 覆盖率**先只观测**, 不设门槛(门槛要等积累几个月的真实数字再定, 否则就是逼自己刷测试数)。
+#
+# ★ 依赖为什么不止 pyflakes/pyyaml(2026-10-16 修): validate_cases.py 要导入**引擎**才能
+#   拿到动作注册表(判"一步里几个主动作")与 schema, 而 core/actions/asserts.py、core/vision.py
+#   等在模块级 import cv2 / numpy / PIL —— 只装 pyflakes 时它在 CI 上第一行就
+#   `ModuleNotFoundError: No module named 'cv2'`(这个 job 从建好起一直红, 本地却看不出,
+#   因为开发机的 .venv 里什么都有)。装的是 headless 版(CI 里没有显示器)。
+#   PySide6 / rapidocr / ddddocr 等**不用**装: 静态校验的依赖链里没有它们
+#   (tests/test_ci_workflows.py 有一条守护会核对这件事)。
 on:
   push:
     branches: [master]
@@ -31,7 +39,7 @@ jobs:
       - name: 安装检查工具
         run: |
           python -m pip install --upgrade pip
-          pip install pyflakes pyyaml
+          pip install pyflakes pyyaml numpy opencv-python-headless pillow
 
       - name: pyflakes(未定义名/未用导入)
         run: python -m pyflakes core gui tools vlm

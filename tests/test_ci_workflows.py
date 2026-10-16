@@ -172,3 +172,61 @@ def test_shipped_cases_pass_the_validator():
     r = subprocess.run([sys.executable, "tools/validate_cases.py"],
                        cwd=str(ROOT), capture_output=True, text=True)
     assert r.returncode == 0, "用例静态校验没通过(CI 会红):\n" + (r.stdout or "") + (r.stderr or "")
+
+
+def _module_level_third_party(entry):
+    """扫一个入口脚本**模块级**导入链上的第三方依赖(只用标准库 ast)。
+
+    ★ 为什么要这条(2026-10-16): 「静态检查」job 从建好起一直是红的, 本地却复现不出来 ——
+      validate_cases.py 会导入引擎(core.actions 等), 那边模块级 import cv2/numpy/PIL;
+      CI 只装了 pyflakes+pyyaml, 于是第一行就 ModuleNotFoundError: cv2。开发机的 .venv
+      里什么都有, 所以本地怎么跑都是绿的。
+    """
+    import ast
+    LOCAL = {"core", "gui", "vlm", "tests", "tools"}
+
+    def path_of(mod):
+        p = ROOT.joinpath(*mod.split("."))
+        for cand in (p.with_suffix(".py"), p / "__init__.py"):
+            if cand.is_file():
+                return cand
+
+    seen, third, stack = set(), set(), [entry]
+    while stack:
+        mod = stack.pop()
+        if mod in seen:
+            continue
+        seen.add(mod)
+        f = path_of(mod)
+        if f is None:
+            continue
+        for node in ast.parse(f.read_text(encoding="utf-8")).body:
+            if isinstance(node, ast.Import):
+                for a in node.names:
+                    top = a.name.split(".")[0]
+                    stack.append(a.name) if top in LOCAL else third.add(top)
+            elif isinstance(node, ast.ImportFrom):
+                base = node.module or ""
+                if base.split(".")[0] in LOCAL:
+                    stack += [f"{base}.{a.name}" for a in node.names]
+                else:
+                    third.add(base.split(".")[0] or node.names[0].name)
+    return {t for t in third if t and t not in sys.stdlib_module_names}
+
+
+#: 第三方 import 名 → pip 包名(静态检查 job 里要能装上)
+_PIP_FOR = {"cv2": "opencv", "PIL": "pillow", "numpy": "numpy", "yaml": "pyyaml",
+            "pyflakes": "pyflakes"}
+
+
+def test_static_job_installs_what_the_validator_imports():
+    """★ 「静态检查」装的包要覆盖 validate_cases.py 真正导入的第三方库 ——
+    少装一个(尤其 cv2)整条 job 就红, 而且**本地跑不出来**(开发机什么都有)。"""
+    _data, text = _load("static.yml")
+    third = _module_level_third_party("tools.validate_cases")
+    missing = [f"{m}(pip: {_PIP_FOR.get(m, m)})" for m in sorted(third)
+               if _PIP_FOR.get(m, m) not in text]
+    assert not missing, (
+        f"static.yml 没装 validate_cases.py 需要的依赖: {missing}\n"
+        f"(该脚本模块级导入链上的第三方库: {sorted(third)})")
+    assert "python tools/validate_cases.py" in text, "静态校验那一步没了?"

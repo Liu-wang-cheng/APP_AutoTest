@@ -66,12 +66,15 @@ def test_native_scale_template_hits_its_own_button(tmp_path):
 
     这正是「裁剪模板」的用法 —— 在该设备的当前画面上、把整个按钮盘裁进去。
     """
-    from core import vision
+    from core import imgio, vision
     frame = _frame()
     gray = _gray(frame)
     for xy, name in ((PLAY_XY, "▶启动"), (HOME_XY, "⌂回充")):
         p = tmp_path / f"{name}.png"
-        assert cv2.imwrite(str(p), _disc(frame, xy))
+        # ★ 必须走 imgio.imwrite: 文件名是中文/符号, cv2.imwrite 在 Windows 上按 ANSI
+        #   路径开文件, 非 UTF-8 控制台(CI runner 就是 cp1252)下**静默写不进去**,
+        #   随后 find_in_gray 报 FileNotFoundError(2026-10-16 CI 上实测)
+        assert imgio.imwrite(str(p), _disc(frame, xy)), p
         info = {}
         pos = vision.find_in_gray(gray, str(p), detail=info)
         assert pos is not None, f"{name}: 原生尺度模板必须能命中"
@@ -129,9 +132,10 @@ def test_scale_warning_fires_for_off_scale_match(tmp_path, caplog):
     from core import vision
     frame = _frame()
     disc = _disc(frame, HOME_XY)
+    from core import imgio
     p = tmp_path / "half.png"
-    cv2.imwrite(str(p), cv2.resize(disc, (DISC // 2, DISC // 2),
-                                   interpolation=cv2.INTER_AREA))
+    assert imgio.imwrite(str(p), cv2.resize(disc, (DISC // 2, DISC // 2),
+                                            interpolation=cv2.INTER_AREA))
     recs = []
 
     class _H(__import__("logging").Handler):
@@ -164,8 +168,9 @@ def test_low_scale_template_can_hit_the_wrong_button(tmp_path):
     gray = _gray(frame)
     small = cv2.resize(_disc(frame, HOME_XY), (int(DISC * 0.57), int(DISC * 0.57)),
                        interpolation=cv2.INTER_AREA)
+    from core import imgio
     p = tmp_path / "small_home.png"
-    cv2.imwrite(str(p), small)
+    assert imgio.imwrite(str(p), small)
     info = {}
     pos = vision.find_in_gray(gray, str(p), detail=info)
     if pos is not None:

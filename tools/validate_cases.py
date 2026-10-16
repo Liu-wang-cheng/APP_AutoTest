@@ -10,6 +10,17 @@
 import os
 import sys
 
+# ★ 输出一律 UTF-8(2026-10-16 修): 这个脚本打的都是中文, 而 Windows 控制台/被别的进程
+#   抓走 stdout 时默认编码可能是 GBK 或 cp1252 —— 那样第一行 print 就
+#   `UnicodeEncodeError: 'charmap' codec can't encode ...` 直接崩, 整条静态检查跟着红
+#   (CI 上实测: pytest 子进程里就是 cp1252)。errors="replace" 保证编不出的字退化成 ?,
+#   而不是把整个检查带崩。
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+except Exception:      # 老版本/被重定向过的流: 拿不到就算了
+    pass
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from core.driver import BASE_DIR, load_yaml_file
