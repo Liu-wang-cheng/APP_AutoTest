@@ -14,6 +14,7 @@
 方案 A 绝不触碰 Release/version.json。
 """
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -316,6 +317,28 @@ def test_all_workflow_step_names_are_quoted_when_needed():
                 continue
             assert ": " not in val, (
                 f"{p.name}:{i} 的 name 值里有「冒号+空格」会被 YAML 截断, 请加引号: {val!r}")
+
+
+def test_actions_are_node24_versions():
+    """★ 用的 action 必须是**跑在 node24 上**的版本(2026-10-16)。
+
+    起因: CI 日志里刷 `##[warning]Node.js 20 is deprecated. The following actions target
+    Node.js 20 but are being forced to run on Node.js 24: actions/checkout@v4, ...` ——
+    旧版 action 已经在被"强制"跑, 哪天 node20 真摘掉就会集体失效。实测各 action 的
+    action.yml: checkout 从 **v5** 起、setup-python 与 upload-artifact 从 **v6** 起是 node24。
+    这里只卡"不低于第一个 node24 版本", 以后往上升级不会被这条测试挡住。
+    """
+    MIN = {"actions/checkout": 5, "actions/setup-python": 6, "actions/upload-artifact": 6}
+    bad = []
+    for p in sorted(WF.glob("*.yml")):
+        for i, line in enumerate(p.read_text(encoding="utf-8").splitlines(), 1):
+            m = re.search(r"uses:\s*(actions/[a-z-]+)@v(\d+)", line)
+            if not m:
+                continue
+            repo, major = m.group(1), int(m.group(2))
+            if repo in MIN and major < MIN[repo]:
+                bad.append(f"{p.name}:{i} {repo}@v{major} (< v{MIN[repo]} = node20 时代)")
+    assert not bad, "这些 action 是 node20 版本, 会被强制跑在 node24 并刷弃用警告: " + "; ".join(bad)
 
 
 def test_real_smoke_uses_repo_committed_data_not_a_desktop_path():

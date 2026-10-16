@@ -17,9 +17,11 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 40
     steps:
-      - uses: actions/checkout@v4
+      # ★ action 版本 = 跑在 **node24** 上的(2026-10-16 升级): checkout ≥v5、setup-python ≥v6、
+      #   upload-artifact ≥v6 才是 node24; 旧版会被 runner 强制跑在 node24 并刷弃用警告。
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.13'
           cache: pip
@@ -36,7 +38,7 @@ jobs:
         run: build.bat
 
       - name: 上传分发包(7 天后自动清理)
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: AutoTest-zip-${{ github.run_id }}
           path: dist/AutoTest_v*.zip

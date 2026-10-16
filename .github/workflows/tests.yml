@@ -22,9 +22,13 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      # ★ action 版本 = 跑在 **node24** 上的那些(2026-10-16 升级): 旧版(v4/v5)是 node20,
+      #   GitHub 已在日志里刷 "Node.js 20 is deprecated ... forced to run on Node.js 24" ——
+      #   升级到 node24 版本消掉这个警告, 也免得哪天 node20 真被摘掉时集体失效。
+      #   checkout 从 v5 起、setup-python / upload-artifact 从 v6 起是 node24(实测 action.yml)。
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.13'
           cache: pip                     # 依赖装了 200MB+, 缓存能省几分钟
@@ -42,7 +46,7 @@ jobs:
 
       - name: 失败时上传 junit 报告(便于下载排查)
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: pytest-junit-${{ github.run_id }}
           path: reports/junit.xml

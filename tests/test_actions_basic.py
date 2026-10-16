@@ -219,7 +219,17 @@ def test_sleep_pauses_and_returns_paused_seconds(runner, monkeypatch):
 def test_assert_timeout_extends_by_pause(runner, monkeypatch):
     """timeout 顺延: _poll_sleep 每轮返回"挂起了 2s" → 1s 的断言在 2.5s 内不应超时
     (旧行为: 1s 即抛 AssertionError —— 该行为已随暂停引入而改变)"""
-    monkeypatch.setattr(runner, "_poll_sleep", lambda n: 2.0)
+    # ★ 桩要**能停**(2026-10-16 修): 原来写成 `lambda n: 2.0` 永远返回"挂起了 2s", 而
+    #   调用方是 `end_time += paused` —— 超时被无限顺延, 断言线程**永远不会结束**。
+    #   于是 `assert t.is_alive()` 变成"永远成立"的空断言, 线程还会一直活到测试会话结束
+    #   (CI 的 27 条警告里那条 PytestUnhandledThreadExceptionWarning + "Logging error"
+    #   就是它)。现在前两轮顺延、之后不再顺延 → 线程会如期抛超时并退出。
+    rounds = {"n": 0}
+
+    def _poll(n):
+        rounds["n"] += 1
+        return 2.0 if rounds["n"] <= 2 else 0.0
+    monkeypatch.setattr(runner, "_poll_sleep", _poll)
     errors = []
 
     def _run():
@@ -232,12 +242,22 @@ def test_assert_timeout_extends_by_pause(runner, monkeypatch):
     t.start()
     t.join(2.5)
     assert t.is_alive(),         f"1s 超时 + 每轮挂起 2s 顺延, 2.5s 内不该抛: {errors}"
+    t.join(10)
+    assert not t.is_alive(), "测试结束时线程还在跑(会让 pytest 报未处理线程异常)"
+    assert errors, "顺延结束后最终还是该超时失败(否则这条断言什么都没测到)"
+    assert time.time() - t0 >= 3.5, "顺延的两轮应该真的把墙钟推迟了"
 
 
 def test_wait_for_timeout_extends_by_pause(runner, monkeypatch):
     """★ wait_for 轮询同样顺延(2026-10-14 审查 P1): _poll_sleep 每轮返回"挂起 2s"
     → 15s 的 wait_for 在 3s 墙钟内不该超时(旧实现必超时)"""
-    monkeypatch.setattr(runner, "_poll_sleep", lambda n: 2.0)
+    # 桩同前: 顺延两轮后不再顺延(否则超时被无限顺延, 线程永不结束)
+    rounds = {"n": 0}
+
+    def _poll(n):
+        rounds["n"] += 1
+        return 2.0 if rounds["n"] <= 2 else 0.0
+    monkeypatch.setattr(runner, "_poll_sleep", _poll)
     errors = []
 
     def _run():
@@ -249,6 +269,9 @@ def test_wait_for_timeout_extends_by_pause(runner, monkeypatch):
     t.start()
     t.join(3.0)
     assert t.is_alive(),         f"3s 超时 + 每轮挂起 2s 顺延, 3s 墙钟内不该抛: {errors}"
+    t.join(10)
+    assert not t.is_alive(), "测试结束时线程还在跑(会让 pytest 报未处理线程异常)"
+    assert errors, "顺延结束后最终还是该超时失败"
 
 
 def test_stopped_step_row_is_marked_stopped(runner):

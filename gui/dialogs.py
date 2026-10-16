@@ -18,7 +18,7 @@ from core import vision
 from core.logger import get_logger
 from gui.step_card import _StepsEditor
 from gui.style import STYLESHEET
-from gui.widgets import _FitCombo
+from gui.widgets import _FitCombo, mouse_xy
 
 log = get_logger()
 
@@ -76,12 +76,12 @@ class ImageViewDialog(QDialog):
                     self._zoom_out()
                 return True        # 吃掉滚轮:滚动条不再响应
             if t == QEvent.MouseButtonPress and event.button() == Qt.LeftButton:
-                self._drag_last = event.pos()
+                self._drag_last = mouse_xy(event)     # Qt6 写法, 见 gui.widgets.mouse_xy
                 self._scroll.viewport().setCursor(Qt.ClosedHandCursor)
                 return True
             if t == QEvent.MouseMove and self._drag_last is not None:
-                d = event.pos() - self._drag_last
-                self._drag_last = event.pos()
+                d = mouse_xy(event) - self._drag_last
+                self._drag_last = mouse_xy(event)
                 # 拖拽平移:内容跟随鼠标(滚动条反向滚动)
                 self._scroll.horizontalScrollBar().setValue(
                     self._scroll.horizontalScrollBar().value() - d.x())
@@ -642,7 +642,7 @@ class _CropView(QWidget):
         self.center_at(cx, cy)
 
     def mousePressEvent(self, ev):
-        x, y = self.to_img(ev.pos())
+        x, y = self.to_img(mouse_xy(ev))
         bx, by, bw, bh = self.box
         if bx <= x <= bx + bw and by <= y <= by + bh:
             self._drag = (x - bx, y - by)          # 点框内 → 拖动
@@ -653,7 +653,7 @@ class _CropView(QWidget):
     def mouseMoveEvent(self, ev):
         if self._drag is None:
             return
-        x, y = self.to_img(ev.pos())
+        x, y = self.to_img(mouse_xy(ev))
         self.box[0], self.box[1] = x - self._drag[0], y - self._drag[1]
         self._clamp()
         self.on_change()

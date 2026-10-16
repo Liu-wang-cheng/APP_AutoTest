@@ -16,6 +16,18 @@ from gui.style import _ARROW_W, _CHECK_MIN_H
 log = get_logger()
 
 
+def mouse_xy(ev):
+    """鼠标事件里的**整数坐标** —— Qt6 的正确写法。
+
+    ★ 为什么要有这个小函数(2026-10-16): 老的 `ev.pos()` 在 PySide6 里已弃用,
+      每次点击都刷一条 `DeprecationWarning: 'QMouseEvent.pos() const' is marked as
+      deprecated` —— CI 的测试日志里攒了 26 条这种警告, 把真正的信号盖掉了。
+      Qt6 的替代是 `ev.position()`(返回 QPointF, 浮点), 要整数坐标得再 `.toPoint()`。
+      统一走这里: 以后再有 `ev.pos()` 一眼就能看出来(gui/ 里有守护测试盯着)。
+    """
+    return ev.position().toPoint()
+
+
 class ClickableLabel(QLabel):
     """可点击的图片预览标签"""
     clicked = Signal()
@@ -364,10 +376,11 @@ class _HistCombo(_FitCombo):
 
     def eventFilter(self, obj, ev):
         if obj is self.view().viewport() and ev.type() == QEvent.MouseButtonRelease:
-            idx = self.view().indexAt(ev.pos())
+            pos = mouse_xy(ev)
+            idx = self.view().indexAt(pos)
             if idx.isValid():
                 rect = self.view().visualRect(idx)
-                if ev.pos().x() >= rect.right() - _HistComboDelegate._W:
+                if pos.x() >= rect.right() - _HistComboDelegate._W:
                     self.removed.emit(idx.row())
                     return True            # 消费事件: 不选中该项
         return super().eventFilter(obj, ev)
@@ -400,7 +413,7 @@ class CaseListWidget(QListWidget):
     def mousePressEvent(self, event):
         # 箭头命中:直接执行移动,不进基类(避免同时改选中)
         if event.button() == Qt.LeftButton and getattr(self, "_owner", None):
-            row, delta = self.itemDelegate().arrow_hit(event.pos())
+            row, delta = self.itemDelegate().arrow_hit(mouse_xy(event))
             if row is not None:
                 item = self.item(row)
                 if item is not None:

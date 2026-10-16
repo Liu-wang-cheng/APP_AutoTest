@@ -164,13 +164,31 @@ def test_prune_releases_selection_keeps_newest_and_current():
     assert len(got) == 3, got
 
 
-def test_prune_releases_script_defaults_to_dry_run():
-    """★ 脚本默认**演练**(不加 --apply 只打印) —— 免得谁手滑跑一下就删了包。"""
-    import subprocess
-    import sys as _sys
-    from pathlib import Path
-    root = Path(__file__).resolve().parent.parent
-    r = subprocess.run([_sys.executable, "tools/prune_releases.py", "--help"],
-                       cwd=str(root), capture_output=True, text=True)
-    assert r.returncode == 0
-    assert "--apply" in r.stdout and "演练" in r.stdout
+def test_prune_releases_defaults_to_dry_run(capsys, monkeypatch):
+    """★ 脚本默认**演练**: 不加 --apply 时**一个删除请求都不该发出**(只是打印)。
+
+    ★ 为什么改成进程内调用(2026-10-16): 原来起子进程断言 `r.stdout` —— CI 上出现了
+      `r.stdout is None`(本地无论怎么跑都复现不出来), 而且它测的只是"帮助里有没有
+      --apply 字样", 没测到真正要紧的事。现在直接调 main(), 用抓到的请求列表当判据:
+      演练模式下**没有任何 urlopen**(删除走的就是它)。
+    """
+    from tools import prune_releases as P
+    # 仓库与 token 直接喂给它(--repo + 环境变量), 不去碰 main() 内部 `import release`
+    # 那种"顶层模块名"的解析 —— 那跟 `tools.release` 不是同一个模块对象, 打桩会打空
+    monkeypatch.setenv("GITHUB_TOKEN", "fake-token")
+    # list_releases 返回的是**按创建时间倒序**(脚本自己排好再传给判据)
+    monkeypatch.setattr(P, "list_releases", lambda repo, token: [
+        {"id": 12, "tag_name": "v1.1", "created_at": "2026-02-01", "assets": [{"size": 10}]},
+        {"id": 11, "tag_name": "v1.0", "created_at": "2026-01-01", "assets": [{"size": 10}]}])
+    monkeypatch.setattr(P, "current_version_tag", lambda repo, token: "v1.1")
+
+    sent = []
+    monkeypatch.setattr(P.urllib.request, "urlopen",
+                        lambda *a, **k: sent.append(a) or (_ for _ in ()).throw(
+                            AssertionError("演练模式下不该发出任何请求")))
+    rc = P.main(["--keep", "1", "--repo", "owner/repo"])   # 不传 --apply
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "演练模式" in out and "--apply" in out, out
+    assert "将删除 1 个" in out, out
+    assert sent == [], f"演练模式发了请求: {sent}"

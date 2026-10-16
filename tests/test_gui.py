@@ -591,8 +591,13 @@ def test_真实用例文件回环不丢键(win):
     known |= {f["key"] for a in schema.ACTIONS for f in a["fields"]}
     known |= {s["key"] for a in schema.ACTIONS for f in a["fields"]
               if f.get("type") == "group" for s in f.get("fields", [])}
-    known |= {"desc", "screenshot", "wait", "timeout", "retry", "circular",
-              "threshold", "switch_tpl", "switch_label", "switch_area", "else"}
+    # ★ 通用字段 + 「修饰键」**共用同一份清单**(2026-10-16 修): 这里原来手抄了一份,
+    #   抄的时候漏了分支键 `then` —— 而用户的真实用例里 if/then 很常见, 于是真实用例一
+    #   导入就红(实测: 换成用户验证过的 三星/全局清扫 之后 CI 立刻失败)。
+    #   现在直接用 tools/validate_cases 的 META(它才是"修饰键"的正主, 与引擎/schema 对齐),
+    #   外加 schema.GENERIC_FIELDS(纯截图/纯等待这类也算合法步骤)。
+    from tools.validate_cases import META
+    known |= set(META) | {f["key"] for f in schema.GENERIC_FIELDS}
 
     total = 0
 

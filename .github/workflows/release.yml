@@ -42,7 +42,8 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v4
+      # ★ node24 版 action(2026-10-16 升级, 消掉 Node.js 20 弃用警告); ssh-key 输入仍支持
+      - uses: actions/checkout@v7
         with:
           ref: master             # 见坑 ②: 发版要基于 master
           fetch-depth: 0
@@ -56,7 +57,7 @@ jobs:
           #   但那时推送会被规则拒 —— 预检那一步会先拦下来并说明)。
           ssh-key: ${{ secrets.RELEASE_DEPLOY_KEY }}
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.13'
           cache: pip
@@ -149,7 +150,7 @@ jobs:
 
       - name: "演练: 上传 zip 供下载(不发布)"
         if: github.event.inputs.dry_run == 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: AutoTest-dryrun-${{ github.run_id }}
           path: dist/AutoTest_v*.zip
