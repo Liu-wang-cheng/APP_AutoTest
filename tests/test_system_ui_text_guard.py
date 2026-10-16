@@ -52,6 +52,15 @@ class _Dev:
 
 
 @pytest.fixture(autouse=True)
+def _reset_ocr_frame_cache():
+    """OCR 的帧缓存(1.5s TTL)是模块级全局 —— 本文件的用例会连调两次, 必须前后清掉"""
+    from core import ocr
+    ocr._cache.update(t=0.0, key=None, boxes=[], texts=[])
+    yield
+    ocr._cache.update(t=0.0, key=None, boxes=[], texts=[])
+
+
+@pytest.fixture(autouse=True)
 def _restore_ignored():
     """本文件会改"忽略哪些包" —— 前后都还原, 别留给别的测试"""
     sentinel.set_ignore_packages(None)
@@ -205,3 +214,59 @@ def test_ocr_fault_words_from_system_ui_do_not_trip_sentinel(monkeypatch):
     assert _s.scan_status_words  # 哨兵走的是同一批 OCR 行
     hit, _src, _raw, _pos = _s.text_present_detail(_OcrDev(SYS_XML + FULL_SCREEN), ["充电"])
     assert hit is None, "系统栏里的「检查更新」既不该命中目标, 也不该触发故障哨兵"
+
+
+# ── ④ 识别**之前**就屏蔽系统栏(用户 2026-10-16: "应该把手机系统那一段排除掉识别才对") ──
+
+class _ShotDev:
+    """桩设备: 给一张固定画面, 用于检查"送进 OCR 引擎的图"长什么样"""
+
+    serial = "fake"
+
+    def __init__(self, img):
+        self._img = img
+
+    def screenshot(self, path=None, format=None):
+        return self._img.copy()
+
+
+def test_ocr_masks_system_ui_before_recognition(monkeypatch):
+    """★ 送进 OCR 引擎的那张图里, 系统栏那一段必须已经被抹黑(而不是识别完再丢)
+
+    抹黑而不裁图的原因: 裁掉会让后面所有行的 y 坐标整体偏移, 每个调用方都要做坐标回填。
+    """
+    import numpy as np
+    from core import ocr
+
+    seen = {}
+
+    def _fake_engine(img):
+        seen["img"] = img.copy()
+        return [], None
+
+    monkeypatch.setattr(ocr, "_get", lambda: _fake_engine)
+    img = np.full((300, 200, 3), 200, dtype=np.uint8)
+    ocr.screen_boxes(_ShotDev(img), use_cache=False, exclude=[(0, 0, 200, 60)])
+    got = seen["img"]
+    assert got[:60].max() == 0, "系统栏那一段应被抹黑"
+    assert got[60:].min() == 200, "系统栏以下必须原样保留(坐标系不变)"
+    assert got.shape == img.shape, "抹黑不能改变画面尺寸(坐标才对得上)"
+
+
+def test_ocr_cache_key_includes_excluded_regions(monkeypatch):
+    """★ 同一帧、不同屏蔽范围不能互相顶替缓存(否则会拿到"没抹黑那次"的结果)"""
+    from core import ocr
+    calls = []
+
+    def _fake_engine(img):
+        calls.append(img.copy())
+        return [], None
+
+    monkeypatch.setattr(ocr, "_get", lambda: _fake_engine)
+    import numpy as np
+    dev = _ShotDev(np.full((300, 200, 3), 200, dtype=np.uint8))
+    ocr.screen_boxes(dev, exclude=[(0, 0, 200, 60)])
+    ocr.screen_boxes(dev, exclude=[(0, 0, 200, 60)])       # 同范围 → 命中缓存
+    assert len(calls) == 1, "同屏蔽范围应复用缓存"
+    ocr.screen_boxes(dev, exclude=[])                       # 换范围 → 必须重新识别
+    assert len(calls) == 2, "换了屏蔽范围就不能复用缓存"

@@ -508,8 +508,12 @@ def text_present_detail(d, texts, xml=None, round_no=None):
         #   电量文案)只能按坐标排。判据用**实测**的系统 UI 矩形(不是猜比例), 且只有整行
         #   落在矩形内才丢(压线的不动) —— 见 sentinel.system_ui_rects/drop_system_ui_lines。
         from core.sentinel import drop_system_ui_lines, system_ui_regions
-        _boxes_all = list(ocr.screen_boxes(d))        # [(行文本, 整框)]
-        _boxes = drop_system_ui_lines(_boxes_all, system_ui_regions(xml))
+        _regions = system_ui_regions(xml)
+        # ★ 识别**之前**就把系统栏抹黑(用户 2026-10-16: "应该把手机系统那一段排除掉识别
+        #   才对") —— 事后过滤只是兜底: 抹黑后那一段压根不参与识别, 日志里也不会出现
+        #   "系统栏的字命中了什么"
+        _boxes_all = list(ocr.screen_boxes(d, exclude=_regions))
+        _boxes = drop_system_ui_lines(_boxes_all, _regions)
         if len(_boxes) != len(_boxes_all):
             _lost = [t for t, b in _boxes_all if (t, b) not in _boxes]
             log.info(f"[OCR] 忽略手机系统 UI 内的 {len(_lost)} 行识别结果: {_lost}")

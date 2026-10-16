@@ -299,7 +299,7 @@ def test_battery_ocr_fallback(monkeypatch):
     from core import ocr, session
     monkeypatch.setattr(ocr, "available", lambda: True)
     monkeypatch.setattr(ocr, "screen_boxes",
-                        lambda d, use_cache=True: [("电池 93%%", (0, 0, 300, 40)), ("正在吸尘", (0, 0, 300, 40))])
+                        lambda d, **k: [("电池 93%%", (0, 0, 300, 40)), ("正在吸尘", (0, 0, 300, 40))])
     assert session.get_battery_level(_Runner(xml='<node text="扫地机器人0087"/>')) == 93
 
 
@@ -352,7 +352,7 @@ def test_ocr_find_detail_returns_the_matching_line(monkeypatch):
     """find_detail: 返回 (命中的候选, OCR 行, 坐标); 没命中返回 (None, "", None)"""
     from core import ocr
     monkeypatch.setattr(ocr, "screen_boxes",
-                        lambda d, use_cache=True: [("清洗拖布 已完成", (10, 20, 300, 40)),
+                        lambda d, **k: [("清洗拖布 已完成", (10, 20, 300, 40)),
                                                    ("正在清洁", (30, 40, 300, 40))])
     assert ocr.find_detail(None, ["干燥拖布", "已完成"]) == ("已完成", "清洗拖布 已完成", (10, 20))
     assert ocr.find_detail(None, ["干燥拖布", "已取消"]) == (None, "", None)

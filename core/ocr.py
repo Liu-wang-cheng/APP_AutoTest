@@ -93,18 +93,28 @@ def sparse(xml, min_texts=SPARSE_MIN_TEXTS):
     return len([t for t in re.findall(r'text="([^"]*)"', xml) if t]) < min_texts
 
 
-def screen_boxes(d, use_cache=True):
-    """截图 → OCR → [(文本, (x1, y1, x2, y2))];失败返回空列表(绝不影响主流程)
+def screen_boxes(d, use_cache=True, exclude=None):
+    """截图 → (可选: 屏蔽指定区域) → OCR → [(文本, (x1, y1, x2, y2))]
 
-    ★ 为什么要连**框**一起给(2026-10-15): 判断"这行字是不是手机状态栏/通知栏里的"
-      必须知道整行的上下边界 —— 只看左上角坐标没法区分"整行落在系统栏内"(该丢)和
-      "从系统栏压着线往下的 APP 文案"(不该丢)。见 sentinel.drop_system_ui_lines()。
+    exclude: 要**屏蔽掉再做识别**的矩形 [(x1,y1,x2,y2)] —— 手机系统 UI(状态栏/通知栏)。
+    ★ 为什么在识别**之前**屏蔽(用户 2026-10-16: "应该把手机系统那一段排除掉识别才对"):
+      识别完再丢只是在"结果层面"补救 —— 系统栏上的字仍会被读出来(日志里能看到它命中了
+      什么), 也可能在边界上干扰相邻行的切分。抹黑之后再识别, 那一段从一开始就不存在。
+    ★ 用**抹黑**而不是裁图: 裁掉会让后面所有行的 y 坐标整体偏移, 每个调用方都得做坐标回填
+      (漏一处就是"点错位置"); 抹黑不动坐标系, 调用方无感。
+    ★ 缓存键带上屏蔽区域: 同一帧用不同屏蔽范围识别, 结果不能互相顶替。
     """
+    rects = tuple(tuple(int(v) for v in r) for r in (exclude or []))
     now = time.time()
-    if use_cache and now - _cache["t"] < CACHE_SECS:
+    if use_cache and now - _cache["t"] < CACHE_SECS and _cache.get("key") == rects:
         return _cache["boxes"]
     try:
         img = d.screenshot(format="opencv")
+        if rects:
+            img = img.copy()
+            h, w = img.shape[:2]
+            for x1, y1, x2, y2 in rects:
+                img[max(0, y1):max(0, y2), max(0, x1):max(0, x2)] = 0   # 抹黑: 坐标系不变
         res, _ = _get()(img)
     except Exception as e:
         log.warning(f"[OCR] 识别失败(忽略): {e}")
@@ -118,19 +128,23 @@ def screen_boxes(d, use_cache=True):
             out.append((str(txt), (min(xs), min(ys), max(xs), max(ys))))
         except Exception:
             continue
-    _cache.update(t=now, boxes=out, texts=[(t, (b[0], b[1])) for t, b in out])
+    _cache.update(t=now, boxes=out, key=rects,
+                  texts=[(t, (b[0], b[1])) for t, b in out])
     return out
 
 
-def screen_texts(d, use_cache=True):
+def screen_texts(d, use_cache=True, exclude=None):
     """截图 → OCR → [(文本, (x, y))];失败返回空列表(绝不影响主流程)
 
     (x, y) = 识别框左上角 —— 老调用方的口径, 保持原样; 需要整框的用 screen_boxes()。
+    exclude 见 screen_boxes(): 手机系统 UI 的区域在**识别前**抹掉。
     """
     now = time.time()
-    if use_cache and now - _cache["t"] < CACHE_SECS:
+    rects = tuple(tuple(int(v) for v in r) for r in (exclude or []))
+    if use_cache and now - _cache["t"] < CACHE_SECS and _cache.get("key") == rects:
         return _cache["texts"]
-    return [(t, (b[0], b[1])) for t, b in screen_boxes(d, use_cache=use_cache)]
+    return [(t, (b[0], b[1])) for t, b in screen_boxes(d, use_cache=use_cache,
+                                                       exclude=exclude)]
 
 
 def contains(d, text):

@@ -153,6 +153,72 @@ def _draw_region_annotation(img, x1, y1, x2, y2, pct_txt, sim_line=None,
                 ink, 3, cv2.LINE_AA)
 
 
+def _compose_compare_evidence(cur_bgr, ref_bgr, x1, y1, x2, y2, pct_txt,
+                              sim_line, verdict, base_name="", target_w=1500):
+    """把「基准图 | 当前画面」并排合成**一张**对比证据图(用户 2026-10-16)。
+
+    ★ 为什么要合: 以前证据图上只有"当前画面 + 范围矩形", 看报告的人得自己在脑子里
+      对照基准图 —— 到底差在哪、是位置不对还是内容不对, 一眼看不出来。并排之后就
+      一眼可见(左边是拿什么比的, 右边是当时是什么样)。
+    · 两块图都画**同一个范围矩形**(左=白灰, 右=结论色), 且都带标题条(基准图文件名 /
+      当前画面 + 尺寸);
+    · 底部一条**结论带**: 相似度 / 阈值 / 范围 / PASS|FAIL —— 不读图也能看懂;
+    · 左右都按**实际参与比对的那张**(基准图若尺寸不同, 比对时已被缩放到当前画面尺寸,
+      这里显示同一张, 免得"图上量的位置"和"算相似度的位置"对不上);
+    · 最后整体缩到 target_w 宽: 报告里嵌入的图不至于太肥, 字随比例缩, 观感不变。
+    """
+    h_cur, w_cur = cur_bgr.shape[:2]
+    ref_show = ref_bgr
+    if ref_show is None or ref_show.shape[:2] != (h_cur, w_cur):
+        ref_show = cv2.resize(ref_bgr, (w_cur, h_cur)) if ref_bgr is not None \
+            else np.zeros_like(cur_bgr)
+    if ref_show.ndim == 2:
+        ref_show = cv2.cvtColor(ref_show, cv2.COLOR_GRAY2BGR)
+
+    band = 54                      # 每块图顶部的标题条高度
+    cap = 96                       # 底部结论带高度
+    left = np.zeros((h_cur + band, w_cur, 3), dtype=np.uint8)
+    right = np.zeros((h_cur + band, w_cur, 3), dtype=np.uint8)
+    left[band:] = ref_show
+    right[band:] = cur_bgr
+
+    def _bar(img, title, color):
+        cv2.rectangle(img, (0, 0), (img.shape[1], band), (32, 32, 32), -1)
+        cv2.putText(img, title, (12, band - 16), cv2.FONT_HERSHEY_SIMPLEX, 1.25,
+                    (0, 0, 0), 7, cv2.LINE_AA)
+        cv2.putText(img, title, (12, band - 16), cv2.FONT_HERSHEY_SIMPLEX, 1.25,
+                    color, 2, cv2.LINE_AA)
+
+    _bar(left, f"基准图: {base_name or 'baseline'}", (200, 200, 200))
+    _bar(right, f"当前画面 {w_cur}x{h_cur}", (0, 220, 255))
+
+    # 同一个范围矩形画在两块图上(左: 中性色, 右: 结论色) + 右侧写相似度/阈值
+    oy1, oy2 = y1 + band, y2 + band
+    cv2.rectangle(left, (x1, oy1), (x2 - 1, oy2 - 1), (200, 200, 200), 3)
+    _draw_region_annotation(right, x1, oy1, x2, oy2, pct_txt,
+                            sim_line=sim_line, verdict=verdict)
+
+    gap = np.full((h_cur + band, 8, 3), 90, dtype=np.uint8)
+    body = np.hstack([left, gap, right])
+
+    cap_img = np.full((cap, body.shape[1], 3), 32, dtype=np.uint8)
+    cap_img.flags.writeable = True
+    ink = (0, 220, 255) if verdict != "FAIL" else (80, 80, 255)
+    title = f"{verdict} | {sim_line or ''} | area {pct_txt}"
+    # 字号按图宽自适应: 窄图也保证整句结论不被截断(结论带了就是要能读完)
+    fs = min(1.6, max(0.5, (cap_img.shape[1] - 32) / max(len(title) * 20, 1)))
+    thick = max(2, int(round(fs * 2)))
+    cv2.putText(cap_img, title, (16, 62), cv2.FONT_HERSHEY_SIMPLEX, fs,
+                (0, 0, 0), thick + 4, cv2.LINE_AA)
+    cv2.putText(cap_img, title, (16, 62), cv2.FONT_HERSHEY_SIMPLEX, fs,
+                ink, thick, cv2.LINE_AA)
+    out = np.vstack([body, cap_img])
+    if target_w and out.shape[1] > target_w:      # 缩放保持可读 + 控制体积
+        scale = target_w / out.shape[1]
+        out = cv2.resize(out, (target_w, int(out.shape[0] * scale)))
+    return out
+
+
 def preview_region(frame, region):
     """预览对比范围(用户 2026-10-14): 在**当前设备画面**上画范围标注 → 存临时文件。
 
@@ -203,6 +269,12 @@ def compare_screen(runner, baseline, threshold=0.6, inverse=False, region=None):
         ref = np.array(Image.open(baseline).convert("L"))
     except Exception as e:
         raise FileNotFoundError(f"基准图读取失败: {baseline}, {e}")
+    # ★ 另读一份**彩色**基准图, 只用于把证据图拼成"基准 | 当前"并排(用户 2026-10-16)。
+    #   相似度计算仍走上面那份 PIL 灰度 —— 换实现会改变灰度取整, 让数值发生偏移。
+    from core import imgio as _imgio
+    ref_vis = _imgio.imread(baseline)
+    if ref_vis is None:
+        ref_vis = cv2.cvtColor(ref, cv2.COLOR_GRAY2BGR)
     if cur.shape != ref.shape:
         ref = cv2.resize(ref, (cur.shape[1], cur.shape[0]))
     h, w = cur.shape
@@ -224,18 +296,16 @@ def compare_screen(runner, baseline, threshold=0.6, inverse=False, region=None):
             # ★ 步骤写了 screenshot 键也照样落标注图(用户 2026-10-15): 后置块
             #   见到本图会直接采用(见 runner._execute 的 compare/diff 分支) ——
             #   否则会被重拍成一张**没有标注**的图, 对比结果就看不到了
-            vis = screen.copy()     # 标注底图用**彩色**BGR(灰度图上矩形/文字没有颜色)
+            # ★ 「基准图 | 当前画面」并排 + 底部结论带(用户 2026-10-16): 一眼看出
+            #   是拿什么比的、当时什么样、差在哪 —— 不必自己在脑子里对照两张图
+            vis = _compose_compare_evidence(
+                screen, ref_vis, x1, y1, x2, y2, pct_txt,
+                sim_line=f"sim {similarity:.1%} / thr {threshold:.0%}",
+                verdict=verdict, base_name=os.path.basename(baseline))
             path = runner._step_shot_path(getattr(runner, "_cur_step_desc", "") or "compare")
             from core import imgio
             if not imgio.imwrite(path, vis):      # 中文路径安全的写图
                 return
-
-            def _draw(img):
-                _draw_region_annotation(
-                    img, x1, y1, x2, y2, pct_txt,
-                    sim_line=f"sim {similarity:.1%} / thr {threshold:.0%}",
-                    verdict=verdict)
-            runner._annotate_shot(path, _draw)
             runner._pre_click_shot = path
         except Exception as e:
             log.debug(f"[截图比对] 证据标注失败(不影响比对结果): {e}")

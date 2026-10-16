@@ -515,7 +515,8 @@ class ActionRunner:
         from core import ocr as _ocr
         from core.sentinel import drop_system_ui_lines
         rects = self._system_ui_regions_cached()
-        for line, box in drop_system_ui_lines(list(_ocr.screen_boxes(self.d)), rects):
+        for line, box in drop_system_ui_lines(
+                list(_ocr.screen_boxes(self.d, exclude=rects)), rects):
             if value and value in line:
                 return value, (box[0], box[1])
         return None, None

@@ -3,6 +3,7 @@
 import sys
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -141,6 +142,26 @@ def _write_baseline(tmp_path, frame):
     return str(p)
 
 
+# ── 证据图结构(用户 2026-10-16: 合成"基准图 | 当前画面"并排) ──
+
+def _has_color(img, bgr, tol=30, min_px=40):
+    """图里有没有这种颜色 —— 布局/坐标变了也不误报(原先钉死某个像素, 一改布局就红)"""
+    d = np.abs(img.astype(int) - np.array(bgr)).sum(axis=2)
+    return int((d <= tol).sum()) >= min_px
+
+
+YELLOW_BOX, RED_BOX = (0, 200, 255), (0, 0, 235)
+YELLOW_INK, RED_INK = (0, 220, 255), (80, 80, 255)   # 结论带里的文字墨色
+
+
+def _right_half(img):
+    return img[:, img.shape[1] // 2:]
+
+
+def _left_half(img):
+    return img[:, :img.shape[1] // 2]
+
+
 def test_compare_area_percent_semantics(tmp_path):
     """★ 对比范围按**百分比**(用户 2026-10-14): "0,50 100,100" = 只比下半屏。
     帧: 上半灰下半白, 基准同构但下半被改 → 全屏相似度低, 下半区域相似度高。"""
@@ -201,7 +222,7 @@ def test_compare_area_pixel_form(tmp_path):
     compare_screen(runner, base_path, threshold=0.99, region="10,20 90,180")   # 像素
     assert runner._pre_click_shot
     img = _imread_any(runner._pre_click_shot)
-    assert tuple(img[20, 50]) == (0, 200, 255), tuple(img[20, 50])   # 边框在 y=20(像素)
+    assert _has_color(img, YELLOW_BOX), "像素范围模式下也要画范围矩形"
 
 
 def test_compare_area_mixed_units_rejected(tmp_path):
@@ -228,9 +249,10 @@ def test_compare_area_annotates_evidence(tmp_path):
     shot = runner._pre_click_shot
     assert shot and _imread_any(shot) is not None
     img = _imread_any(shot)
-    # 范围矩形边框画在 10%~90% 位置: 100x200 帧 → x=10..90, y=20..180, 边框色 (0,200,255) BGR
-    assert tuple(img[20, 50]) == (0, 200, 255), tuple(img[20, 50])
-    assert tuple(img[180, 50]) == (0, 200, 255), tuple(img[180, 50])
+    # 范围矩形(亮黄)画在两块图上; 复合图宽度 > 单张画面宽 ⇒ 确实是"并排"
+    assert _has_color(_left_half(img), (200, 200, 200)), "基准图上也要画范围矩形"
+    assert _has_color(_right_half(img), YELLOW_BOX), "当前画面上要有范围矩形"
+    assert img.shape[1] > 100, f"应该是两块并排的复合图, 实际 {img.shape[1]}px"
 
 
 # ── 基准引用扩展(用户 2026-10-14): shot:<子步骤描述> / pre:<前置描述> ──
@@ -289,8 +311,8 @@ def test_compare_fail_also_saves_evidence_with_verdict(tmp_path):
     shot = runner._pre_click_shot
     assert shot, "失败时也必须留下证据图"
     img = _imread_any(shot)
-    # 失败: 矩形用红色 (0,0,235) —— 取顶边像素验证
-    assert tuple(img[0, 50]) == (0, 0, 235), tuple(img[0, 50])
+    # 失败: 矩形与结论都转红
+    assert _has_color(img, RED_BOX), "失败时矩形应转红"
 
 
 def test_compare_pass_evidence_has_green_box(tmp_path):
@@ -303,7 +325,7 @@ def test_compare_pass_evidence_has_green_box(tmp_path):
     base_path = _write_baseline(tmp_path, frame.copy())
     compare_screen(runner, base_path, threshold=0.9, region="0%,0% 100%,100%")
     img = _imread_any(runner._pre_click_shot)
-    assert tuple(img[0, 50]) == (0, 200, 255), tuple(img[0, 50])
+    assert _has_color(img, YELLOW_BOX) and not _has_color(img, RED_BOX),         "通过: 矩形保持亮黄, 不该出现失败红"
 
 
 def test_compare_is_default_screenshot_step(tmp_path):
@@ -344,8 +366,8 @@ def test_compare_is_default_screenshot_step(tmp_path):
     got = r.results[0]["screenshot"]
     assert got, f"对比步骤必须默认产出截图: {r.results[0]}"
     img = _imread_any(got)
-    # 标注: 顶边有范围矩形(亮黄), 说明用的是标注图而不是裸截图
-    assert tuple(img[0, 50]) == (0, 200, 255), tuple(img[0, 50])
+    # 标注: 有范围矩形(亮黄), 说明用的是标注图而不是裸截图
+    assert _has_color(img, YELLOW_BOX), "对比步骤默认截图必须是带标注的复合图"
 
 
 def test_compare_with_explicit_screenshot_key_still_annotated(tmp_path):
@@ -381,7 +403,7 @@ def test_compare_with_explicit_screenshot_key_still_annotated(tmp_path):
     r.run_steps([{"desc": "对比", "compare": str(base), "threshold": 0.5,
                   "screenshot": True, "compare_area": "0%,0% 100%,100%"}])
     img = _imread_any(r.results[0]["screenshot"])
-    assert tuple(img[0, 50]) == (0, 200, 255), "写了 screenshot 键也要用标注图"
+    assert _has_color(img, YELLOW_BOX), "写了 screenshot 键也要用标注图"
 
 
 def test_preview_region_keeps_only_newest(tmp_path, monkeypatch):
@@ -411,3 +433,34 @@ def test_preview_region_keeps_only_newest(tmp_path, monkeypatch):
     assert len(left) == 3, f"预览图没封顶: {left}"
     assert os.path.basename(path) in left, "刚生成的那张被删了"
     assert "旧0.png" not in left and "旧1.png" not in left and "旧2.png" not in left, left
+
+
+def test_compare_evidence_is_side_by_side_baseline_and_current(tmp_path):
+    """★ 证据图是「基准图 | 当前画面」**并排**合成(用户 2026-10-16) —— 一眼看出
+    是拿什么比的、当时是什么样, 不必自己在脑子里对照两张图。
+
+    做法: 基准图用一块**显眼的蓝色**, 当前画面用灰色 —— 复合图左半必须是蓝的(基准),
+    右半是灰的(当前), 两个半边都要有范围矩形, 底部还要有结论带。
+    """
+    import cv2
+    import numpy as np
+    from core.actions.asserts import compare_screen
+
+    base = np.full((200, 100, 3), 0, dtype=np.uint8)
+    base[:, :, 0] = 255                       # BGR 纯蓝基准
+    cur = np.full((200, 100, 3), 120, dtype=np.uint8)
+    runner = _Runner(cur, tmp_path)
+    base_path = _write_baseline(tmp_path, base)
+    with pytest.raises(AssertionError):       # 蓝 vs 灰 → 必然失败(顺便验红框)
+        compare_screen(runner, base_path, threshold=0.9, region="10%,10% 90%,90%")
+
+    img = _imread_any(runner._pre_click_shot)
+    assert img is not None
+    left, right = _left_half(img), _right_half(img)
+    assert left[:, :, 0].mean() > right[:, :, 0].mean() + 60, \
+        "左半应是基准图(蓝), 右半是当前画面(灰)"
+    assert _has_color(left, (200, 200, 200)), "基准图上也要画出对比范围"
+    assert _has_color(right, RED_BOX), "当前画面上要画出(失败色的)对比范围"
+    # 底部结论带(96px 高): 深色底 + 结论色文字(FAIL 用红)
+    cap = img[-96:, :]
+    assert _has_color(cap, RED_INK), "底部结论带要写出 FAIL"
