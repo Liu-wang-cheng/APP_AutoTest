@@ -8,14 +8,16 @@
 
 | 组件 | 状态 | 位置 |
 |---|---|---|
-| 单元/集成测试 CI | ✅ 每次 push/PR 在 windows-latest 上跑 854 条 | `.github/workflows/tests.yml` |
+| 单元/集成测试 CI | ✅ 每次 push/PR 在 windows-latest 上跑 913 条（含静态/结构守护） | `.github/workflows/tests.yml` |
 | 分支门禁 | ✅ ruleset「合入规则」：要求 `pytest` 通过 + 禁强推/删分支；bypass = 你本人 / RepositoryRole(admin) / 一个 Integration；允许建新分支 | 仓库 Settings → Rules |
 | 打包自检（方案 A） | ✅ 手动/推 `v*` tag → `build.bat` → zip 传 artifact（7 天） | `.github/workflows/package.yml` |
 | 全自动发版（方案 B） | ✅ 手动填版本号/推 `v*.*.*` tag → 全套发版；勾 `dry_run` 可演练（不发布） | `.github/workflows/release.yml` |
 | 真机用例入口 | ✅ `pytest tests/test_yaml_runner.py --mode real --device <id> --case <名>`（`--mode` 默认 mock，裸跑不会碰设备） | `conftest.py` |
 | 存储瘦身（每月自动） | ✅ 保留最近 5 个 Release，更老的连同资产删掉（不动 tag/历史） | `.github/workflows/prune.yml` + `tools/prune_releases.py` |
 
-**唯一缺口**：能连模拟器/真机的那台机器还没注册成 self-hosted runner。
+**runner 已就位**（2026-10-16 起）：`smoke-pc` 在线，标签 `self-hosted/Windows/X64/realtest/emulator`。
+真机冒烟的**定时**仍是注释状态（`real-smoke.yml` 的 `schedule:`）—— 要开就说一声；不开也能在
+Actions 页面手动 Run。
 
 ---
 
