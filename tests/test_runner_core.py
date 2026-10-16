@@ -46,6 +46,10 @@ def _clean_registry():
     reg.ACTIONS.update(backup)
 
 
+#: autouse 夹具会把「立即返回」的 _sleep 挂到类上 —— 这里先留一份**真实现**,
+#: 给需要「真的按 0.2 秒切片轮询停止标志」的用例用(见 sleep 那条)
+_REAL_SLEEP = ActionRunner._sleep
+
 #: 本文件有 autouse 夹具**故意清空注册表**(每个测试只注册自己造的假动作) ——
 #: 需要真动作的测试从这里按需补回来(模块导入时先存一份完整的)。
 _REAL_ACTIONS = dict(reg.ACTIONS)
@@ -269,10 +273,25 @@ def test_sleep_step_goes_through_the_cancel_aware_sleep(runner, monkeypatch):
     runner._execute({"sleep": 0.4, "desc": "延时等待"})
     assert slept == [0.4], slept
 
-    # 停止后长等待要立刻退出
+    # 停止后长等待要立刻退出 —— ★ 判据是「**一次都没睡**」, 不是墙钟秒表(2026-10-16):
+    #   原来断言 elapsed < 1.0s, 在 CI 上偶发失败(实测 4.7s): 共享 runner 且前面的测试
+    #   刚触发过 OCR 引擎加载, 主线程被 CPU 抢走 —— 与实现无关, 却让发版闸门红了。
+    #   真正的语义是「_sleep 入口就看到停止标志 → 切片循环体一次都不执行」, 用计数断言
+    #   它既精确又不赌机器忙不忙。
+    import time as _time_mod
+    real_mod_sleep = _time_mod.sleep
+    sleeps = []
+
+    def _counted(sec):
+        sleeps.append(sec)
+        if len(sleeps) > 3:
+            raise AssertionError("已停止却还在睡: 切片循环不该执行")
+        real_mod_sleep(sec)
+
+    monkeypatch.setattr(ActionRunner, "_sleep", _REAL_SLEEP)   # 恢复真实现
+    monkeypatch.setattr("core.runner.time.sleep", _counted)
     runner.stopped = True
-    t0 = _t.monotonic()
     with pytest.raises(UserStopped):
         runner._execute({"sleep": 600, "desc": "延时等待"})
-    assert _t.monotonic() - t0 < 1.0, "停止没打断等待"
+    assert sleeps == [], f"已经处于停止状态, 一次都不该睡: {sleeps}"
     runner.stopped = False
