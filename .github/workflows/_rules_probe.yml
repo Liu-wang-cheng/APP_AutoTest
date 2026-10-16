@@ -1,0 +1,43 @@
+name: 探针(临时, 验证完即删)
+
+# 要回答两个问题(两轮对照, 都往**探针分支**推两次):
+#   A. 非默认分支上"往已存在分支推新提交" 到底会不会被 ruleset 的 required status checks 管?
+#      (第一次推是"建分支", do_not_enforce_on_create 会豁免 → 只有第二次推才有意义)
+#   B. 部署密钥(在 ruleset bypass 名单里的 DeployKey)能不能过?
+# 结论决定 release.yml 的预检该怎么写 —— 不能再留一个"永远通过"的假预检。
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write          # 上一次探针忘了写这个, 默认只读 token 直接 403
+
+jobs:
+  probe-token:
+    runs-on: windows-latest          # 用默认 GITHUB_TOKEN(没有 bypass)
+    steps:
+      - uses: actions/checkout@v4
+      - name: "默认 token 往探针分支推两次"
+        shell: pwsh
+        run: |
+          git config user.name "probe"; git config user.email "probe@example.com"
+          $b = "refs/heads/__probe_token"
+          git commit --allow-empty -m "token probe 1" | Out-Null
+          git push origin "HEAD:$b" 2>&1 | Write-Host; Write-Host "TOKEN push#1 exit=$LASTEXITCODE"
+          git commit --allow-empty -m "token probe 2" | Out-Null
+          git push origin "HEAD:$b" 2>&1 | Write-Host; Write-Host "TOKEN push#2 exit=$LASTEXITCODE"
+
+  probe-deploykey:
+    runs-on: windows-latest          # 用部署密钥(命中 ruleset 的 DeployKey bypass)
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ssh-key: ${{ secrets.RELEASE_DEPLOY_KEY }}
+      - name: "部署密钥 往探针分支推两次"
+        shell: pwsh
+        run: |
+          git config user.name "probe"; git config user.email "probe@example.com"
+          $b = "refs/heads/__probe_key"
+          git commit --allow-empty -m "key probe 1" | Out-Null
+          git push origin "HEAD:$b" 2>&1 | Write-Host; Write-Host "KEY push#1 exit=$LASTEXITCODE"
+          git commit --allow-empty -m "key probe 2" | Out-Null
+          git push origin "HEAD:$b" 2>&1 | Write-Host; Write-Host "KEY push#2 exit=$LASTEXITCODE"
