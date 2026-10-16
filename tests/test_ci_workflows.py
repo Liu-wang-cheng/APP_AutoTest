@@ -253,3 +253,25 @@ def test_release_precheck_is_not_a_dry_run():
     assert "git push origin \"HEAD:refs/heads/$b\"" in text, "预检②要真推探针分支"
     # checkout 必须带上部署密钥 —— 否则 release.py 的 push 还是走 token
     assert "ssh-key: ${{ secrets.RELEASE_DEPLOY_KEY }}" in text
+
+
+def test_no_secrets_in_step_if_conditions():
+    """★ `secrets` 上下文**不能**用在步骤的 `if:` 里(2026-10-16 踩到):
+
+    写了的话, YAML 照样能解析, 但**触发 workflow 时** GitHub 直接 422:
+    `Invalid Argument - failed to parse workflow: Unrecognized named-value: 'secrets'`
+    —— 也就是"发都发不出去", 而且本地看不出任何问题。
+    要用就把判断放进 `run:`(那里的 env 可以取 secrets), 或先在 job 级 env 里转成布尔。
+    """
+    for name in ("release.yml", "tests.yml", "static.yml", "package.yml", "real-smoke.yml"):
+        p = WF / name
+        if not p.is_file():
+            continue
+        data, _text = _load(name)
+        for job, spec in (data.get("jobs") or {}).items():
+            for step in spec.get("steps") or []:
+                cond = step.get("if")
+                if isinstance(cond, str):
+                    assert "secrets." not in cond, (
+                        f"{name}:{job} 的步骤「{step.get('name')}」在 if: 里用了 secrets —— "
+                        f"workflow 会解析失败(422), 请改用 run: 里的 env 判断")

@@ -71,30 +71,28 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-      - name: "预检①: 推送身份必须有 bypass(没配部署密钥就先停下, 别建 Release)"
+      - name: "预检: 推送身份必须是 ruleset bypass 名单里的部署密钥(+ 真推一次验证能写)"
         # ★ 为什么要有它: release.py 的顺序是「先建 Release/传资产, 再推 version.json」——
         #   万一推被仓库规则拦住, 就会留下「Release 已经发出去、但用户看到的清单还是旧的」
         #   这种半成品(v2.0.27 就这么中过一次: Release 有了、version.json 没更新, 用户
         #   在检查更新里看不到新版)。能推才继续, 放在打包之前, 早失败早省时间。
-        # ★ 为什么是"查身份"而不是"探一次推送"(2026-10-16 两次实测教训):
+        # ★ 为什么是"查身份 + 真推探针分支"而不是"dry-run 探一次"(2026-10-16 两次实测教训):
         #   · `git push --dry-run` **完全不会触发服务端规则**(本地造了个 pre-receive 钩子
         #     拒绝一切, dry-run 依然返回 0) —— 拿它当预检**永远通过**, 等于没有;
-        #   · 真正往 master 探一次要留提交/回退, 还会各触发一轮 CI, 代价太大。
-        #   而这次的失败模式是**确定**的: 规则要求 pytest 状态检查, 只有 ruleset bypass
-        #   名单里的身份能新增提交; Actions 自带的 GITHUB_TOKEN(app id 15368)**不在**名单
-        #   里(名单里那条是 DeployKey)。所以只要部署密钥没配上, 推送必被拒 —— 直接拦住。
-        if: ${{ secrets.RELEASE_DEPLOY_KEY == '' }}
+        #   · 真正往 master 探一次要留提交再回退, 还会各触发一轮 CI, 代价太大。
+        #   而失败模式是**确定**的: 规则要求 pytest 状态检查, 只有 ruleset bypass 名单里的
+        #   身份能新增提交; Actions 自带的 GITHUB_TOKEN(app id 15368)**不在**名单里
+        #   (名单里那条是 DeployKey)。所以没配部署密钥就直接拦下; 配了则真推一个**探针
+        #   分支**证明它真能写(用例/静态检查只在 master 上触发, 探针分支不产生额外 CI)。
+        # ★ 为什么判断写在 run 里而不是 `if:`(踩过): `secrets` 上下文**不能**用在 `if:`,
+        #   用了连 workflow 都解析不了(dispatches 直接 422 "Unrecognized named-value")。
         shell: pwsh
+        env:
+          KEY_SET: ${{ secrets.RELEASE_DEPLOY_KEY != '' }}
         run: |
-          throw "没配仓库 secret RELEASE_DEPLOY_KEY —— 用 Actions 自带的 GITHUB_TOKEN 推 version.json 会被仓库规则拒(GH013 Required status check), 那样会留下'Release 已发、清单没更新'的半成品。请加一个**写权限部署密钥**并把私钥存成 secret RELEASE_DEPLOY_KEY(ruleset 的 bypass 名单里已有 DeployKey 一条)。"
-
-      - name: "预检②: 部署密钥能写(真推一次探针分支, 不是 dry-run)"
-        # ★ 真推(2026-10-16): 证明这把部署密钥真的能写这个仓库 —— SSH 认证、写权限、
-        #   分支保护都不挡。推到**探针分支**(用例/静态检查只在 master 上触发, 所以不产生
-        #   额外 CI); 推完尽力删掉它(删分支被规则挡也无所谓, 反正是个丢弃的分支)。
-        if: ${{ secrets.RELEASE_DEPLOY_KEY != '' }}
-        shell: pwsh
-        run: |
+          if ($env:KEY_SET -ne 'true') {
+            throw "没配仓库 secret RELEASE_DEPLOY_KEY —— 用 Actions 自带的 GITHUB_TOKEN 推 version.json 会被仓库规则拒(GH013 Required status check), 那样会留下'Release 已发、清单没更新'的半成品。请加一个**写权限部署密钥**并把私钥存成 secret RELEASE_DEPLOY_KEY(ruleset 的 bypass 名单里已有 DeployKey 一条)。"
+          }
           git config user.name  "release-precheck"
           git config user.email "release-precheck@users.noreply.github.com"
           $b = "__release_probe"
