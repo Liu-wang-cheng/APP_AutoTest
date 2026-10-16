@@ -2608,7 +2608,7 @@ from gui.style import (
 from gui.widgets import (
     ClickableLabel, ClickableFrame, FlowLayout, make_action_menu, _FormCheckBox,
     _HistComboDelegate, _FitCombo, _FitListView, _HistCombo, CaseListWidget,
-    CaseItemDelegate,
+    CaseItemDelegate, mouse_xy,
 )
 from gui.dialogs import (
     ImageViewDialog, StatusWordsDialog, PreconditionEditDialog,
@@ -2637,7 +2637,7 @@ __all__ = [
     "QUICK_ACTIONS", "STYLESHEET", "_ASSETS",
     "ClickableLabel", "ClickableFrame", "FlowLayout", "make_action_menu",
     "_FormCheckBox", "_HistComboDelegate", "_FitCombo", "_FitListView",
-    "_HistCombo", "CaseListWidget", "CaseItemDelegate",
+    "_HistCombo", "CaseListWidget", "CaseItemDelegate", "mouse_xy",
     "_make_field_widget", "_int_of", "_float_of", "_int4_of", "StepCard",
     "_StepsHost", "_StepsEditor",
     "DeviceScanThread", "UpdateCheckThread", "UpdateDownloadThread",
