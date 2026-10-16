@@ -73,6 +73,7 @@ def test_release_workflow_permissions_and_guards():
     assert "environment:" not in text, "用户要求全自动, 不该有审批闸门"
     assert "dry_run" in text and "--pack-only" in text, "要有 dry_run 演练(只打包不发布)"
     assert "rev-list -n 1" in text, "tag 触发时要确认 tag 指向 master HEAD, 避免发错提交"
+    assert "--dry-run" in text,         "发布前要预检「这个身份能不能推 master」—— 否则会留下半成品发布(Release 发了但清单没更新)"
     job = data["jobs"]["release"]
     assert job.get("timeout-minutes"), "发版 job 要有超时, 免得卡住占着 runner"
 

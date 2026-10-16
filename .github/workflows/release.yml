@@ -62,6 +62,19 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
+      - name: "预检: 这个身份能不能推 master(不能就先停下, 别建 Release)"
+        # ★ 为什么要有它: release.py 的顺序是「先建 Release/传资产, 再推 version.json」——
+        #   万一推被仓库规则拦住, 就会留下「Release 已经发出去、但用户看到的清单还是旧的」
+        #   这种半成品(用户更新不到, 得手工补)。先用 --dry-run 探一次: 它只跟服务器协商、
+        #   不真的创建任何 ref; 能推才继续(而且放在打包之前, 早失败早省时间)。
+        shell: pwsh
+        run: |
+          $out = git push --dry-run origin "HEAD:refs/heads/master" 2>&1
+          $out | Write-Host
+          if ($LASTEXITCODE -ne 0) {
+            throw "当前身份推不了 master(多半是仓库规则要求状态检查) —— 请在 ruleset 的 bypass 名单里加上 GitHub Actions, 或改用带权限的 PAT 发版"
+          }
+
       - name: tag 触发时先确认"tag 就在 master 上"(避免发错提交)
         if: github.event_name == 'push'
         shell: pwsh
