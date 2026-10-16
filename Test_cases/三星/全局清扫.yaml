@@ -18,6 +18,13 @@ cases:
     assert: 正在清洁
     screenshot: true
     timeout: 60
+  # ★ 用户 2026-10-16 要求: 检测到清扫状态后**等 2 分钟**, 再按「开始回充」模板点回充
+  #   (让机器人回座, 后面的「判断是否清扫完成」才等得到烘干)。回充之后那步判据不变。
+  - desc: 清扫 2 分钟后点击回充
+    sleep: 120
+  - desc: 点击回充按钮(模板)
+    click_template: 开始回充.png
+    screenshot: true
   - desc: 判断是否清扫完成
     assert: 干燥拖布
     screenshot: true
