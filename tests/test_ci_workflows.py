@@ -232,18 +232,24 @@ def test_static_job_installs_what_the_validator_imports():
     assert "python tools/validate_cases.py" in text, "静态校验那一步没了?"
 
 
-def test_release_precheck_probes_a_real_push():
-    """★ 发版的"预检能不能推 master"必须是**真实的新提交**探针(2026-10-16 修)。
+def test_release_precheck_is_not_a_dry_run():
+    """★ 发版的预检**不能**靠 `git push --dry-run`(2026-10-16 实测两次):
 
-    原来的预检 `git push --dry-run origin HEAD:refs/heads/master` 推的是**当前 HEAD** ——
-    那是个 no-op(Everything up-to-date), 仓库规则根本不会评估它, 于是"预检通过、正式推送
-    被 GH013 拒", 留下"Release 已经发出去、version.json 还是旧版"的半成品(v2.0.27 中过)。
-    现在: 造一个空提交 → dry-run 推 → 立刻 reset 掉。
+    dry-run 根本不触发服务端规则 —— 本地造一个 pre-receive 钩子拒绝一切, `--dry-run`
+    依然返回 0。原来那版预检(推当前 HEAD)本来就永远通过, 我改成"造空提交再 dry-run"后
+    **依然**永远通过, 于是"预检通过、正式推送被 GH013 拒", 留下"Release 已发、version.json
+    还是旧版"的半成品(v2.0.27 中过)。
+
+    现在的预检是**确定性**的两条:
+      ① 没配 RELEASE_DEPLOY_KEY → 直接拦(Actions 自带的 GITHUB_TOKEN app id 15368 不在
+         ruleset bypass 名单里, 而名单里那条是 DeployKey —— 推送必被拒);
+      ② 配了就**真推**一次探针分支(不是 dry-run), 证明这把密钥真的能写。
     """
     _data, text = _load("release.yml")
-    assert "--allow-empty" in text and "reset --hard HEAD~1" in text, \
-        "预检要造一个真实提交再 dry-run 推, 推完 reset 掉"
-    assert "push --dry-run" in text
-    # 也钉住"可以用 PAT 发版"这条出路(默认令牌推不动时)
-    assert "RELEASE_TOKEN" in text, \
-        "checkout 要支持用 RELEASE_TOKEN(PAT) —— 仓库规则不放行 Actions 身份时的出路"
+    # ★ 只看**命令行**: 注释里正解释着"为什么不能用 dry-run", 别被自己的说明文字绊倒
+    cmds = [ln for ln in text.splitlines() if not ln.lstrip().startswith("#")]
+    assert not [ln for ln in cmds if "push --dry-run" in ln],         "dry-run 不触发服务端规则, 当预检等于没预检"
+    assert "RELEASE_DEPLOY_KEY" in text, "要用有 bypass 的部署密钥发版(ruleset 里已有 DeployKey 一条)"
+    assert "git push origin \"HEAD:refs/heads/$b\"" in text, "预检②要真推探针分支"
+    # checkout 必须带上部署密钥 —— 否则 release.py 的 push 还是走 token
+    assert "ssh-key: ${{ secrets.RELEASE_DEPLOY_KEY }}" in text
