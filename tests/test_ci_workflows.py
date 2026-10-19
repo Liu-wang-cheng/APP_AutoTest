@@ -106,8 +106,11 @@ def test_real_smoke_never_runs_on_fork_pull_requests():
     assert "pull_request" not in triggers, "真机 workflow 绝不能被 PR 触发(public 仓库 + 自建 runner)"
     assert "workflow_dispatch" in triggers, "至少要能手动触发"
     assert "self-hosted" in text and "realtest" in text, "要落在带 realtest 标签的自建 runner 上"
-    # 定时默认关着(用户还没确认夜里没人用设备) —— 允许注释形式存在
-    assert "# schedule:" in text, "定时应当是注释状态, 等用户确认时段再开"
+    # 定时已开(2026-10-19 手动冒烟跑绿后, 满足用户"验证通过了再开定时"的条件)。
+    # 时段 = UTC 18:00 = 北京 02:00(用户选的夜里没人用设备的时段)。
+    schedule = triggers.get("schedule")
+    assert schedule, "冒烟已验证通过, 定时应当开着(见 workflow 顶部说明)"
+    assert schedule[0]["cron"] == "0 18 * * *", "cron 必须是北京 02:00 对应的 UTC 18:00"
 
 
 def test_real_smoke_probes_device_and_uploads_scene():
