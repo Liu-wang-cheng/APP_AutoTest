@@ -18,9 +18,9 @@ app:
 target_device: 扫地机器人 0050
 
 device:
-  default: 127.0.0.1:5555   # --device auto 时使用;真机填 USB 序列号
+  default: 127.0.0.1:7555   # --device auto 时使用;真机填 USB 序列号(实测 7555 = MuMu,5555 无服务)
   list:
-    - id: 127.0.0.1:5555
+    - id: 127.0.0.1:7555
       name: 模拟器
 
 runner:
