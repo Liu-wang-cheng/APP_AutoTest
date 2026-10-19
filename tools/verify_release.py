@@ -43,7 +43,8 @@ def local_sha256(path):
 def repo_from_git_remote():
     try:
         r = subprocess.run(["git", "remote", "get-url", "origin"], cwd=ROOT,
-                           capture_output=True, text=True, timeout=20)
+                           capture_output=True, text=True, timeout=20,
+                           encoding="utf-8", errors="replace")
     except Exception:
         return ""
     url = (r.stdout or "").strip()

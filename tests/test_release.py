@@ -609,3 +609,40 @@ def test_no_tuple_timeout_in_urlopen():
             line = src[:m.start()].count("\n") + 1
             bad.append(f"{f.name}:{line}")
     assert not bad, f"urlopen 传了元组 timeout(会 TypeError, 见 _request_json 注释): {bad}"
+
+
+def test_post_release_verify_decodes_utf8(monkeypatch):
+    """★ v2.0.28 发版实测: windows-latest 控制台是 cp1252, 子进程输出中文时
+    `subprocess.run(text=True)` 会 UnicodeDecodeError(读线程里) → r.stdout 为 None
+    → 发版最后一步误报失败。必须显式 UTF-8 + PYTHONIOENCODING。"""
+    seen = {}
+
+    class R:
+        returncode = 0
+        stdout = "① 清单: 校验通过 ✅"
+        stderr = None
+
+    def fake_run(cmd, **kw):
+        seen.update(kw)
+        return R()
+
+    monkeypatch.setattr(release.subprocess, "run", fake_run)
+    ok, out = release.run_post_release_verify("2.0.28")
+    assert ok
+    assert "校验通过" in out
+    assert seen.get("encoding") == "utf-8"
+    assert seen.get("errors") == "replace"
+    assert (seen.get("env") or {}).get("PYTHONIOENCODING") == "utf-8"
+
+
+def test_post_release_verify_handles_missing_stdout(monkeypatch):
+    """解码失败时 stdout 可能是 None —— 不能再 AttributeError 把发版带崩。"""
+    class R:
+        returncode = 1
+        stdout = None
+        stderr = "下载链路失败"
+
+    monkeypatch.setattr(release.subprocess, "run", lambda cmd, **kw: R())
+    ok, out = release.run_post_release_verify("2.0.28")
+    assert not ok
+    assert "下载链路失败" in out

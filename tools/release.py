@@ -182,7 +182,8 @@ def _gh_release_exists(tag):
     """该 tag 是否已有 Release(gh release view 的退出码即答案)"""
     try:
         r = subprocess.run(["gh", "release", "view", tag], cwd=ROOT,
-                           capture_output=True, text=True, timeout=60)
+                           capture_output=True, text=True, timeout=60,
+                           encoding="utf-8", errors="replace")
         return r.returncode == 0
     except Exception:
         return False
@@ -230,7 +231,8 @@ def check_ci_green(repo, token, sha, wait_seconds=1200, poll_seconds=20, log=pri
     # ① 先确保这个提交推上去了
     try:
         r = subprocess.run(["git", "ls-remote", "origin", "master"], cwd=ROOT,
-                           capture_output=True, text=True, timeout=120)
+                           capture_output=True, text=True, timeout=120,
+                           encoding="utf-8", errors="replace")
         if sha not in (r.stdout or ""):
             log(f"   本地 HEAD({sha[:7]}) 还没推到 origin/master, 先推上去让 CI 跑")
             _git(["push", "origin", "master"])
@@ -282,13 +284,20 @@ def run_post_release_verify(version, deep=False):
                      os.path.join(ROOT, "tools", "verify_update_download.py")])
     outs, ok = [], True
     for cmd in cmds:
+        # ★ 必须显式 UTF-8(2026-10-19 v2.0.28 实测): GitHub 托管 runner 的控制台是
+        #   cp1252, 子进程打印中文时 `text=True` 按 cp1252 解码直接抛
+        #   UnicodeDecodeError(读线程里), 随后 r.stdout 为 None → 发版最后一步误报失败。
+        #   子进程也强制 PYTHONIOENCODING=utf-8, 避免它自己先编码失败。
+        env = dict(os.environ, PYTHONIOENCODING="utf-8")
         r = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True,
-                           timeout=3600)
-        outs.append(f"$ {' '.join(os.path.basename(c) for c in cmd)}\n"
-                    f"{r.stdout.strip()}")
+                           encoding="utf-8", errors="replace", timeout=3600,
+                           env=env)
+        out = (r.stdout or "").strip()
+        err = (r.stderr or "").strip()
+        outs.append(f"$ {' '.join(os.path.basename(c) for c in cmd)}\n{out}")
         if r.returncode != 0:
             ok = False
-            outs[-1] += f"\n{(r.stderr or '').strip()}"
+            outs[-1] += f"\n{err}"
     return ok, "\n".join(outs)
 
 
@@ -319,7 +328,8 @@ def get_token():
         return open(p, encoding="utf-8").read().strip()
     try:
         r = subprocess.run(["gh", "auth", "token"], capture_output=True,
-                           text=True, timeout=15)
+                           text=True, timeout=15,
+                           encoding="utf-8", errors="replace")
         if r.returncode == 0 and r.stdout.strip():
             return r.stdout.strip()
     except Exception:
@@ -443,7 +453,8 @@ def update_version_json_and_tag(repo, version, sha256, download_url, notes):
 
 def _git(args):
     r = subprocess.run(["git"] + args, cwd=ROOT, capture_output=True,
-                       text=True, timeout=300)
+                       text=True, timeout=300,
+                       encoding="utf-8", errors="replace")
     if r.returncode != 0:
         # ★ 必须把 git 自己的 stderr 带出来: 只抛 CalledProcessError 的话,
         #   "tag already exists" 这类真实原因全被吞掉, 排查只能靠手动重跑
@@ -456,7 +467,8 @@ def _git(args):
 def ensure_clean_tree():
     """工作区必须干净(允许未跟踪文件) —— 发版内容必须等于已提交内容。"""
     r = subprocess.run(["git", "status", "--porcelain", "--untracked-files=no"],
-                       cwd=ROOT, capture_output=True, text=True)
+                       cwd=ROOT, capture_output=True, text=True,
+                       encoding="utf-8", errors="replace")
     if r.stdout.strip():
         raise SystemExit("[ERROR] 工作区有未提交改动, 先提交再发版:\n"
                          + r.stdout)
@@ -531,7 +543,8 @@ def main(argv=None):
     repo = args.repo
     if not repo:
         r = subprocess.run(["git", "remote", "get-url", "origin"], cwd=ROOT,
-                           capture_output=True, text=True)
+                           capture_output=True, text=True,
+                           encoding="utf-8", errors="replace")
         repo = parse_repo_from_remote(r.stdout)
     if not repo:
         print("[ERROR] 解析不出 owner/repo(--repo 或 git remote origin)")
