@@ -49,26 +49,41 @@ jobs:
         with:
           fetch-depth: 1
 
-      - uses: actions/setup-python@v7
-        # ★ 必加(2026-10-19 实测): 自建 runner 的进程环境里带着
-        #   NoDefaultCurrentDirectoryInExePath=1 —— cmd 不再从"当前目录"找可执行文件。
-        #   而 setup-python 在 Windows 上的安装脚本正是:
-        #     cmd /c "cd <toolcache> && call python-3.13.16-amd64.exe ..."
-        #   于是必然报 ##[error]'python-3.13.16-amd64.exe' is not recognized as an internal
-        #   or external command → Error happened during Python installation。
-        #   实测: 该变量**只有空值**能让 cmd 恢复搜索行为('0'/'false' 都不行),
-        #   而 GitHub Actions 会把空字符串照样传给进程, cmd 视同未设置。
-        #   (只在 setup-python 这步置空, 不影响其它步骤的安全默认。)
-        env:
-          NoDefaultCurrentDirectoryInExePath: ''
-        with:
-          python-version: '3.13'
-          cache: pip
+      # ★ 不用 actions/setup-python(2026-10-19 实测, 冒烟第一次真跑就死在这):
+      #   自建 runner 的进程环境里带着 NoDefaultCurrentDirectoryInExePath=1 —— cmd 不再从
+      #   "当前目录"找可执行文件。setup-python 在 Windows 上的安装脚本正是:
+      #     cmd /c "cd <toolcache> && call python-3.13.16-amd64.exe ..."
+      #   于是必报 ##[error]'python-3.13.16-amd64.exe' is not recognized as an internal
+      #   or external command → Error happened during Python installation。
+      #   ★ 给它设 env 也救不了(实测过两轮): 步骤 env 只能**覆盖**、不能删除 runner 进程的
+      #     变量, 而 cmd 对"存在但为空"的变量仍然视为已定义(只有彻底删除才恢复搜索:
+      #     实测 empty→exit 1, 删除→exit 0, '0'/'false' 同样无效)。
+      #   所以改用这台 runner 上**已经装好的** Python(3.13; 可用仓库变量 SMOKE_PYTHON
+      #   指定路径), 依赖装进 RUNNER_WORKSPACE 下的复用 venv —— 不污染系统 Python,
+      #   也不用在每次跑之前先装一份 Python。
+      - name: 选用本机 Python(自建 runner)
+        shell: pwsh
+        run: |
+          $py = "${{ vars.SMOKE_PYTHON }}"
+          if (-not $py) { $py = "C:\Python\python.exe" }
+          if (-not (Test-Path $py)) {
+            throw "找不到 Python: $py —— 请把仓库变量 SMOKE_PYTHON 指向这台机器上的 Python 3.13"
+          }
+          $v = (& $py -c "import sys; print('%d.%d' % sys.version_info[:2])").Trim()
+          if ($v -ne "3.13") { throw "需要 Python 3.13, 实际 $v ($py)" }
+          Write-Host "Python: $py ($(& $py --version))"
+          "SMOKE_PY=$py" >> $env:GITHUB_ENV
 
       - name: 安装依赖
+        shell: pwsh
         run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          $venv = Join-Path $env:RUNNER_WORKSPACE 'smoke-venv'
+          if (-not (Test-Path "$venv\Scripts\python.exe")) { & $env:SMOKE_PY -m venv $venv }
+          $py = Join-Path $venv 'Scripts\python.exe'
+          "SMOKE_PY=$py" >> $env:GITHUB_ENV
+          & $py -m pip install --upgrade pip
+          & $py -m pip install -r requirements.txt
+          & $py -c "import uiautomator2, cv2, numpy, yaml; print('deps ok')"
 
       - name: "准备冒烟配置(用仓库里提交的 config/config.ci.yaml)"
         # ★ 用例/前置/模板**直接入库**用(用户 2026-10-16: "这个测试用例你直接替换过来用,
@@ -114,8 +129,8 @@ jobs:
           if (-not $group) { $group = "三星" }
           $case = "${{ github.event.inputs.case }}"
           if (-not $case) { $case = "全局清扫" }
-          Write-Host "冒烟: 组=$group 用例=$case 设备=$env:SMOKE_DEV")
-          python -m pytest tests/test_yaml_runner.py -q -rs `
+          Write-Host "冒烟: 组=$group 用例=$case 设备=$env:SMOKE_DEV python=$env:SMOKE_PY"
+          & $env:SMOKE_PY -m pytest tests/test_yaml_runner.py -q -rs `
             --mode real --device "$env:SMOKE_DEV" --group "$group" --case "$case" `
             --junit-xml=reports/junit-real.xml
 

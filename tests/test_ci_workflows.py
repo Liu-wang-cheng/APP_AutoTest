@@ -120,8 +120,8 @@ def test_real_smoke_probes_device_and_uploads_scene():
     assert "junit-real.xml" in text and "upload-artifact" in text, "失败要传 junit 与截图现场"
 
 
-def test_real_smoke_clears_nodefaultcurrentdirectoryforexe_on_setup_python():
-    """★ 自建 runner 的隐藏地雷(2026-10-19 实测踩到, 冒烟第一次真跑就死在这):
+def test_real_smoke_does_not_use_setup_python():
+    """★ 真机冒烟**不用** actions/setup-python(2026-10-19 实测, 第一次真跑就死在这)。
 
     runner 进程环境里带着 `NoDefaultCurrentDirectoryInExePath=1` → cmd.exe 不再从
     "当前目录"找 exe。而 setup-python 在 Windows 上的安装脚本是
@@ -129,19 +129,23 @@ def test_real_smoke_clears_nodefaultcurrentdirectoryforexe_on_setup_python():
     于是必然报 `'python-3.13.16-amd64.exe' is not recognized` →
     `Error happened during Python installation`, 整个 job 在装 Python 处就红了。
 
-    实测该变量**只有空值**能恢复搜索('0'/'false' 都不行), 且 Actions 会把空字符串
-    照样传进进程, cmd 视同未设置。所以 setup-python 这步必须带着空 env ——
-    删掉这行就会重现上面的失败。
+    ★ 步骤级 `env` **救不了**(两轮 CI 实测): env 只能覆盖、不能删除 runner 进程里的变量,
+      而 cmd 对"存在但为空"的变量仍视为已定义 —— 实测 empty→exit 1、删除→exit 0、
+      '0'/'false' 同样无效。
+
+    所以冒烟改成用 runner 上已装好的 Python(SMOKE_PYTHON 可覆盖, 默认 C:\\Python),
+    依赖进 RUNNER_WORKSPACE 的复用 venv。这条钉住: 不许再把 setup-python 加回来 ——
+    加回来就会在装 Python 处整轮失败。
     """
-    data, _text = _load("real-smoke.yml")
+    data, text = _load("real-smoke.yml")
     steps = data["jobs"]["smoke"]["steps"]
-    setup = [s for s in steps if str(s.get("uses", "")).startswith("actions/setup-python")]
-    assert len(setup) == 1, "真机冒烟应当只有一处 setup-python"
-    env = setup[0].get("env") or {}
-    assert env.get("NoDefaultCurrentDirectoryInExePath") == "" or \
-        "NoDefaultCurrentDirectoryInExePath" in env, "setup-python 这步必须把该变量置空"
-    assert env.get("NoDefaultCurrentDirectoryInExePath") == "", \
-        "该变量只有**空值**能让 cmd 恢复'当前目录找 exe'('0'/'false' 都不行)"
+    assert not [s for s in steps if str(s.get("uses", "")).startswith("actions/setup-python")], \
+        "自建 runner 上 setup-python 必挂(见本测试 docstring), 真机冒烟不许用它"
+    assert "SMOKE_PYTHON" in text, "要有可覆盖本机 Python 路径的入口"
+    assert "SMOKE_PY" in text and "-m pytest" in text, "后续步骤必须显式用选定的 Python"
+    assert "sys.version_info" in text, "要断言 Python 版本是 3.13"
+    pytest_step = [s for s in steps if s.get("name") == "跑真机冒烟"][0]
+    assert "$env:SMOKE_PY" in pytest_step["run"], "pytest 要用 venv 里的 python 跑"
 
 
 def test_static_workflow_runs_lint_and_case_validation():

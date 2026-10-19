@@ -108,11 +108,17 @@ svc.cmd start
 > 在 Windows 上的安装脚本是 `cmd /c "cd <toolcache> && call python-3.13.16-amd64.exe ..."`，
 > 于是必然报 `'python-3.13.16-amd64.exe' is not recognized` →
 > `Error happened during Python installation`，job 在装 Python 处就红了。
-> **修法**：`real-smoke.yml` 的 setup-python 那一步加 `env: NoDefaultCurrentDirectoryInExePath: ''`
-> —— 实测该变量**只有空值**能恢复搜索（`0`/`false` 都不行），Actions 会把空字符串照样
-> 传进进程，cmd 视同未设置。`tests/test_ci_workflows.py` 里有守护测试，删掉这行会立刻红。
-> 同类风险：若以后 runner 是从带该变量的终端启动的，任何"cd 到目录再执行裸文件名"的
-> 脚本都会踩到。
+>
+> **步骤级 env 救不了**（两轮 CI 实测）：env 只能覆盖、不能删除 runner 进程里的变量，
+> 而 cmd 对"存在但为空"的变量**仍然视为已定义** —— 实测：`empty → exit 1`、
+> 彻底删除变量 `→ exit 0`、`'0'`/`'false'` 同样无效。
+>
+> **因此真机冒烟不用 setup-python**：改用这台 runner 上已装好的 Python 3.13
+> （默认 `C:\Python\python.exe`，可用仓库变量 `SMOKE_PYTHON` 覆盖），依赖装进
+> `RUNNER_WORKSPACE\smoke-venv` 的复用 venv，不污染系统 Python。
+> `tests/test_ci_workflows.py::test_real_smoke_does_not_use_setup_python` 守着这条
+> （把 setup-python 加回来会立刻红 —— 加回来就会在装 Python 处整轮失败）。
+> 同类风险：runner 从带该变量的终端启动时，任何"cd 到目录再执行裸文件名"的脚本都会踩到。
 
 ### 3.3 我做的事：`real-smoke.yml`（草稿，待你确认后落地）
 
@@ -153,16 +159,25 @@ jobs:
             Write-Host ("  {0} sha256 {1}" -f $f, (Get-FileHash $f -Algorithm SHA256).Hash.Substring(0, 12))
           }
 
-      - uses: actions/setup-python@v7
-        env:
-          # 见 3.2 的踩坑说明：自建 runner 带 NoDefaultCurrentDirectoryInExePath=1，
-          # 只有空值能让 setup-python 的安装脚本找到当前目录里的安装器。
-          NoDefaultCurrentDirectoryInExePath: ''
-        with: { python-version: '3.13', cache: pip }
-      - name: 安装依赖
+      # 不用 setup-python（见 3.2 踩坑说明）：用 runner 上已装好的 Python 3.13，
+      # 依赖装进 RUNNER_WORKSPACE 下的复用 venv。
+      - name: 选用本机 Python(自建 runner)
+        shell: pwsh
         run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          $py = "${{ vars.SMOKE_PYTHON }}"; if (-not $py) { $py = "C:\Python\python.exe" }
+          if (-not (Test-Path $py)) { throw "找不到 Python: $py" }
+          $v = (& $py -c "import sys; print('%d.%d' % sys.version_info[:2])").Trim()
+          if ($v -ne "3.13") { throw "需要 Python 3.13, 实际 $v ($py)" }
+          "SMOKE_PY=$py" >> $env:GITHUB_ENV
+      - name: 安装依赖
+        shell: pwsh
+        run: |
+          $venv = Join-Path $env:RUNNER_WORKSPACE 'smoke-venv'
+          if (-not (Test-Path "$venv\Scripts\python.exe")) { & $env:SMOKE_PY -m venv $venv }
+          $py = Join-Path $venv 'Scripts\python.exe'
+          "SMOKE_PY=$py" >> $env:GITHUB_ENV
+          & $py -m pip install --upgrade pip
+          & $py -m pip install -r requirements.txt
 
       - name: 探活设备(探不到就明确报"设备没起来", 而不是让用例背锅)
         shell: pwsh
@@ -180,7 +195,7 @@ jobs:
         run: |
           $case = "${{ github.event.inputs.case }}"
           if (-not $case) { $case = "全局清扫" }      # ← 冒烟集(见 3.4)
-          python -m pytest tests/test_yaml_runner.py -q -rs `
+          & $env:SMOKE_PY -m pytest tests/test_yaml_runner.py -q -rs `
             --mode real --device "$env:DEVICE" --case "$case" `
             --junit-xml=reports/junit-real.xml
 
