@@ -197,8 +197,14 @@ def _disable_ocr_by_default(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
-def _isolate_base_dir(monkeypatch, tmp_path):
+def _isolate_base_dir(monkeypatch, tmp_path, pytestconfig):
     """把各模块的 BASE_DIR 钉到临时目录 —— 跑测试绝不往仓库里写产物。
+
+    ★ **真机模式(`--mode real`)不隔离**(2026-10-19): 真机运行就该和 GUI 走同一套
+      真实路径 —— 截图落 `Test_cases/<组>/screenshots/`(已在 .gitignore), 冒烟失败时
+      workflow 才收得上现场。钉到临时目录还有更直接的问题: 沙箱里没有 `Test_cases/`,
+      模板解析成 `...pytest-xxx\\repo\\Test_cases\\三星\\templates\\开始清扫.png`,
+      不存在 → 用例**第一步**就 `WinError 3`(实测)。
 
     ★ 事故(2026-09-24 审查发现)
       项目里普遍写 `from core.driver import BASE_DIR`, 这是把名字**绑定到各自模块**;
@@ -211,6 +217,10 @@ def _isolate_base_dir(monkeypatch, tmp_path):
     这里逐模块钉住(sandbox 下自带 config/ 以免个别模块 makedirs 失败),
     并由 `test_conftest_guard` 扫描守护: 将来谁新增模块漏进清单会被测出来。
     """
+    if pytestconfig.getoption("--mode") == "real":
+        yield
+        return
+
     sandbox = tmp_path / "repo"
     (sandbox / "config").mkdir(parents=True, exist_ok=True)
     for name in BASE_DIR_MODULES:
