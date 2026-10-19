@@ -966,7 +966,11 @@ class MainWindow(QMainWindow):
             infos = []
             for g in self._list_group_dirs():
                 gdir = os.path.join(CASES_DIR, g)
-                for p in sorted(glob.glob(os.path.join(gdir, "*.yaml"))):
+                # ★ .yml 也是合法用例(is_case_file 认), 列表不能只扫 .yaml ——
+                #   否则从外部打开/重命名保留的 .yml 在列表里"消失"
+                files = (glob.glob(os.path.join(gdir, "*.yaml"))
+                         + glob.glob(os.path.join(gdir, "*.yml")))
+                for p in sorted(files):
                     if not is_case_file(p):
                         continue        # 前置条件等非用例文件不进列表
                     infos.append((p, g, self._read_case_order(p)))
@@ -987,7 +991,9 @@ class MainWindow(QMainWindow):
             import glob as _glob
             for g in self._list_group_dirs():
                 if g in self._collapsed_groups:
-                    for p in _glob.glob(os.path.join(CASES_DIR, g, '*.yaml')):
+                    files = (_glob.glob(os.path.join(CASES_DIR, g, '*.yaml'))
+                             + _glob.glob(os.path.join(CASES_DIR, g, '*.yml')))
+                    for p in files:
                         if not is_case_file(p):
                             continue
                         if p not in paths:
@@ -1101,12 +1107,20 @@ class MainWindow(QMainWindow):
                 return
             shutil.rmtree(gdir)
             self._collapsed_groups.discard(group)
-            for p in list(self._case_states):
-                if os.path.basename(os.path.dirname(p)) == group:
-                    self._case_states.pop(p, None)
-            if (self.case_path and os.path.basename(os.path.dirname(
-                    os.path.abspath(self.case_path))) == group):
-                self._unload_case()
+            self._known_groups.discard(group)
+            # ★ 勾选态/状态灯/剪贴板都必须一起清: _checked 是"将要执行什么"的唯一
+            #   真源, 留着已删路径会让运行阶段拿到不存在的文件; 复制源被删后
+            #   再粘贴也只会静默失败。
+            self._case_states = {
+                p: s for p, s in self._case_states.items()
+                if self._group_of(p) != group}
+            self._checked = {p for p in self._checked
+                             if self._group_of(p) != group}
+            if (self._case_clipboard
+                    and self._group_of(self._case_clipboard) == group):
+                self._case_clipboard = None
+            if self.case_path and self._group_of(self.case_path) == group:
+                self._unload_case(save_pending=False)
             self._fill_case_list()
             self._set_status(f"已删除组: {group}")
             return
@@ -1119,9 +1133,16 @@ class MainWindow(QMainWindow):
         ) != QMessageBox.Yes:
             return
         os.remove(path)
-        self._case_states.pop(path, None)
-        if self.case_path == path:
-            self._unload_case()
+        self._case_states = {
+            p: s for p, s in self._case_states.items()
+            if not self._same_path(p, path)}
+        self._checked = {p for p in self._checked
+                         if not self._same_path(p, path)}
+        if (self._case_clipboard
+                and self._same_path(self._case_clipboard, path)):
+            self._case_clipboard = None
+        if self.case_path and self._same_path(self.case_path, path):
+            self._unload_case(save_pending=False)
         self._fill_case_list()
         self._set_status(f"已删除用例: {name}")
 
@@ -1148,25 +1169,28 @@ class MainWindow(QMainWindow):
             act_copy.triggered.connect(lambda _=False, p=path: self._copy_case(p))
             target_group = os.path.basename(os.path.dirname(path))
             act_paste = menu.addAction("粘贴用例")
-            act_paste.setEnabled(bool(self._case_clipboard)
+            act_paste.setEnabled(not self.worker and bool(self._case_clipboard)
                                  and os.path.isdir(os.path.join(CASES_DIR, target_group)))
             act_paste.triggered.connect(
                 lambda _=False, g=target_group: self._paste_case_to_group(g))
             act_rename = menu.addAction("重命名用例…")
+            act_rename.setEnabled(not self.worker)
             act_rename.triggered.connect(
                 lambda _=False, p=path: self._rename_case_dialog(p))
             menu.addSeparator()
             act_del = menu.addAction("删除用例")
+            act_del.setEnabled(not self.worker)
             act_del.triggered.connect(self.on_delete_selected)
         elif group:
             # ── 组头行 ──
             act_paste = menu.addAction(f"粘贴到「{group}」")
-            act_paste.setEnabled(bool(self._case_clipboard)
+            act_paste.setEnabled(not self.worker and bool(self._case_clipboard)
                                  and os.path.isdir(os.path.join(CASES_DIR, group)))
             act_paste.triggered.connect(
                 lambda _=False, g=group: self._paste_case_to_group(g))
             menu.addSeparator()
             act_del = menu.addAction("删除整组")
+            act_del.setEnabled(not self.worker)
             act_del.triggered.connect(self.on_delete_selected)
         return menu
 
@@ -1194,6 +1218,9 @@ class MainWindow(QMainWindow):
 
     def _paste_case_to_group(self, group):
         """把剪贴板里的用例复制到 group 目录; 重名自动加 _副本/_副本2。"""
+        if self.worker:
+            self._set_status("用例执行中, 结束后再粘贴")
+            return
         src = self._case_clipboard
         if not src or not os.path.isfile(src):
             return
@@ -1221,11 +1248,18 @@ class MainWindow(QMainWindow):
         self._known_groups.add(group)
         self._fill_case_list()
         target = os.path.abspath(dst)
+        item = None
         for i in range(self.case_list.count()):
             p = self.case_list.item(i).data(Qt.UserRole)
             if p and os.path.abspath(p) == target:
+                item = self.case_list.item(i)
                 self.case_list.setCurrentRow(i)
                 break
+        # ★ 只选中行不够(用户 2026-10-19 复现): setCurrentRow 不发 itemClicked,
+        #   右侧编辑器仍停在**原来打开的那条用例** —— 此时改「用例」名会改到旧用例,
+        #   看起来就是"粘贴出来的名字改不了"。这里显式把它加载进编辑器。
+        if item is not None:
+            self._on_case_item_clicked(item)
         self._set_status(f"已粘贴用例: {os.path.basename(dst)}")
 
     @staticmethod
@@ -1258,11 +1292,12 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "重命名失败", str(e))
 
     def _rename_case(self, path, new_name):
-        """重命名用例文件(列表显示的就是文件名), 并同步 YAML 里同名的 `name`。
+        """重命名用例文件(列表显示的就是文件名), 并同步 YAML 里的用例名。
 
-        ★ 为什么还要改 YAML: 列表/文件名与"用例"输入框是两个名字 —— 粘贴只改文件名
-          时, 右侧仍显示源用例名, 看起来就是"名字改不了"。只有与旧文件名相同的
-          `name` 才替换, 多 case 文件里用户自定义的名字不动。
+        ★ 三处必须一起动, 否则看起来就是"名字改不了":
+          文件名(列表) / YAML `cases[].name`(右侧「用例」框) / 编辑器当前路径。
+          单 case 文件强制让 YAML 名字跟文件名一致; 多 case 文件只替换与旧文件名
+          相同的那一条, 其它自定义用例名不动。
         """
         if self.worker:
             raise ValueError("用例执行中, 结束后再重命名")
@@ -1274,78 +1309,112 @@ class MainWindow(QMainWindow):
             raise ValueError("用例名不能为空")
         if any(ch in new_name for ch in '\\/:*?"<>|') or new_name in (".", ".."):
             raise ValueError('用例名不能包含 \\ / : * ? " < > |')
-        old_stem = os.path.splitext(os.path.basename(path))[0]
+        if new_name != new_name.rstrip(" ."):
+            raise ValueError("用例名不能以空格或点结尾")
+        if re.fullmatch(r"(?i)(con|prn|aux|nul|com[1-9]|lpt[1-9])", new_name):
+            raise ValueError(f"「{new_name}」是 Windows 保留名, 请换一个")
+        old_stem, ext = os.path.splitext(os.path.basename(path))
+        ext = ext or ".yaml"             # .yml 保持原扩展名, 不要偷偷改格式
         if new_name == old_stem:
             return path
         gdir = os.path.dirname(path)
-        dst = os.path.join(gdir, new_name + ".yaml")
+        dst = os.path.join(gdir, new_name + ext)
         if os.path.exists(dst):
-            raise ValueError(f"同组下已存在用例: {new_name}.yaml")
+            raise ValueError(f"同组下已存在用例: {new_name}{ext}")
+
+        # ★ 改名后旧路径就没了: 防抖中的编辑必须先落盘, 否则直接丢
+        self._flush_pending_edit()
+        is_open = bool(self.case_path and self._same_path(self.case_path, path))
         os.rename(path, dst)
         try:
-            self._rename_case_name_in_yaml(dst, old_stem, new_name)
+            self._rename_case_name_in_yaml(dst, old_stem, new_name,
+                                           force_single=True)
         except OSError:
             pass                         # 文件已改名, YAML 名字没同步不阻断
 
-        # 勾选态/状态灯/当前打开路径都跟着换 key, 否则重建列表后全部丢失
-        checked = {os.path.abspath(p) for p in self._checked}
-        if path in checked:
-            self._checked = {p for p in self._checked
-                             if os.path.abspath(p) != path}
+        # 勾选态/状态灯/复制源都跟着换 key, 否则重建列表后全部丢失
+        was_checked = any(self._same_path(p, path) for p in self._checked)
+        self._checked = {p for p in self._checked
+                         if not self._same_path(p, path)}
+        if was_checked:
             self._checked.add(dst)
-        state = self._case_states.pop(path, None)
-        if state is not None:
+        if any(self._same_path(p, path) for p in self._case_states):
+            state = next(s for p, s in self._case_states.items()
+                         if self._same_path(p, path))
+            self._case_states = {p: s for p, s in self._case_states.items()
+                                 if not self._same_path(p, path)}
             self._case_states[dst] = state
-        if (self._case_clipboard
-                and os.path.abspath(self._case_clipboard) == path):
+        if self._case_clipboard and self._same_path(self._case_clipboard, path):
             self._case_clipboard = dst      # 复制源跟着改名, 否则再粘贴找不到文件
-        is_open = bool(self.case_path
-                       and os.path.abspath(self.case_path) == path)
+
         if is_open:
             self.case_path = dst
-            for c in self.data.get("cases", []):
-                if str(c.get("name") or "") == old_stem:
-                    c["name"] = new_name
-            self.file_label.setText(_safe_relpath(dst))
-            self._loading = True
+            # 从磁盘重新装填: YAML 名字可能刚被改写(含单 case 强制改名),
+            # 内存里必须与磁盘一致, 否则下一次自动保存又把旧名字写回去。
             try:
-                self.case_name_edit.setText(
-                    str(self.current_case.get("name") or ""))
-            finally:
-                self._loading = False
-            self._refresh_case_item_text()
+                with open(dst, encoding="utf-8") as f:
+                    data = yaml.safe_load(f) or {}
+                if isinstance(data, dict) and data.get("cases"):
+                    self.data = data
+                    self.case_idx = min(self.case_idx,
+                                        len(data["cases"]) - 1)
+            except Exception:
+                pass
+            self.file_label.setText(_safe_relpath(dst))
+            self._load_case_into_ui()
+            self.render_cards()
+            self._refresh_case_selector()
             self._refresh_yaml_text()
 
         self._fill_case_list()
         target = os.path.abspath(dst)
         for i in range(self.case_list.count()):
             p = self.case_list.item(i).data(Qt.UserRole)
-            if p and os.path.abspath(p) == target:
+            if p and self._same_path(p, target):
                 self.case_list.setCurrentRow(i)
                 break
         self._set_status(f"已重命名用例: {old_stem} → {new_name}")
         return dst
 
     @staticmethod
-    def _rename_case_name_in_yaml(path, old, new):
-        """把 YAML 里值为 old 的 `name:` 改成 new; 返回替换条数。
+    def _rename_case_name_in_yaml(path, old, new, force_single=False):
+        """把 YAML 里值为 old 的 `- name:` 改成 new; 返回改动条数。
 
-        文本级替换(不重排 YAML、不丢注释/换行符), 支持引号与行尾注释。
+        ★ 文本级逐行替换: 保留注释、缩进、换行符、case_order 与其它字段。
+          旧值用 yaml.safe_load 解析(单/双引号都认), 新值统一写成单引号标量
+          (任意字符都合法, 不会把 `#`/`true` 之类解析成注释或布尔值)。
+        ★ force_single: 单 case 文件即使名字与旧文件名不同也强制改成新名 ——
+          重命名文件是明确动作, 单 case 的用例名应当跟文件名一致。
         """
-        if old == new:
+        if old == new and not force_single:
             return 0
         with open(path, encoding="utf-8", newline="") as f:
-            text = f.read()
-        pat = re.compile(
-            r"(?m)^(\s*-\s*name:\s*)(['\"]?)" + re.escape(old)
-            + r"\2(\s*(?:#.*)?)$")
-        new_text, n = pat.subn(
-            lambda m: f"{m.group(1)}{m.group(2)}{new}{m.group(2)}{m.group(3)}",
-            text)
-        if n:
-            with open(path, "w", encoding="utf-8", newline="") as f:
-                f.write(new_text)
-        return n
+            lines = f.readlines()
+        entries = []            # (行号, 前缀, 解析出的旧值, 行尾注释/空格, 换行符)
+        for i, line in enumerate(lines):
+            body = line.rstrip("\r\n")
+            eol = line[len(body):]
+            m = re.match(r"^(\s*-\s*name:\s*)(.*?)([ \t]*(?:#.*)?)$", body)
+            if not m:
+                continue
+            raw = m.group(2).strip()
+            try:
+                parsed = yaml.safe_load("v: " + raw)
+                val = parsed.get("v") if isinstance(parsed, dict) else None
+            except Exception:
+                val = None
+            entries.append((i, m.group(1), val, m.group(3), eol))
+        targets = [e for e in entries if e[2] == old]
+        if not targets and force_single and len(entries) == 1:
+            targets = entries
+        if not targets:
+            return 0
+        quoted = "'" + str(new).replace("'", "''") + "'"
+        for i, prefix, _val, tail, eol in targets:
+            lines[i] = f"{prefix}{quoted}{tail}{eol}"
+        with open(path, "w", encoding="utf-8", newline="") as f:
+            f.writelines(lines)
+        return len(targets)
 
 
     def set_case_state(self, path, state):
@@ -1435,6 +1504,7 @@ class MainWindow(QMainWindow):
             return
         if not os.path.isfile(path) or path == self.case_path:
             return
+        self._flush_pending_edit()      # 切换前先落盘当前编辑(见 _flush_pending_edit)
         try:
             with open(path, encoding="utf-8") as f:
                 data = yaml.safe_load(f) or {}
@@ -1893,6 +1963,8 @@ class MainWindow(QMainWindow):
         self.case_name_edit = QLineEdit()
         self.case_name_edit.setObjectName("caseName")
         self.case_name_edit.setFixedWidth(120)
+        self.case_name_edit.setToolTip(
+            "用例名, 写入 YAML 的 cases[].name; 左侧列表显示的是文件名, 右键可重命名")
         self.case_name_edit.editingFinished.connect(self._sync_header)
         lay.addWidget(self.case_name_edit)
 
@@ -2010,6 +2082,43 @@ class MainWindow(QMainWindow):
             self._autosave_timer.setInterval(300)
             self._autosave_timer.timeout.connect(self._do_auto_save)
         self._autosave_timer.start()
+
+    def _flush_pending_edit(self):
+        """把防抖中的编辑立刻落盘。
+
+        ★ 切换用例(点击/打开/新建/重命名/粘贴)前必须调用: `_data` 与 `case_path`
+          即将换成另一条用例, 300ms 后才触发的自动保存会写到**新路径**上 ——
+          刚输入的改动就丢了(反过来还会把新用例覆盖)。这条是 2026-10-19 排查
+          粘贴/重命名联动时一起发现的同类问题。
+        """
+        et = getattr(self, "_edit_timer", None)
+        if et is not None and et.isActive():
+            et.stop()
+            self._refresh_yaml_text()
+        t = getattr(self, "_autosave_timer", None)
+        if t is not None and t.isActive():
+            t.stop()
+            self._do_auto_save()
+
+    def _cancel_pending_edit(self):
+        """丢弃防抖中的编辑(删除用例/组时用 —— 不能再去写已被删掉的文件)。"""
+        for name in ("_edit_timer", "_autosave_timer"):
+            t = getattr(self, name, None)
+            if t is not None and t.isActive():
+                t.stop()
+
+    @staticmethod
+    def _same_path(a, b):
+        """Windows 路径比较: 统一绝对路径 + normcase(大小写/斜杠差异)。"""
+        if not a or not b:
+            return False
+        return os.path.normcase(os.path.abspath(str(a))) == \
+            os.path.normcase(os.path.abspath(str(b)))
+
+    @staticmethod
+    def _group_of(path):
+        """用例文件所属 APP 组 = 所在目录名(未分组文件返回所在目录名本身)。"""
+        return os.path.basename(os.path.dirname(os.path.abspath(str(path))))
 
     def _do_auto_save(self):
         if self.worker or not self.case_path:
@@ -2342,8 +2451,15 @@ class MainWindow(QMainWindow):
             return
         self.create_case(name, group=group)
 
-    def _unload_case(self):
-        """清空右侧编辑区,恢复未选中状态(收起包含当前用例的组时调用)"""
+    def _unload_case(self, save_pending=True):
+        """清空右侧编辑区,恢复未选中状态(收起包含当前用例的组时调用)
+
+        save_pending=False: 删除用例/组时用 —— 文件马上/已经不存在, 不能再写盘。
+        """
+        if save_pending:
+            self._flush_pending_edit()
+        else:
+            self._cancel_pending_edit()
         self.case_path = None
         self.data = self._empty_data()
         self.case_idx = 0
@@ -2362,6 +2478,7 @@ class MainWindow(QMainWindow):
         if os.path.exists(path):
             QMessageBox.warning(self, "新建用例", f"用例已存在: {group}/{name}.yaml")
             return
+        self._flush_pending_edit()      # 切到新用例前先落盘当前编辑
         self.case_path = path
         self.data = self._empty_data()
         self.data["module"] = name
@@ -2388,6 +2505,7 @@ class MainWindow(QMainWindow):
             self, "打开用例", CASES_DIR, "YAML 用例 (*.yaml *.yml)")
         if not path:
             return
+        self._flush_pending_edit()      # 切到新用例前先落盘当前编辑
         try:
             with open(path, encoding="utf-8") as f:
                 data = yaml.safe_load(f) or {}
@@ -2459,6 +2577,8 @@ class MainWindow(QMainWindow):
             data = yaml.safe_load(self.yaml_edit.toPlainText()) or {}
             if not isinstance(data, dict):
                 raise ValueError("顶层必须是键值结构")
+            if not isinstance(data.get("cases"), list) or not data["cases"]:
+                raise ValueError("cases 必须是非空列表")
         except Exception as e:
             QMessageBox.critical(self, "解析失败", f"YAML 有误:\n{e}")
             return

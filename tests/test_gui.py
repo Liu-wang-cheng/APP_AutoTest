@@ -4446,6 +4446,7 @@ def test_paste_without_copy_is_noop(win_with_cases):
 def test_paste_syncs_yaml_name_when_it_matches_filename(win_with_cases):
     """★ 粘贴后右侧「用例」名要跟文件名一起变(用户 2026-10-19: "粘贴后的用例名字
     无法修改")。只改与源文件名相同的 name, 多 case 里的自定义名保持原样。"""
+    import yaml
     from gui import main_window as mw
 
     win = win_with_cases
@@ -4456,9 +4457,12 @@ def test_paste_syncs_yaml_name_when_it_matches_filename(win_with_cases):
     win._copy_case(src)
     win._paste_case_to_group("涂鸦智能")
     dst = os.path.join(mw.CASES_DIR, "涂鸦智能", "全局清扫_副本.yaml")
-    text = Path(dst).read_text(encoding="utf-8")
-    assert "- name: 全局清扫_副本" in text, text
-    assert "- name: 全局清扫\n" not in text, text
+    doc = yaml.safe_load(Path(dst).read_text(encoding="utf-8"))
+    assert doc["cases"][0]["name"] == "全局清扫_副本", doc
+    # ★ 回归守护(用户 2026-10-19): 粘贴后右侧编辑器必须切到新用例 —— 只选中行时
+    #   它仍停在旧用例, 用户改「用例」名会改错对象, 看起来就是"名字改不了"。
+    assert os.path.abspath(win.case_path) == os.path.abspath(dst), win.case_path
+    assert win.case_name_edit.text() == "全局清扫_副本", win.case_name_edit.text()
 
 
 def test_rename_case_renames_file_yaml_and_ui(win_with_cases):
@@ -4479,8 +4483,9 @@ def test_rename_case_renames_file_yaml_and_ui(win_with_cases):
     dst = win._rename_case(src, "登录流程")
     assert os.path.basename(dst) == "登录流程.yaml"
     assert not os.path.exists(src) and os.path.isfile(dst)
-    text = Path(dst).read_text(encoding="utf-8")
-    assert "- name: 登录流程" in text and "- name: 全局清扫" not in text, text
+    import yaml
+    doc = yaml.safe_load(Path(dst).read_text(encoding="utf-8"))
+    assert doc["cases"][0]["name"] == "登录流程", doc
 
     assert os.path.abspath(win.case_path) == os.path.abspath(dst)
     assert win.case_name_edit.text() == "登录流程"
@@ -4498,6 +4503,96 @@ def test_rename_case_refuses_collision_and_bad_names(win_with_cases):
     src = os.path.join(mw.CASES_DIR, "涂鸦智能", "全局清扫.yaml")
     with pytest.raises(ValueError, match="已存在"):
         win._rename_case(src, "划区清扫")
-    for bad in ("", "  ", "a/b", 'a:b', ".."):
+    for bad in ("", "  ", "a/b", 'a:b', "..", "a.", "con"):
         with pytest.raises(ValueError):
             win._rename_case(src, bad)
+
+
+def test_rename_single_case_forces_yaml_name(win_with_cases):
+    """单 case 文件: 重命名文件时即使 YAML 里是自定义名, 也要跟着变成新文件名 ——
+    否则右侧「用例」框还是旧名字, 用户会以为改不了。"""
+    import yaml
+    from gui import main_window as mw
+
+    win = win_with_cases
+    src = os.path.join(mw.CASES_DIR, "涂鸦智能", "全局清扫.yaml")
+    Path(src).write_text(
+        "module: 自定义\ncases:\n  - name: 自定义名\n    steps: []\n",
+        encoding="utf-8")
+    win._fill_case_list()
+    dst = win._rename_case(src, "新名字")
+    doc = yaml.safe_load(Path(dst).read_text(encoding="utf-8"))
+    assert doc["cases"][0]["name"] == "新名字", doc
+
+
+def test_rename_keeps_yml_extension(win_with_cases):
+    from gui import main_window as mw
+
+    win = win_with_cases
+    src = os.path.join(mw.CASES_DIR, "涂鸦智能", "外部.yml")
+    Path(src).write_text(
+        "module: x\ncases:\n  - name: 外部\n    steps: []\n", encoding="utf-8")
+    dst = win._rename_case(src, "改名后")
+    assert dst.endswith("改名后.yml"), dst
+    # .yml 与 .yaml 一样是合法用例, 重命名后必须仍在左侧列表可见
+    texts = [win.case_list.item(i).text() for i in range(win.case_list.count())]
+    assert "改名后" in texts, texts
+
+
+def test_switch_case_flushes_pending_autosave(win_with_cases):
+    """★ 300ms 防抖期间切换用例不能丢改动(排查粘贴/重命名时发现的同类问题)。"""
+    from gui import main_window as mw
+
+    win = win_with_cases
+    a = os.path.join(mw.CASES_DIR, "涂鸦智能", "全局清扫.yaml")
+    b = os.path.join(mw.CASES_DIR, "涂鸦智能", "划区清扫.yaml")
+    win._on_case_item_clicked(_find_case_item(win, "全局清扫.yaml"))
+    win.data["cases"][0]["name"] = "改过的名字"
+    win._auto_save()                      # 起防抖, 尚未触发
+    win._on_case_item_clicked(_find_case_item(win, "划区清扫.yaml"))
+    assert "改过的名字" in Path(a).read_text(encoding="utf-8"), \
+        "切换用例前没落盘, 刚输入的内容丢了"
+    assert os.path.abspath(win.case_path) == os.path.abspath(b)
+
+
+def test_delete_case_cleans_checked_state_and_clipboard(win_with_cases, monkeypatch):
+    """删除当前用例: 文件/勾选态/状态灯/复制源/编辑区必须一起清干净 ——
+    _checked 是"将要执行什么"的唯一真源, 留着已删路径会让运行拿到不存在的文件。"""
+    from PySide6.QtWidgets import QMessageBox
+    from gui import main_window as mw
+
+    win = win_with_cases
+    src = os.path.join(mw.CASES_DIR, "涂鸦智能", "全局清扫.yaml")
+    win._fill_case_list()
+    win._on_case_item_clicked(_find_case_item(win, "全局清扫.yaml"))
+    win._checked.add(src)
+    win._case_states[src] = "passed"
+    win._case_clipboard = src
+    item = _find_case_item(win, "全局清扫.yaml")
+    win.case_list.setCurrentRow(win.case_list.row(item))
+    monkeypatch.setattr(mw.QMessageBox, "question",
+                        staticmethod(lambda *a, **k: QMessageBox.Yes))
+    win.on_delete_selected()
+    assert not os.path.exists(src)
+    assert src not in win._checked
+    assert src not in win._case_states
+    assert win._case_clipboard is None
+    assert win.case_path is None
+
+
+def test_paste_and_rename_refuse_during_run(win_with_cases):
+    from gui import main_window as mw
+
+    win = win_with_cases
+    gdir = os.path.join(mw.CASES_DIR, "涂鸦智能")
+    src = os.path.join(gdir, "全局清扫.yaml")
+    win._copy_case(src)
+    before = set(os.listdir(gdir))
+    win.worker = object()
+    try:
+        win._paste_case_to_group("涂鸦智能")
+        with pytest.raises(ValueError, match="执行中"):
+            win._rename_case(src, "执行中改名")
+    finally:
+        win.worker = None
+    assert set(os.listdir(gdir)) == before, "执行期间不应改动用例文件"
