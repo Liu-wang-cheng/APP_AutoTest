@@ -92,12 +92,18 @@ jobs:
 
       - name: 跑真机冒烟
         shell: pwsh
+        env:
+          # ★ 进哪台机器(APP 设备列表里可能同时挂着 0050/0087/0090 好几台): 用仓库变量
+          #   SMOKE_DEVICE_NAME 指定(如「扫地机器人 0050」)。留空 = 用 config.ci.yaml 里的
+          #   target_device。实测踩过: 配置里少一个空格(扫地机器人0087)就永远匹配不到 →
+          #   没进设备页, 后续全跑在列表页上。
+          SMOKE_DEVICE_NAME: ${{ vars.SMOKE_DEVICE_NAME }}
         run: |
           $group = "${{ github.event.inputs.group }}"
           if (-not $group) { $group = "三星" }
           $case = "${{ github.event.inputs.case }}"
           if (-not $case) { $case = "全局清扫" }
-          Write-Host "冒烟: 组=$group 用例=$case 设备=$env:SMOKE_DEV"
+          Write-Host "冒烟: 组=$group 用例=$case 设备=$env:SMOKE_DEV")
           python -m pytest tests/test_yaml_runner.py -q -rs `
             --mode real --device "$env:SMOKE_DEV" --group "$group" --case "$case" `
             --junit-xml=reports/junit-real.xml

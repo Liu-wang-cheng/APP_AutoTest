@@ -107,8 +107,41 @@ def device(request, report):
     except Exception:
         pass
 
-    # 前置: 重启APP + 进入设备页 + 充电 + 地图加载 + 电量达标
-    session.prepare(d, cfg)
+    # 前置: 跑**该用例所属 APP 组的前置条件**(与 GUI 完全同一套)
+    #
+    # ★ 为什么不再用写死的 session.prepare()(用户 2026-10-19 实测):
+    #   prepare() 只有 重启APP/充电/地图/电量, **没有组里配的 enter_device 与自定义步骤**
+    #   (如「结束烘干拖布」)。于是真机冒烟在"APP 停在设备列表 / 机器人还在烘干"时会一路跑偏:
+    #   没进设备页 → 地图加载失败 → 用例在列表页上瞎点, 而且**照样报通过/失败看起来像用例问题**。
+    #   现在与 GUI 同源: Test_preconditions/<组>.yaml → prepare_items(), 前置不过就**直接判红**
+    #   (带是哪一项、什么原因), 不再往下跑用例。
+    #
+    # 设备名可被环境变量覆盖: 冒烟 workflow 传 SMOKE_DEVICE_NAME(来自仓库变量),
+    # 免得设备改名后要去改仓库里的配置文件(实测 APP 列表里可能同时挂着好几台)。
+    if os.environ.get("SMOKE_DEVICE_NAME"):
+        cfg["target_device"] = os.environ["SMOKE_DEVICE_NAME"]
+
+    case_path = ""
+    try:
+        case_path = str(request.node.callspec.params.get("case_path") or "")
+    except Exception:
+        pass
+    group = (os.path.basename(os.path.dirname(case_path)) if case_path else "") \
+        or request.config.getoption("--group") or ""
+    if group:
+        items, src = session.preconditions_for_group(group)
+        print(f"[前置] 按组「{group}」的配置({src})执行 {len(items)} 项")
+        results = session.prepare_items(d, cfg, items)
+        failed = [
+            r["desc"] + (f"({r['reason']})" if r.get("reason") else "")
+            for r in results if not r["ok"] and not r.get("skipped")
+        ]
+        if failed:
+            pytest.fail("前置未通过(按组「%s」的配置): %s" % (group, "、".join(failed)),
+                        pytrace=False)
+    else:
+        # 兜底: 拿不到组信息(极少数直接用了 device fixture 的场景) → 用旧的内置前置
+        session.prepare(d, cfg)
 
     yield d
 
