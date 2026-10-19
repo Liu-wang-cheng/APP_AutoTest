@@ -182,7 +182,7 @@ def _no_real_update_check(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
-def _disable_ocr_by_default(monkeypatch):
+def _disable_ocr_by_default(monkeypatch, pytestconfig):
     """默认关掉 OCR 兜底 —— 单元测试不该真跑它。
 
     ★ 为什么必须关: `text_present` 在"原生没命中 **且** 页面文本稀疏(<5 条)"时会去
@@ -190,7 +190,14 @@ def _disable_ocr_by_default(monkeypatch):
       都会去截图跑识别: 桩没有 screenshot 方法就每次吞一个异常, 一轮测试能拖到
       60 秒以上(实测: 接入判断类兜底后 test_spot_clean 从 5 秒涨到 77 秒)。
       真机上的 OCR 行为由 tests/test_ocr_fallback.py 专门覆盖, 那里会自行 mock 启用。
+
+    ★ **真机模式(`--mode real`)不能关**(2026-10-19): 插件页(WebView)的卡片标题
+      经常**不在无障碍树里**(实测: 机器人"正在干燥拖布"时, 树里 0 条含"干燥"的节点,
+      只能靠 OCR), 关了 OCR 的话 `assert: 干燥拖布` 会一直等到超时/硬超时。
     """
+    if pytestconfig.getoption("--mode") == "real":
+        yield
+        return
     from core import ocr
     monkeypatch.setattr(ocr, "available", lambda: False, raising=False)
     yield
