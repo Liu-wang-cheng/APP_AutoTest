@@ -6,9 +6,6 @@ cases:
   - desc: 点击开始清扫
     click_template: 开始清扫.png
     screenshot: true
-  # ★ 用户 2026-10-19 纠正: 点“开始清扫”后会先进入 3 分钟以上的清洗拖布状态,
-  #   这是正常流程(不是时序竞争); 洗完后**不会自动开始清扫**, 必须再点一次“开始清扫”。
-  #   所以 then 分支里: 等洗拖布结束 → 再点一次开始清扫 → 后面才断言“正在清洁”。
   - desc: 判断是否清洗拖布
     if: 清洗拖布
     threshold: 1.0
@@ -17,9 +14,6 @@ cases:
     then:
     - desc: 等待拖布清洗完成
       sleep: 180.0
-    - desc: 清洗完成后重新点击开始清扫
-      click_template: 开始清扫.png
-      screenshot: true
   - desc: 判断是否处于清扫状态
     assert: 正在清洁
     screenshot: true
