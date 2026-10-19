@@ -16,7 +16,7 @@ from PySide6.QtCore import QSettings, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QAction, QColor, QIcon, QIntValidator, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QComboBox, QDialog, QFileDialog, QFrame,
-    QHBoxLayout, QHeaderView, QInputDialog, QLabel, QLineEdit, QListWidgetItem,
+    QHBoxLayout, QHeaderView, QLabel, QLineEdit, QListWidgetItem,
     QMainWindow, QMenu, QMessageBox, QPlainTextEdit, QPushButton, QScrollArea,
     QSizePolicy, QSpinBox, QSplitter, QTabWidget, QTableWidget, QTableWidgetItem,
     QVBoxLayout, QWidget,
@@ -29,13 +29,14 @@ from core.version import __version__ as APP_VERSION   # 版本号单一真源: c
 
 log = get_logger()
 from gui import schema
+from gui.case_files import CaseFileMixin
 from gui.runner_thread import RunWorker
 
 
 CASES_DIR = os.path.join(BASE_DIR, "Test_cases")
 
 
-class MainWindow(QMainWindow):
+class MainWindow(CaseFileMixin, QMainWindow):
     log_signal = Signal(str)      # 后台线程/核心模块的日志 → 运行日志页签
 
     def __init__(self):
@@ -839,10 +840,8 @@ class MainWindow(QMainWindow):
         none_btn.setToolTip("取消当前所选 APP 组的勾选(没选用例时才清全部)")
         none_btn.clicked.connect(self.on_clear_cases)
         head.addWidget(none_btn)
-        del_btn = QPushButton("删除")
-        del_btn.setToolTip("删除当前选中的用例文件, 或整组目录(含组内全部用例)")
-        del_btn.clicked.connect(self.on_delete_selected)
-        head.addWidget(del_btn)
+        # ★ 列表头部的「删除」按钮已去掉(用户 2026-10-19): 删除是危险动作,
+        #   统一收进右键菜单, 避免误点。on_delete_selected 仍由右键菜单调用。
         v.addLayout(head)
 
         # ★ self.case_list 必须指向真正的 QListWidget(曾被 panel 覆盖,
@@ -1276,146 +1275,7 @@ class MainWindow(QMainWindow):
                 return cand
             n += 1
 
-    # ── 重命名(2026-10-19 用户反馈: 粘贴后的名字改不了) ───────────────────
-    def _rename_case_dialog(self, path):
-        """右键「重命名用例…」入口。"""
-        if self.worker:
-            QMessageBox.information(self, "重命名用例", "用例执行中, 结束后再重命名。")
-            return
-        old = os.path.splitext(os.path.basename(path))[0]
-        new, ok = QInputDialog.getText(self, "重命名用例", "新的用例名:", text=old)
-        if not ok:
-            return
-        try:
-            self._rename_case(path, new)
-        except (OSError, ValueError) as e:
-            QMessageBox.warning(self, "重命名失败", str(e))
-
-    def _rename_case(self, path, new_name):
-        """重命名用例文件(列表显示的就是文件名), 并同步 YAML 里的用例名。
-
-        ★ 三处必须一起动, 否则看起来就是"名字改不了":
-          文件名(列表) / YAML `cases[].name`(右侧「用例」框) / 编辑器当前路径。
-          单 case 文件强制让 YAML 名字跟文件名一致; 多 case 文件只替换与旧文件名
-          相同的那一条, 其它自定义用例名不动。
-        """
-        if self.worker:
-            raise ValueError("用例执行中, 结束后再重命名")
-        path = os.path.abspath(path)
-        if not os.path.isfile(path):
-            raise ValueError("用例文件不存在")
-        new_name = (new_name or "").strip()
-        if not new_name:
-            raise ValueError("用例名不能为空")
-        if any(ch in new_name for ch in '\\/:*?"<>|') or new_name in (".", ".."):
-            raise ValueError('用例名不能包含 \\ / : * ? " < > |')
-        if new_name != new_name.rstrip(" ."):
-            raise ValueError("用例名不能以空格或点结尾")
-        if re.fullmatch(r"(?i)(con|prn|aux|nul|com[1-9]|lpt[1-9])", new_name):
-            raise ValueError(f"「{new_name}」是 Windows 保留名, 请换一个")
-        old_stem, ext = os.path.splitext(os.path.basename(path))
-        ext = ext or ".yaml"             # .yml 保持原扩展名, 不要偷偷改格式
-        if new_name == old_stem:
-            return path
-        gdir = os.path.dirname(path)
-        dst = os.path.join(gdir, new_name + ext)
-        if os.path.exists(dst):
-            raise ValueError(f"同组下已存在用例: {new_name}{ext}")
-
-        # ★ 改名后旧路径就没了: 防抖中的编辑必须先落盘, 否则直接丢
-        self._flush_pending_edit()
-        is_open = bool(self.case_path and self._same_path(self.case_path, path))
-        os.rename(path, dst)
-        try:
-            self._rename_case_name_in_yaml(dst, old_stem, new_name,
-                                           force_single=True)
-        except OSError:
-            pass                         # 文件已改名, YAML 名字没同步不阻断
-
-        # 勾选态/状态灯/复制源都跟着换 key, 否则重建列表后全部丢失
-        was_checked = any(self._same_path(p, path) for p in self._checked)
-        self._checked = {p for p in self._checked
-                         if not self._same_path(p, path)}
-        if was_checked:
-            self._checked.add(dst)
-        if any(self._same_path(p, path) for p in self._case_states):
-            state = next(s for p, s in self._case_states.items()
-                         if self._same_path(p, path))
-            self._case_states = {p: s for p, s in self._case_states.items()
-                                 if not self._same_path(p, path)}
-            self._case_states[dst] = state
-        if self._case_clipboard and self._same_path(self._case_clipboard, path):
-            self._case_clipboard = dst      # 复制源跟着改名, 否则再粘贴找不到文件
-
-        if is_open:
-            self.case_path = dst
-            # 从磁盘重新装填: YAML 名字可能刚被改写(含单 case 强制改名),
-            # 内存里必须与磁盘一致, 否则下一次自动保存又把旧名字写回去。
-            try:
-                with open(dst, encoding="utf-8") as f:
-                    data = yaml.safe_load(f) or {}
-                if isinstance(data, dict) and data.get("cases"):
-                    self.data = data
-                    self.case_idx = min(self.case_idx,
-                                        len(data["cases"]) - 1)
-            except Exception:
-                pass
-            self.file_label.setText(_safe_relpath(dst))
-            self._load_case_into_ui()
-            self.render_cards()
-            self._refresh_case_selector()
-            self._refresh_yaml_text()
-
-        self._fill_case_list()
-        target = os.path.abspath(dst)
-        for i in range(self.case_list.count()):
-            p = self.case_list.item(i).data(Qt.UserRole)
-            if p and self._same_path(p, target):
-                self.case_list.setCurrentRow(i)
-                break
-        self._set_status(f"已重命名用例: {old_stem} → {new_name}")
-        return dst
-
-    @staticmethod
-    def _rename_case_name_in_yaml(path, old, new, force_single=False):
-        """把 YAML 里值为 old 的 `- name:` 改成 new; 返回改动条数。
-
-        ★ 文本级逐行替换: 保留注释、缩进、换行符、case_order 与其它字段。
-          旧值用 yaml.safe_load 解析(单/双引号都认), 新值统一写成单引号标量
-          (任意字符都合法, 不会把 `#`/`true` 之类解析成注释或布尔值)。
-        ★ force_single: 单 case 文件即使名字与旧文件名不同也强制改成新名 ——
-          重命名文件是明确动作, 单 case 的用例名应当跟文件名一致。
-        """
-        if old == new and not force_single:
-            return 0
-        with open(path, encoding="utf-8", newline="") as f:
-            lines = f.readlines()
-        entries = []            # (行号, 前缀, 解析出的旧值, 行尾注释/空格, 换行符)
-        for i, line in enumerate(lines):
-            body = line.rstrip("\r\n")
-            eol = line[len(body):]
-            m = re.match(r"^(\s*-\s*name:\s*)(.*?)([ \t]*(?:#.*)?)$", body)
-            if not m:
-                continue
-            raw = m.group(2).strip()
-            try:
-                parsed = yaml.safe_load("v: " + raw)
-                val = parsed.get("v") if isinstance(parsed, dict) else None
-            except Exception:
-                val = None
-            entries.append((i, m.group(1), val, m.group(3), eol))
-        targets = [e for e in entries if e[2] == old]
-        if not targets and force_single and len(entries) == 1:
-            targets = entries
-        if not targets:
-            return 0
-        quoted = "'" + str(new).replace("'", "''") + "'"
-        for i, prefix, _val, tail, eol in targets:
-            lines[i] = f"{prefix}{quoted}{tail}{eol}"
-        with open(path, "w", encoding="utf-8", newline="") as f:
-            f.writelines(lines)
-        return len(targets)
-
+    # ── 重命名 / 名字绑定已拆到 gui/case_files.py(CaseFileMixin) ──────────
 
     def set_case_state(self, path, state):
         """设置用例执行状态灯:未执行置灰,执行中黄,通过绿,失败红。
@@ -1478,9 +1338,14 @@ class MainWindow(QMainWindow):
         """单击用例行 → 右侧加载该用例编辑;单击组头行 → 折叠/展开该组(用户要求)"""
         if self.worker:
             return
+        # ★ 先取行数据: 下面的 _sync_header 可能改名并重建列表, item 会失效
         path = item.data(Qt.UserRole)
+        group = item.data(CASE_STATE_ROLE)
+        # ★ 点击其它用例前, 把「用例」框里尚未提交的文本先落盘 —— 焦点丢失时
+        #   editingFinished 不一定先于点击信号到达; 不主动提交会丢掉最后输入的名字。
+        if self.case_path and not getattr(self, "_loading", False):
+            self._sync_header()
         if not path:
-            group = item.data(CASE_STATE_ROLE)
             if group:
                 if group in self._collapsed_groups:
                     self._collapsed_groups.discard(group)
@@ -2107,22 +1972,14 @@ class MainWindow(QMainWindow):
             if t is not None and t.isActive():
                 t.stop()
 
-    @staticmethod
-    def _same_path(a, b):
-        """Windows 路径比较: 统一绝对路径 + normcase(大小写/斜杠差异)。"""
-        if not a or not b:
-            return False
-        return os.path.normcase(os.path.abspath(str(a))) == \
-            os.path.normcase(os.path.abspath(str(b)))
-
-    @staticmethod
-    def _group_of(path):
-        """用例文件所属 APP 组 = 所在目录名(未分组文件返回所在目录名本身)。"""
-        return os.path.basename(os.path.dirname(os.path.abspath(str(path))))
+    # `_same_path` / `_group_of` 在 gui/case_files.py 的 CaseFileMixin 里
 
     def _do_auto_save(self):
         if self.worker or not self.case_path:
             return
+        t = getattr(self, "_autosave_timer", None)
+        if t is not None and t.isActive():
+            t.stop()                    # 立即保存后不要再被防抖定时器重复触发
         if getattr(self, "_edit_timer", None) is not None and self._edit_timer.isActive():
             self._edit_timer.stop()
             self._refresh_yaml_text()   # 写盘前保证 YAML 视图一致
@@ -2261,7 +2118,7 @@ class MainWindow(QMainWindow):
     def steps(self):
         return self.current_case.setdefault("steps", [])
 
-    def _load_case_into_ui(self):
+    def _load_case_into_ui(self, normalize_name=True):
         # ★ 模板上下文跟随当前用例的 APP 组(点击模板下拉自动列出该组模板)
         if self.case_path:
             from core import vision as _vision
@@ -2278,8 +2135,20 @@ class MainWindow(QMainWindow):
         #   实测: 用例甲 P1/wait=5 → 切到用例乙 P0/wait=3, 乙的 wait 变成 5, 而且间隔框
         #   随后也显示 5(用户完全看不出异常); 300ms 后 _autosave_timer 直接写进磁盘。
         self._loading = True
+        normalized = False
         try:
-            self.case_name_edit.setText(str(c.get("name") or ""))
+            name = str(c.get("name") or "")
+            # ★ 单 case 文件: 文件名就是用例名(用户 2026-10-19 要求双向绑定)。
+            #   打开旧文件时若 YAML 名字与文件名不一致, 以**文件名**为准归一,
+            #   并安排一次保存 —— 否则两处名字会一直各说各话。
+            if (normalize_name and self.case_path
+                    and len(self.data.get("cases") or []) == 1):
+                stem = os.path.splitext(os.path.basename(self.case_path))[0]
+                if name != stem:
+                    name = stem
+                    c["name"] = stem
+                    normalized = True
+            self.case_name_edit.setText(name)
             pri = str(c.get("priority") or "P1")
             self.priority_combo.setCurrentIndex(max(0, self.priority_combo.findText(pri)))
             # ★ 显示按人写的样子(用户 2026-10-16): 用例写 `wait: 5.0` 时框里显示 5,
@@ -2288,6 +2157,8 @@ class MainWindow(QMainWindow):
                 "" if c.get("wait") is None else schema.fmt_num(c["wait"]))
         finally:
             self._loading = False
+        if normalized:
+            self._auto_save()          # 名字归一后落盘, 保证文件内外一致
         # 这两步原本是 _sync_header 的副作用, 屏蔽之后要显式补上, 否则切用例后
         # YAML 视图不刷新(回归)
         self._refresh_case_item_text()
@@ -2298,14 +2169,48 @@ class MainWindow(QMainWindow):
             # 正在把数据装填进控件, 此时控件里还是上一个用例的残留文本 ——
             # 回写会把刚加载的数据覆盖掉(见 _load_case_into_ui 的说明)
             return
-        self.data["module"] = str(self.data.get("module") or "")
+        if not self.case_path or not self.data.get("cases"):
+            return
         c = self.current_case
-        c["name"] = self.case_name_edit.text().strip() or "未命名用例"
-        c["priority"] = self.priority_combo.currentText()
+        old_name = str(c.get("name") or "")
+        old_pri = str(c.get("priority") or "")
+        old_wait = c.get("wait")
+        new_name = self.case_name_edit.text().strip() or "未命名用例"
+        new_pri = self.priority_combo.currentText()
         txt = self.case_wait_edit.text().strip()
-        c["wait"] = int(txt) if txt.isdigit() else None
+        new_wait = int(txt) if txt.isdigit() else None
+        self.data["module"] = str(self.data.get("module") or "")
+        c["name"] = new_name
+        c["priority"] = new_pri
+        c["wait"] = new_wait
+        # ★ 文件名 ↔ 用例名双向绑定(用户 2026-10-19): 单 case 文件的「用例」框改名
+        #   必须同时改文件名; 非法/重名的名字直接拒绝并回退, 不允许两处不一致。
+        if new_name != old_name and len(self.data["cases"]) == 1:
+            try:
+                self._bind_file_name_to_case_name(new_name)
+            except (OSError, ValueError) as e:
+                QMessageBox.warning(
+                    self, "用例名不能作为文件名",
+                    f"{e}\n\n文件名与用例名必须一致, 已恢复原名。")
+                self.case_name_edit.setText(old_name)
+                c["name"] = old_name
+                self._refresh_case_item_text()
+                self._refresh_yaml_text()
+                self._auto_save()
+                return
         self._refresh_case_item_text()
         self._refresh_yaml_text()
+        # ★ 头字段(用例名/优先级/间隔)原来只改内存和 YAML 预览, 不触发自动保存 ——
+        #   用户改完直接切走/关窗就丢了。改名是明确动作, 必须立即落盘; 其它字段走防抖。
+        # ★ 没有实际变化时不要写盘: 单击用例行也会走到这里(提交未焦点化的输入),
+        #   每次点击都 safe_dump 一遍会白白重排 YAML。
+        if new_name != old_name:
+            self._do_auto_save()
+        elif new_pri != old_pri or new_wait != old_wait:
+            self._auto_save()
+
+    # `_validate_case_file_name` / `_bind_file_name_to_case_name` /
+    # `_migrate_case_path` 在 gui/case_files.py 的 CaseFileMixin 里
 
     # ── 多 case 切换器 ──
     def _refresh_case_selector(self):
@@ -2585,9 +2490,27 @@ class MainWindow(QMainWindow):
         self.data = data
         self.case_idx = 0
         self.expanded_key = None
-        self._load_case_into_ui()
+        self._load_case_into_ui(normalize_name=False)
         self.render_cards()
-        self._auto_save()
+        # ★ YAML 里显式改了单 case 的用例名 → 文件名跟着改(双向绑定); 非法名回退
+        if self.case_path and len(self.data.get("cases") or []) == 1:
+            name = str(self.current_case.get("name") or "").strip() or "未命名用例"
+            try:
+                self._bind_file_name_to_case_name(name)
+            except ValueError as e:
+                stem = os.path.splitext(os.path.basename(self.case_path))[0]
+                self.current_case["name"] = stem
+                self._loading = True
+                try:
+                    self.case_name_edit.setText(stem)
+                finally:
+                    self._loading = False
+                self._refresh_case_item_text()
+                self._refresh_yaml_text()
+                QMessageBox.warning(
+                    self, "用例名不能作为文件名",
+                    f"{e}\n\n文件名与用例名必须一致, 已恢复为文件名。")
+        self._do_auto_save()
         self._refresh_case_selector()
 
     # ── 执行 ──
@@ -2924,6 +2847,8 @@ class MainWindow(QMainWindow):
         # ★ 留痕: 日志里出现这行 = **用户正常关窗**(不是崩溃/被杀)。下次排查"闪退"时,
         #   没有这行又有其它退出迹象, 就说明进程是被硬结束的(见 core/crashlog.py)。
         log.info("[退出] 收到关窗请求")
+        # ★ 防抖中的编辑必须先落盘: 用户改完名字/步骤立刻关窗, 不能丢
+        self._flush_pending_edit()
         self._save_expanded_groups()      # 关窗前记住组展开状态(下次打开还原)
         self._cleanup_update_backups()    # 正常关窗 = 本次更新确实可用, 可以扔掉旧版本
         if self.worker:

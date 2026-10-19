@@ -3,8 +3,9 @@
 
 背景: `gui/main_window.py` 曾经是 4568 行的单体(样式常量 + 十几个控件 + 各对话框 +
 步骤卡片 + 后台线程 + 主窗口全挤在一起)。2026-10-15 按职责拆成
-`gui/style.py` / `widgets.py` / `dialogs.py` / `step_card.py` / `threads.py`,
-并在 main_window.py 末尾**显式 re-export**,好让 `main_window.X` 的老用法继续有效。
+`gui/style.py` / `widgets.py` / `dialogs.py` / `step_card.py` / `threads.py` /
+`case_files.py`, 并在 main_window.py 末尾**显式 re-export**, 好让 `main_window.X`
+的老用法继续有效。
 
 这三条守护分别防三件已经发生过的退化:
   ① 文件重新长回单体(拆了白拆);
@@ -20,7 +21,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 #: 拆分出来的兄弟模块(新增请同步这里)
-SPLIT_MODULES = ("style", "widgets", "dialogs", "step_card", "threads")
+SPLIT_MODULES = ("style", "widgets", "dialogs", "step_card", "threads", "case_files")
 
 #: main_window.py 的行数上限 —— 只想让它装 MainWindow 与 re-export
 MAIN_WINDOW_MAX_LINES = 3000

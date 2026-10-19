@@ -4547,11 +4547,11 @@ def test_switch_case_flushes_pending_autosave(win_with_cases):
     a = os.path.join(mw.CASES_DIR, "涂鸦智能", "全局清扫.yaml")
     b = os.path.join(mw.CASES_DIR, "涂鸦智能", "划区清扫.yaml")
     win._on_case_item_clicked(_find_case_item(win, "全局清扫.yaml"))
-    win.data["cases"][0]["name"] = "改过的名字"
-    win._auto_save()                      # 起防抖, 尚未触发
+    win.priority_combo.setCurrentText("P0")   # 头字段改动 → 防抖保存尚未触发
+    win._auto_save()
     win._on_case_item_clicked(_find_case_item(win, "划区清扫.yaml"))
-    assert "改过的名字" in Path(a).read_text(encoding="utf-8"), \
-        "切换用例前没落盘, 刚输入的内容丢了"
+    assert "priority: P0" in Path(a).read_text(encoding="utf-8"), \
+        "切换用例前没落盘, 刚修改的优先级丢了"
     assert os.path.abspath(win.case_path) == os.path.abspath(b)
 
 
@@ -4578,6 +4578,99 @@ def test_delete_case_cleans_checked_state_and_clipboard(win_with_cases, monkeypa
     assert src not in win._case_states
     assert win._case_clipboard is None
     assert win.case_path is None
+
+
+def test_case_name_edit_renames_file_and_saves(win_with_cases):
+    """★ 双向绑定(用户 2026-10-19): 在「用例」框里改名 → 文件名立即跟着改并落盘。"""
+    import yaml
+    from gui import main_window as mw
+
+    win = win_with_cases
+    src = os.path.join(mw.CASES_DIR, "涂鸦智能", "全局清扫.yaml")
+    win._on_case_item_clicked(_find_case_item(win, "全局清扫.yaml"))
+    assert win.data["cases"][0]["name"] == "全局清扫", "单 case 加载时应以文件名为准"
+    win.case_name_edit.setText("登录流程")
+    win._sync_header()
+    dst = os.path.join(mw.CASES_DIR, "涂鸦智能", "登录流程.yaml")
+    assert os.path.isfile(dst) and not os.path.exists(src)
+    assert os.path.abspath(win.case_path) == os.path.abspath(dst)
+    doc = yaml.safe_load(Path(dst).read_text(encoding="utf-8"))
+    assert doc["cases"][0]["name"] == "登录流程", doc
+    texts = [win.case_list.item(i).text() for i in range(win.case_list.count())]
+    assert "登录流程" in texts, texts
+
+
+def test_case_name_edit_invalid_name_reverts(win_with_cases, monkeypatch):
+    """非法文件名(含 / 等)不能写进用例名 —— 提示并回退, 不允许文件名/内部名分叉。"""
+    import yaml
+    from gui import main_window as mw
+
+    win = win_with_cases
+    src = os.path.join(mw.CASES_DIR, "涂鸦智能", "全局清扫.yaml")
+    warned = []
+    monkeypatch.setattr(mw.QMessageBox, "warning",
+                        staticmethod(lambda *a, **k: warned.append(a)))
+    win._on_case_item_clicked(_find_case_item(win, "全局清扫.yaml"))
+    win.case_name_edit.setText("a/b")
+    win._sync_header()
+    assert warned, "非法用例名必须提示"
+    assert win.case_name_edit.text() == "全局清扫", win.case_name_edit.text()
+    assert os.path.isfile(src)
+    win._flush_pending_edit()          # 加载时的名字归一也在防抖里
+    doc = yaml.safe_load(Path(src).read_text(encoding="utf-8"))
+    assert doc["cases"][0]["name"] == "全局清扫", doc
+
+
+def test_case_name_edit_multicase_keeps_filename(win_with_cases):
+    """多用例文件无法用一个文件名绑定多条用例名 —— 只改内部名, 不动文件名。"""
+    import yaml
+    from gui import main_window as mw
+
+    win = win_with_cases
+    src = os.path.join(mw.CASES_DIR, "涂鸦智能", "多用例.yaml")
+    Path(src).write_text(
+        "module: 多用例\ncases:\n"
+        "  - name: 用例甲\n    steps: []\n"
+        "  - name: 用例乙\n    steps: []\n", encoding="utf-8")
+    win._fill_case_list()
+    win._on_case_item_clicked(_find_case_item(win, "多用例.yaml"))
+    win.case_combo.setCurrentIndex(1)
+    win.case_name_edit.setText("乙改名")
+    win._sync_header()
+    assert os.path.isfile(src), "多用例文件不应被改名"
+    doc = yaml.safe_load(Path(src).read_text(encoding="utf-8"))
+    assert doc["cases"][1]["name"] == "乙改名", doc
+    assert doc["cases"][0]["name"] == "用例甲", doc
+
+
+def test_load_normalizes_single_case_name_to_filename(win_with_cases):
+    """旧文件里 YAML 名字与文件名不一致时, 以文件名归一并落盘。"""
+    import yaml
+    from gui import main_window as mw
+
+    win = win_with_cases
+    src = os.path.join(mw.CASES_DIR, "涂鸦智能", "全局清扫.yaml")
+    # fixture 里是 name: 完整流程, 与文件名不同
+    win._on_case_item_clicked(_find_case_item(win, "全局清扫.yaml"))
+    assert win.data["cases"][0]["name"] == "全局清扫"
+    win._flush_pending_edit()
+    doc = yaml.safe_load(Path(src).read_text(encoding="utf-8"))
+    assert doc["cases"][0]["name"] == "全局清扫", doc
+
+
+def test_case_list_header_has_no_delete_button(win_with_cases):
+    """删除按钮已从列表头部移除(用户 2026-10-19), 删除只保留在右键菜单。"""
+    from PySide6.QtWidgets import QPushButton
+
+    win = win_with_cases
+    all_btn = next(b for b in win.findChildren(QPushButton) if b.text() == "全选")
+    panel = all_btn.parentWidget()
+    texts = [b.text() for b in panel.findChildren(QPushButton)]
+    assert "全选" in texts and "清空" in texts, texts
+    assert "删除" not in texts, texts
+    item = _find_case_item(win, "全局清扫.yaml")
+    labels = [a.text() for a in win._case_context_menu(item).actions() if a.text()]
+    assert "删除用例" in labels, labels      # 右键删除保留
 
 
 def test_paste_and_rename_refuse_during_run(win_with_cases):
