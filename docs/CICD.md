@@ -50,8 +50,8 @@ jobs:
   lint:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with: { python-version: '3.13', cache: pip }
       - run: pip install pyflakes pyyaml
       - name: pyflakes(除有意 noqa 外应当干净)
@@ -103,6 +103,17 @@ svc.cmd start
 
 > 注意：workflow 里我会显式传 `--device`（默认 `127.0.0.1:7555`，可用仓库变量覆盖），**不完全依赖** config.yaml —— 少一层"为什么连不上"的排查。
 
+> ★ **踩坑（2026-10-19 实测，冒烟第一次真跑就死在这）**：runner 的进程环境里带着
+> `NoDefaultCurrentDirectoryInExePath=1`（cmd 不再从"当前目录"找 exe），而 `setup-python`
+> 在 Windows 上的安装脚本是 `cmd /c "cd <toolcache> && call python-3.13.16-amd64.exe ..."`，
+> 于是必然报 `'python-3.13.16-amd64.exe' is not recognized` →
+> `Error happened during Python installation`，job 在装 Python 处就红了。
+> **修法**：`real-smoke.yml` 的 setup-python 那一步加 `env: NoDefaultCurrentDirectoryInExePath: ''`
+> —— 实测该变量**只有空值**能恢复搜索（`0`/`false` 都不行），Actions 会把空字符串照样
+> 传进进程，cmd 视同未设置。`tests/test_ci_workflows.py` 里有守护测试，删掉这行会立刻红。
+> 同类风险：若以后 runner 是从带该变量的终端启动的，任何"cd 到目录再执行裸文件名"的
+> 脚本都会踩到。
+
 ### 3.3 我做的事：`real-smoke.yml`（草稿，待你确认后落地）
 
 ```yaml
@@ -124,7 +135,8 @@ jobs:
     runs-on: [self-hosted, windows, realtest]
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      # node24 版 action（2026-10-16 升级，消掉 Node.js 20 弃用警告）
+      - uses: actions/checkout@v7
         with: { fetch-depth: 1 }
 
       # ★ 冒烟用的用例/前置/模板都以**仓库里提交的那份**为准(用户 2026-10-16 定:
@@ -141,7 +153,11 @@ jobs:
             Write-Host ("  {0} sha256 {1}" -f $f, (Get-FileHash $f -Algorithm SHA256).Hash.Substring(0, 12))
           }
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
+        env:
+          # 见 3.2 的踩坑说明：自建 runner 带 NoDefaultCurrentDirectoryInExePath=1，
+          # 只有空值能让 setup-python 的安装脚本找到当前目录里的安装器。
+          NoDefaultCurrentDirectoryInExePath: ''
         with: { python-version: '3.13', cache: pip }
       - name: 安装依赖
         run: |
@@ -170,7 +186,7 @@ jobs:
 
       - name: 失败时上传现场(截图 + junit)
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: real-failure-${{ github.run_id }}
           path: |
