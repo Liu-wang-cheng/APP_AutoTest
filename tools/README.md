@@ -14,6 +14,7 @@
 | `check_compat.py` | 测试参数化调用 | 兼容性检查(依赖/接口/配置项) |
 | `check_render.py` | 测试参数化调用 | 离屏渲染 GUI, 确认界面能起来 |
 | `verify_update_download.py` | 测试参数化调用 | 校验更新包下载链路 |
+| `selector_health.py` | `.github/workflows/real-smoke.yml`（跑真机冒烟前） | P0 选择器健康检查：从用例/前置/配置提取文本选择器，在设备 APK 的 DEX / resources.arsc / assets 里核对，并与 `selector_baseline.json` 比较；**回归即失败**（服务端/WebView 下发的动态文案只报告，不算失败） |
 
 ## 二、手动排查用(不参与自动流程, 但要留着 —— 真机调模板/调用例时会用)
 
