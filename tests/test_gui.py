@@ -1719,11 +1719,10 @@ def test_collapse_group_unloads_editor(qapp, monkeypatch, tmp_path):
 
 
 def test_chip_strip_field_order(win):
-    """测试步骤详情区字段顺序: 标题→用例组→用例→优先级→间隔s→添加步骤
+    """测试步骤详情区字段顺序: 标题→用例→优先级→间隔s→添加步骤
 
-    ★ 用**运行时**的控件顺序断言(遍历 FlowLayout 里的子控件), 而不是去扫源码文本。
-      扫源码那种写法在 UI 顺序真的错了时照样通过, 而改个书写方式/加个空格又会假红。
-      (原先这里取出的 `chip_labels` 是个僵尸变量, 真正的顺序验证全靠下面那段扫源码。)
+    ★ 「用例组」输入框已去掉(用户 2026-10-19): 它只是 YAML 的 module, 报告按用例名
+      分表, 与左侧 APP 组无关; 留着反而让人以为要手动对齐组名。
     """
     from PySide6.QtWidgets import QLabel
     strip = win.add_btn.parentWidget()
@@ -1735,9 +1734,7 @@ def test_chip_strip_field_order(win):
         wd = lay.itemAt(i).widget()
         if wd is None:
             continue
-        if wd is win.module_edit:
-            seq.append("<用例组输入>")
-        elif wd is win.case_name_edit:
+        if wd is win.case_name_edit:
             seq.append("<用例输入>")
         elif wd is win.case_combo:
             seq.append("<多用例切换>")
@@ -1750,7 +1747,7 @@ def test_chip_strip_field_order(win):
         elif isinstance(wd, QLabel):
             seq.append(wd.text())
     # 只校验字段部分(chip 条尾部还有 "|" / 提示语 / "共 N 步", 不属于字段顺序)
-    expected = ["测试步骤详情", "用例组", "<用例组输入>",
+    expected = ["测试步骤详情",
                 "用例", "<用例输入>", "<多用例切换>",
                 "优先级", "<优先级>",
                 "间隔s", "<间隔输入>",
@@ -4390,7 +4387,7 @@ def test_case_context_menu_copy_paste_enabled(win_with_cases):
 
     menu = win._case_context_menu(item)
     labels = [a.text() for a in menu.actions() if a.text()]
-    assert labels == ["复制用例", "粘贴用例", "删除用例"], labels
+    assert labels == ["复制用例", "粘贴用例", "重命名用例…", "删除用例"], labels
     assert not menu.actions()[1].isEnabled(), "没有复制源时粘贴应禁用"
 
     win._copy_case(src)
@@ -4444,3 +4441,63 @@ def test_paste_without_copy_is_noop(win_with_cases):
     before = sorted(os.listdir(gdir))
     win._paste_case_to_group("涂鸦智能")
     assert sorted(os.listdir(gdir)) == before
+
+
+def test_paste_syncs_yaml_name_when_it_matches_filename(win_with_cases):
+    """★ 粘贴后右侧「用例」名要跟文件名一起变(用户 2026-10-19: "粘贴后的用例名字
+    无法修改")。只改与源文件名相同的 name, 多 case 里的自定义名保持原样。"""
+    from gui import main_window as mw
+
+    win = win_with_cases
+    src = os.path.join(mw.CASES_DIR, "涂鸦智能", "全局清扫.yaml")
+    Path(src).write_text(
+        "module: 全局清扫\ncases:\n  - name: 全局清扫\n    steps: []\n",
+        encoding="utf-8")
+    win._copy_case(src)
+    win._paste_case_to_group("涂鸦智能")
+    dst = os.path.join(mw.CASES_DIR, "涂鸦智能", "全局清扫_副本.yaml")
+    text = Path(dst).read_text(encoding="utf-8")
+    assert "- name: 全局清扫_副本" in text, text
+    assert "- name: 全局清扫\n" not in text, text
+
+
+def test_rename_case_renames_file_yaml_and_ui(win_with_cases):
+    """★ 右键重命名: 文件名/列表项/右侧用例名/勾选态/打开路径必须一起变。"""
+    from PySide6.QtCore import Qt
+    from gui import main_window as mw
+
+    win = win_with_cases
+    src = os.path.join(mw.CASES_DIR, "涂鸦智能", "全局清扫.yaml")
+    Path(src).write_text(
+        "module: 全局清扫\ncases:\n  - name: 全局清扫\n    steps: []\n",
+        encoding="utf-8")
+    win._fill_case_list()
+    win._on_case_item_clicked(_find_case_item(win, "全局清扫.yaml"))
+    win._checked.add(os.path.abspath(src))
+    win._case_clipboard = src          # 复制源也要跟着改名
+
+    dst = win._rename_case(src, "登录流程")
+    assert os.path.basename(dst) == "登录流程.yaml"
+    assert not os.path.exists(src) and os.path.isfile(dst)
+    text = Path(dst).read_text(encoding="utf-8")
+    assert "- name: 登录流程" in text and "- name: 全局清扫" not in text, text
+
+    assert os.path.abspath(win.case_path) == os.path.abspath(dst)
+    assert win.case_name_edit.text() == "登录流程"
+    assert os.path.abspath(dst) in {os.path.abspath(p) for p in win._checked}
+    assert os.path.abspath(win._case_clipboard) == os.path.abspath(dst)
+    cur = win.case_list.currentItem()
+    assert cur is not None and cur.data(Qt.UserRole) \
+        and os.path.abspath(cur.data(Qt.UserRole)) == os.path.abspath(dst)
+
+
+def test_rename_case_refuses_collision_and_bad_names(win_with_cases):
+    from gui import main_window as mw
+
+    win = win_with_cases
+    src = os.path.join(mw.CASES_DIR, "涂鸦智能", "全局清扫.yaml")
+    with pytest.raises(ValueError, match="已存在"):
+        win._rename_case(src, "划区清扫")
+    for bad in ("", "  ", "a/b", 'a:b', ".."):
+        with pytest.raises(ValueError):
+            win._rename_case(src, bad)

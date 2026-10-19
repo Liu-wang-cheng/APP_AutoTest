@@ -16,9 +16,10 @@ from PySide6.QtCore import QSettings, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QAction, QColor, QIcon, QIntValidator, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QComboBox, QDialog, QFileDialog, QFrame,
-    QHBoxLayout, QHeaderView, QLabel, QLineEdit, QListWidgetItem, QMainWindow, QMenu,
-    QMessageBox, QPlainTextEdit, QPushButton, QScrollArea, QSizePolicy, QSpinBox,
-    QSplitter, QTabWidget, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
+    QHBoxLayout, QHeaderView, QInputDialog, QLabel, QLineEdit, QListWidgetItem,
+    QMainWindow, QMenu, QMessageBox, QPlainTextEdit, QPushButton, QScrollArea,
+    QSizePolicy, QSpinBox, QSplitter, QTabWidget, QTableWidget, QTableWidgetItem,
+    QVBoxLayout, QWidget,
 )
 
 from core import app_detect
@@ -1151,6 +1152,9 @@ class MainWindow(QMainWindow):
                                  and os.path.isdir(os.path.join(CASES_DIR, target_group)))
             act_paste.triggered.connect(
                 lambda _=False, g=target_group: self._paste_case_to_group(g))
+            act_rename = menu.addAction("重命名用例…")
+            act_rename.triggered.connect(
+                lambda _=False, p=path: self._rename_case_dialog(p))
             menu.addSeparator()
             act_del = menu.addAction("删除用例")
             act_del.triggered.connect(self.on_delete_selected)
@@ -1204,6 +1208,14 @@ class MainWindow(QMainWindow):
         except OSError as e:
             QMessageBox.warning(self, "粘贴失败", f"无法复制用例文件:\n{e}")
             return
+        # ★ 粘贴出的新文件要让"用例"名也跟上文件名(否则界面上仍显示源用例名,
+        #   用户会以为改不了名字)。只替换与源文件名相同的 name, 多 case 文件里
+        #   自定义的用例名保持原样。
+        try:
+            self._rename_case_name_in_yaml(
+                dst, base, os.path.splitext(os.path.basename(dst))[0])
+        except OSError:
+            pass                         # 名字没改成不影响文件已复制
         # 折叠组里粘贴后要让新用例可见(否则用户以为没生效)
         self._collapsed_groups.discard(group)
         self._known_groups.add(group)
@@ -1229,6 +1241,112 @@ class MainWindow(QMainWindow):
             if not os.path.exists(cand):
                 return cand
             n += 1
+
+    # ── 重命名(2026-10-19 用户反馈: 粘贴后的名字改不了) ───────────────────
+    def _rename_case_dialog(self, path):
+        """右键「重命名用例…」入口。"""
+        if self.worker:
+            QMessageBox.information(self, "重命名用例", "用例执行中, 结束后再重命名。")
+            return
+        old = os.path.splitext(os.path.basename(path))[0]
+        new, ok = QInputDialog.getText(self, "重命名用例", "新的用例名:", text=old)
+        if not ok:
+            return
+        try:
+            self._rename_case(path, new)
+        except (OSError, ValueError) as e:
+            QMessageBox.warning(self, "重命名失败", str(e))
+
+    def _rename_case(self, path, new_name):
+        """重命名用例文件(列表显示的就是文件名), 并同步 YAML 里同名的 `name`。
+
+        ★ 为什么还要改 YAML: 列表/文件名与"用例"输入框是两个名字 —— 粘贴只改文件名
+          时, 右侧仍显示源用例名, 看起来就是"名字改不了"。只有与旧文件名相同的
+          `name` 才替换, 多 case 文件里用户自定义的名字不动。
+        """
+        if self.worker:
+            raise ValueError("用例执行中, 结束后再重命名")
+        path = os.path.abspath(path)
+        if not os.path.isfile(path):
+            raise ValueError("用例文件不存在")
+        new_name = (new_name or "").strip()
+        if not new_name:
+            raise ValueError("用例名不能为空")
+        if any(ch in new_name for ch in '\\/:*?"<>|') or new_name in (".", ".."):
+            raise ValueError('用例名不能包含 \\ / : * ? " < > |')
+        old_stem = os.path.splitext(os.path.basename(path))[0]
+        if new_name == old_stem:
+            return path
+        gdir = os.path.dirname(path)
+        dst = os.path.join(gdir, new_name + ".yaml")
+        if os.path.exists(dst):
+            raise ValueError(f"同组下已存在用例: {new_name}.yaml")
+        os.rename(path, dst)
+        try:
+            self._rename_case_name_in_yaml(dst, old_stem, new_name)
+        except OSError:
+            pass                         # 文件已改名, YAML 名字没同步不阻断
+
+        # 勾选态/状态灯/当前打开路径都跟着换 key, 否则重建列表后全部丢失
+        checked = {os.path.abspath(p) for p in self._checked}
+        if path in checked:
+            self._checked = {p for p in self._checked
+                             if os.path.abspath(p) != path}
+            self._checked.add(dst)
+        state = self._case_states.pop(path, None)
+        if state is not None:
+            self._case_states[dst] = state
+        if (self._case_clipboard
+                and os.path.abspath(self._case_clipboard) == path):
+            self._case_clipboard = dst      # 复制源跟着改名, 否则再粘贴找不到文件
+        is_open = bool(self.case_path
+                       and os.path.abspath(self.case_path) == path)
+        if is_open:
+            self.case_path = dst
+            for c in self.data.get("cases", []):
+                if str(c.get("name") or "") == old_stem:
+                    c["name"] = new_name
+            self.file_label.setText(_safe_relpath(dst))
+            self._loading = True
+            try:
+                self.case_name_edit.setText(
+                    str(self.current_case.get("name") or ""))
+            finally:
+                self._loading = False
+            self._refresh_case_item_text()
+            self._refresh_yaml_text()
+
+        self._fill_case_list()
+        target = os.path.abspath(dst)
+        for i in range(self.case_list.count()):
+            p = self.case_list.item(i).data(Qt.UserRole)
+            if p and os.path.abspath(p) == target:
+                self.case_list.setCurrentRow(i)
+                break
+        self._set_status(f"已重命名用例: {old_stem} → {new_name}")
+        return dst
+
+    @staticmethod
+    def _rename_case_name_in_yaml(path, old, new):
+        """把 YAML 里值为 old 的 `name:` 改成 new; 返回替换条数。
+
+        文本级替换(不重排 YAML、不丢注释/换行符), 支持引号与行尾注释。
+        """
+        if old == new:
+            return 0
+        with open(path, encoding="utf-8", newline="") as f:
+            text = f.read()
+        pat = re.compile(
+            r"(?m)^(\s*-\s*name:\s*)(['\"]?)" + re.escape(old)
+            + r"\2(\s*(?:#.*)?)$")
+        new_text, n = pat.subn(
+            lambda m: f"{m.group(1)}{m.group(2)}{new}{m.group(2)}{m.group(3)}",
+            text)
+        if n:
+            with open(path, "w", encoding="utf-8", newline="") as f:
+                f.write(new_text)
+        return n
+
 
     def set_case_state(self, path, state):
         """设置用例执行状态灯:未执行置灰,执行中黄,通过绿,失败红。
@@ -1767,12 +1885,10 @@ class MainWindow(QMainWindow):
         title = QLabel("测试步骤详情")
         title.setStyleSheet("color:#2563eb; font-weight:bold; font-size:13px;")
         lay.addWidget(title)
-        lay.addWidget(QLabel("用例组"))
-        self.module_edit = QLineEdit()
-        self.module_edit.setFixedWidth(96)
-        self.module_edit.setToolTip("用例组名,也是 Excel 报告的 sheet 名")
-        self.module_edit.editingFinished.connect(self._sync_header)
-        lay.addWidget(self.module_edit)
+        # ★ 「用例组」输入框已去掉(用户 2026-10-19): 左侧列表已经按 APP 组分组,
+        #   这个字段只是 YAML 里的 module, 报告实际按**用例名**分表, 它早就不再
+        #   影响任何结果 —— 留着只会让人以为它要和 APP 组一致。YAML 里原有
+        #   module 值保持不动(兼容旧文件/外部脚本)。
         lay.addWidget(QLabel("用例"))
         self.case_name_edit = QLineEdit()
         self.case_name_edit.setObjectName("caseName")
@@ -2054,7 +2170,6 @@ class MainWindow(QMainWindow):
         #   随后也显示 5(用户完全看不出异常); 300ms 后 _autosave_timer 直接写进磁盘。
         self._loading = True
         try:
-            self.module_edit.setText(str(self.data.get("module") or ""))
             self.case_name_edit.setText(str(c.get("name") or ""))
             pri = str(c.get("priority") or "P1")
             self.priority_combo.setCurrentIndex(max(0, self.priority_combo.findText(pri)))
@@ -2074,7 +2189,7 @@ class MainWindow(QMainWindow):
             # 正在把数据装填进控件, 此时控件里还是上一个用例的残留文本 ——
             # 回写会把刚加载的数据覆盖掉(见 _load_case_into_ui 的说明)
             return
-        self.data["module"] = self.module_edit.text().strip() or "未命名"
+        self.data["module"] = str(self.data.get("module") or "")
         c = self.current_case
         c["name"] = self.case_name_edit.text().strip() or "未命名用例"
         c["priority"] = self.priority_combo.currentText()
@@ -2113,7 +2228,7 @@ class MainWindow(QMainWindow):
     def _set_locked(self, locked):
         self._locked = locked
         widgets = [self.new_btn, self.open_btn, self.save_btn, self.add_btn,
-                   self.case_name_edit, self.module_edit, self.priority_combo,
+                   self.case_name_edit, self.priority_combo,
                    self.case_wait_edit, self.case_combo,
                    self.yaml_refresh_btn, self.yaml_apply_btn,
                    # 用例执行期间「检查更新」置灰: 变了也没法立刻重启安装,
