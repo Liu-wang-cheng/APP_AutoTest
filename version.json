@@ -1,8 +1,8 @@
 {
-  "version": "2.0.28",
-  "sha256": "9fd83ed759b2b361d112b8b8a695e80039ae52ef66e3d3aa36afa04533de96c5",
-  "download_url": "https://github.com/Liu-wang-cheng/APP_AutoTest/releases/download/v2.0.28/AutoTest_v2.0.28.zip",
+  "version": "2.0.29",
+  "sha256": "776ffc71ff19f50930ac9ba196822094e0413200d7ad4b07138c98eef2aebaf5",
+  "download_url": "https://github.com/Liu-wang-cheng/APP_AutoTest/releases/download/v2.0.29/AutoTest_v2.0.29.zip",
   "release_date": "2026-10-19",
-  "release_notes": "### 新增\n\n- **用例列表右键复制/粘贴**(用户 2026-10-19): 右键用例行 → 复制用例 / 粘贴用例 / 删除用例;\n  右键组头 → 粘贴到该组 / 删除整组。重名自动生成 `_副本`、`_副本2`; 粘贴后自动选中新用例,\n  折叠组会自动展开; 支持 Ctrl+C / Ctrl+V。复制为字节级, YAML 注释与格式原样保留。\n\n### 测试 / CI（不随安装包发布）\n\n- 真机冒烟前新增「选择器健康检查」(P0): 扫设备 APK 的 DEX/resources.arsc/assets 并对比\n  入库基线; APP 升级导致用例文案回归时, 在 10 分钟真机用例之前立即失败。服务端/WebView\n  下发的动态文案只报告, 不算失败。\n- 新增运行时页面文本快照工具(P1): 真机采集设备页/菜单/打扫报告的无障碍树+OCR 文本并\n  与基线 diff, 覆盖 APK 里没有的动态文案; 仅 CI/测试使用, 不参与打包。\n- 修复自建 runner 上真机冒烟链路的几个环境问题(setup-python 安装器、PowerShell 7 缺失、\n  GITHUB_ENV 编码、配置端口), 并将每日定时冒烟设为北京时间 02:00。",
+  "release_notes": "### 新增\n\n- **用例重命名**(用户 2026-10-19): 用例列表右键 → 「重命名用例…」。同时更新文件名、\n  列表显示、YAML 里的用例名、勾选状态、状态灯、当前打开路径与复制源; 重名或名称含\n  `\\ / : * ? \" < > |` 会被拒绝。\n\n### 修复\n\n- **粘贴后的用例名改不了**(用户 2026-10-19): 粘贴时若 YAML 的用例名与源文件名相同,\n  自动同步成 `_副本` / `_副本2`; 多 case 文件里自定义的用例名保持原样。\n- **去掉「用例组」输入框**(用户 2026-10-19): 该字段只是 YAML 的 `module`, 报告实际按\n  「用例名-轮次」分表, runner 读取后并未使用, 与左侧 APP 组也无关 —— 保留输入框只会\n  让人误以为需要手动对齐。已有用例文件里的 `module` 值保持不变(兼容外部脚本)。\n- **发版链路: 清单 sha256 与资产不一致**(v2.0.28 事故): 发版 workflow 移除了 `push: tags`\n  自触发(release.py 发完版自己推 tag, 会二次构建并覆盖资产); release.py 增加幂等闸门与\n  「上传后核对资产 digest」检查; 发版脚本读取子进程输出显式使用 UTF-8(修复 windows-latest\n  cp1252 解码中文导致最后一步误报失败)。\n\n### 测试 / CI（不随安装包发布）\n\n- 新增重命名 / 粘贴名同步 / 发版幂等 / 编码兜底的守护测试; `docs/CICD.md` 补充 5.2\n  「下载包 sha256 与清单不一致」的排查与修法。",
   "min_version": "1.0"
 }
