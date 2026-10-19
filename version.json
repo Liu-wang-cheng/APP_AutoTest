@@ -1,6 +1,6 @@
 {
   "version": "2.0.28",
-  "sha256": "965a255ac37828a50d3b653af2f78f953292baa36ea14991c32b34f1ef0a4e10",
+  "sha256": "9fd83ed759b2b361d112b8b8a695e80039ae52ef66e3d3aa36afa04533de96c5",
   "download_url": "https://github.com/Liu-wang-cheng/APP_AutoTest/releases/download/v2.0.28/AutoTest_v2.0.28.zip",
   "release_date": "2026-10-19",
   "release_notes": "### 新增\n\n- **用例列表右键复制/粘贴**(用户 2026-10-19): 右键用例行 → 复制用例 / 粘贴用例 / 删除用例;\n  右键组头 → 粘贴到该组 / 删除整组。重名自动生成 `_副本`、`_副本2`; 粘贴后自动选中新用例,\n  折叠组会自动展开; 支持 Ctrl+C / Ctrl+V。复制为字节级, YAML 注释与格式原样保留。\n\n### 测试 / CI（不随安装包发布）\n\n- 真机冒烟前新增「选择器健康检查」(P0): 扫设备 APK 的 DEX/resources.arsc/assets 并对比\n  入库基线; APP 升级导致用例文案回归时, 在 10 分钟真机用例之前立即失败。服务端/WebView\n  下发的动态文案只报告, 不算失败。\n- 新增运行时页面文本快照工具(P1): 真机采集设备页/菜单/打扫报告的无障碍树+OCR 文本并\n  与基线 diff, 覆盖 APK 里没有的动态文案; 仅 CI/测试使用, 不参与打包。\n- 修复自建 runner 上真机冒烟链路的几个环境问题(setup-python 安装器、PowerShell 7 缺失、\n  GITHUB_ENV 编码、配置端口), 并将每日定时冒烟设为北京时间 02:00。",

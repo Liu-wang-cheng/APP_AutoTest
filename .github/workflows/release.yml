@@ -1,19 +1,20 @@
 name: 发版
 
 # 方案 B(用户 2026-10-16): **全自动 CD** —— 把"已经提交好的版本"发出去。
-# 触发二选一:
-#   · Actions 页面手动 Run workflow(填 version, 如 2.0.27)  ← 推荐, 不会和 tag 打架
-#   · 推 tag: git tag v2.0.27 && git push origin v2.0.27
+# 触发方式: 只在 Actions 页面手动 Run workflow(填 version, 如 2.0.27)。
+# ★ 为什么**不再**监听 `push: tags`(2026-10-19 v2.0.28 事故): release.py 发完版
+#   会自己推 tag v{ver}, 而 tag 又把本 workflow 拉起第二次 —— 第二次重新构建
+#   (PyInstaller 产物不是字节可复现的)并覆盖已上传的资产; 若此时 master 又前进,
+#   它推 version.json 会被 "fetch first" 拒绝 → 清单里的 sha256 仍是旧包, 用户
+#   下载校验必然失败。发版只保留一种入口, 杜绝这种自触发重入。
 # 版本号三处(VERSION / core/version.py / CHANGELOG 该节)由 release.py 自己把闸 ——
 # 不一致直接拒绝(轻则界面版本号不对, 重则用户更新不到)。
 #
-# ★ 三个必须写清的坑(本地发版时逐个踩过, 别再踩):
+# ★ 两个必须写清的坑(本地发版时逐个踩过, 别再踩):
 #   ① **不能**让 release.py 自己查 CI 闸门: 它查的是"这个提交的 check runs", 而此刻跑的
 #      就是它自己(状态还是 in_progress) → 自我卡死。测试由同一 job 里的 build.bat
 #      (pytest 不过就 exit /b 1, 后续步骤不会执行)兜住, 所以这里用 --no-ci-check。
-#   ② tag 触发的运行默认是 **detached HEAD** → 必须显式 checkout master, 否则 release.py
-#      更新完 version.json 后 `git push origin master` 无处可推。
-#   ③ CI 里**没有 git 身份** → release.py 的 commit 会失败, 先配 github-actions[bot]。
+#   ② CI 里**没有 git 身份** → release.py 的 commit 会失败, 先配 github-actions[bot]。
 #
 # ★ **全自动**(用户 2026-10-16: "不需要人工审核了, 改成全自动"): 触发即发布, 不设
 #   Environment 审批闸门。想拿它做演练(不发布只打包)就把 dry_run 勾上。
@@ -29,8 +30,6 @@ on:
         required: false
         default: false
         type: boolean
-  push:
-    tags: ['v*.*.*']
 
 # 建 Release、推 version.json 提交与 tag 都需要写权限。用 job 级最小权限声明,
 # **不需要**把仓库默认的 workflow 权限改成 read/write。
@@ -116,24 +115,11 @@ jobs:
             throw "部署密钥过不了仓库规则(第 2 次推送被拒) —— 检查它是否还在这台仓库的 Deploy keys 里(要有写权限)、secret RELEASE_DEPLOY_KEY 是否与它配对、ruleset 的 bypass 名单里那条 DeployKey 是否还在"
           }
 
-      - name: tag 触发时先确认"tag 就在 master 上"(避免发错提交)
-        if: github.event_name == 'push'
-        shell: pwsh
-        run: |
-          git fetch --tags --force origin
-          $tag = "${{ github.ref_name }}"
-          $tagCommit = (git rev-list -n 1 $tag).Trim()
-          $head = (git rev-parse HEAD).Trim()
-          if ($tagCommit -ne $head) {
-            throw "tag $tag 指向 $tagCommit, 而 master HEAD 是 $head —— 拒绝发布(请先把 tag 推到 master HEAD 上)"
-          }
-
-      - name: 定版本号(手动填的优先, 否则取 tag 名去掉 v)
+      - name: 定版本号
         id: ver
         shell: pwsh
         run: |
           $v = "${{ github.event.inputs.version }}"
-          if (-not $v) { $v = "${{ github.ref_name }}".TrimStart('v') }
           if (-not $v) { throw "拿不到版本号" }
           Write-Host "将发布: $v"
           "VERSION=$v" >> $env:GITHUB_OUTPUT

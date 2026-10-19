@@ -401,6 +401,10 @@ def test_main_orchestration_order_and_wiring(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(release, "ensure_clean_tree", lambda: None)
     monkeypatch.setattr(release, "gh_available", lambda: False)      # 走 API 分支
     monkeypatch.setattr(release, "get_token", lambda: "tok")
+    # 幂等闸门 / 上传后摘要核对都会读 API —— 本测试只验编排, 打桩成
+    # "未发布 + 拿不到摘要"(否则会真联网)
+    monkeypatch.setattr(release, "already_released", lambda *a, **k: False)
+    monkeypatch.setattr(release, "release_asset_digest", lambda *a, **k: "")
     # CI 闸门也要打桩 —— 它是"发版前必须过 CI"的接线, 单独有测试覆盖
     monkeypatch.setattr(release, "check_ci_green",
                         lambda *a, **k: (True, "CI 全绿(测试#1)"))
@@ -559,6 +563,8 @@ def test_release_refuses_to_publish_when_ci_red(tmp_path, monkeypatch, capsys):
     # --no-ci-check 时闸门被跳过(紧急逃生口)
     called.clear()
     monkeypatch.setattr(release, "ensure_clean_tree", lambda: None)
+    monkeypatch.setattr(release, "already_released", lambda *a, **k: False)
+    monkeypatch.setattr(release, "release_asset_digest", lambda *a, **k: "")
     monkeypatch.setattr(release, "update_version_json_and_tag", lambda *a, **k: None)
     monkeypatch.setattr(release, "run_post_release_verify", lambda v, deep=False: (True, "ok"))
     monkeypatch.setattr(release, "upload_asset",
@@ -646,3 +652,94 @@ def test_post_release_verify_handles_missing_stdout(monkeypatch):
     ok, out = release.run_post_release_verify("2.0.28")
     assert not ok
     assert "下载链路失败" in out
+
+
+# ── 幂等闸门: 清单与资产已一致时不得重复上传 ──
+# 2026-10-19 v2.0.28 事故: 推 tag 触发第二次发版, 重建的 zip 覆盖了资产,
+# 随后 push version.json 被拒 → 用户下载校验 sha256 失败。
+
+def _fake_api(rel_doc=None, version_doc=None):
+    import base64 as _b64
+    import json as _json
+    import urllib.error as _ue
+
+    def fake(url, token, **kw):
+        if "/releases/tags/" in url:
+            if rel_doc is None:
+                raise _ue.HTTPError(url, 404, "Not Found", {}, None)
+            return rel_doc
+        if "/contents/version.json" in url:
+            raw = _b64.b64encode(_json.dumps(version_doc).encode("utf-8")).decode()
+            return {"content": raw, "encoding": "base64"}
+        raise AssertionError(f"意外的 URL: {url}")
+
+    return fake
+
+
+def _rel(digest=None):
+    if digest is None:
+        digest = "sha256:" + "a" * 64
+    return {"assets": [{"name": "AutoTest_v2.0.28.zip", "digest": digest}]}
+
+
+def test_already_released_true_when_asset_and_manifest_agree(monkeypatch):
+    monkeypatch.setattr(release, "_api_get", _fake_api(
+        _rel(), {"version": "2.0.28", "sha256": "a" * 64}))
+    assert release.already_released("o/r", "tok", "2.0.28",
+                                    "AutoTest_v2.0.28.zip")
+
+
+def test_already_released_false_on_any_mismatch(monkeypatch):
+    """sha 不同 / 版本不同 / 资产没 digest / Release 不存在 / 没 token —— 都按
+    "未发布"处理(宁可多传一次, 也不能误判成已发布而漏发)。"""
+    args = ("o/r", "tok", "2.0.28", "AutoTest_v2.0.28.zip")
+
+    monkeypatch.setattr(release, "_api_get", _fake_api(
+        _rel(), {"version": "2.0.28", "sha256": "b" * 64}))
+    assert not release.already_released(*args)
+
+    monkeypatch.setattr(release, "_api_get", _fake_api(
+        _rel(), {"version": "2.0.27", "sha256": "a" * 64}))
+    assert not release.already_released(*args)
+
+    monkeypatch.setattr(release, "_api_get", _fake_api(
+        _rel(digest=""), {"version": "2.0.28", "sha256": "a" * 64}))
+    assert not release.already_released(*args)
+
+    monkeypatch.setattr(release, "_api_get", _fake_api(None, None))
+    assert not release.already_released(*args)
+
+    assert not release.already_released("o/r", "", "2.0.28",
+                                        "AutoTest_v2.0.28.zip")
+
+
+def test_main_never_reuploads_when_already_consistent(tmp_path, monkeypatch, capsys):
+    """★ 重复触发的运行必须在 upload 之前退出: 绝不覆盖已发布资产。"""
+    import subprocess as sp
+    exe = tmp_path / "AutoTest.exe"
+    exe.write_bytes(b"MZ" + b"x" * 2048)
+    pkg = tmp_path / "AutoTest_v1.5.zip"
+    pkg.write_bytes(b"PK" + b"x" * 4096)
+    calls = []
+
+    monkeypatch.setattr(release, "check_version_consistency", lambda r, v: [])
+    monkeypatch.setattr(release, "find_dist_exe", lambda d: str(exe))
+    monkeypatch.setattr(release, "make_package_zip", lambda v, d, o=None: str(pkg))
+    monkeypatch.setattr(release, "load_changelog_section",
+                        lambda p, v: ("2026-10-10", "说明"))
+    monkeypatch.setattr(release, "get_token", lambda: "tok")
+    monkeypatch.setattr(release, "already_released", lambda *a, **k: True)
+    monkeypatch.setattr(release, "create_release",
+                        lambda *a, **k: calls.append("create") or 1)
+    monkeypatch.setattr(release, "upload_asset",
+                        lambda *a, **k: calls.append("upload") or "https://e/x")
+    monkeypatch.setattr(release, "update_version_json_and_tag",
+                        lambda *a, **k: calls.append("version_json"))
+    monkeypatch.setattr(release.subprocess, "run",
+                        lambda *a, **k: sp.CompletedProcess(a[0] if a else [], 0,
+                                                            "", ""))
+    rc = release.main(["--version", "1.5", "--repo", "o/r", "--no-ci-check"])
+    out = capsys.readouterr().out
+    assert rc == 0, out
+    assert calls == [], f"已一致的版本仍被重发: {calls}"
+    assert "幂等" in out, out

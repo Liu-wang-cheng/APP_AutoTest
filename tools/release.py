@@ -17,6 +17,7 @@
 前置: git push 权限(SSH); token 走 gh CLI, 或 GITHUB_TOKEN / ~/.github_token。
 """
 import argparse
+import base64
 import hashlib
 import json
 import os
@@ -423,6 +424,57 @@ def upload_asset(repo, token, release_id, path, name, attempts=3):
     raise RuntimeError(f"上传 {name} 连续 {attempts} 次失败: {last}")
 
 
+def release_asset_digest(repo, token, version, asset_name):
+    """已发布版本里同名资产的 sha256(GitHub 的 digest 字段); 取不到返回 ""。
+
+    ★ 有它才能判断"清单与资产是否已经一致": GitHub 在 2024 年后为上传的资产
+      计算 digest(`sha256:<hex>`), 不需要把 200MB 再下一遍。
+    """
+    try:
+        rel = _api_get(f"{API}/repos/{repo}/releases/tags/v{version}", token)
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            return ""
+        raise
+    for a in rel.get("assets") or []:
+        if a.get("name") == asset_name:
+            d = str(a.get("digest") or "")
+            return d[len("sha256:"):].lower() if d.startswith("sha256:") else ""
+    return ""
+
+
+def _remote_version_json(repo, token, branch="master"):
+    """读远端 version.json → (version, sha256); 取不到返回 ("", "")。"""
+    try:
+        data = _api_get(f"{API}/repos/{repo}/contents/version.json?ref={branch}",
+                        token)
+        raw = base64.b64decode(data.get("content") or "")
+        doc = json.loads(raw.decode("utf-8"))
+    except Exception:
+        return "", ""
+    return str(doc.get("version") or ""), str(doc.get("sha256") or "").lower()
+
+
+def already_released(repo, token, version, asset_name):
+    """该版本是否已经**完整**发布(可安全跳过重发)。
+
+    判据: Release 资产的 digest == master 上 version.json 的 sha256, 且版本号一致。
+    任一取不到 → False(按未发布处理, 走正常流程)。
+
+    ★ v2.0.28 事故(2026-10-19): 推 tag 触发了第二次发版, 它重建 zip(字节不可复现)
+      并覆盖了资产, 随后 `git push` 被 "fetch first" 拒绝 —— version.json 仍指向
+      第一次的包, 用户下载校验 sha256 必然失败。重跑/重复触发时先过这个闸门:
+      清单与资产已经一致就退出, 绝不用一次新构建覆盖已发布且已登记的资产。
+    """
+    if not token:
+        return False
+    digest = release_asset_digest(repo, token, version, asset_name)
+    if not digest:
+        return False
+    v, sha = _remote_version_json(repo, token)
+    return v == version and sha == digest
+
+
 def update_version_json_and_tag(repo, version, sha256, download_url, notes):
     """写仓库根 version.json -> commit -> push -> tag v{ver} -> push tag。
 
@@ -565,10 +617,16 @@ def main(argv=None):
                 print("        确有必要时用 --no-ci-check 跳过(请先想清楚为什么)。")
                 return 1
         ensure_clean_tree()
+        token = get_token()
+        # ★ 幂等闸门(见 already_released 的注释): 重复触发时, 已发布且清单一致的
+        #   版本直接退出, 不用新构建覆盖资产。必须在 upload 之前。
+        if already_released(repo, token, args.version, asset):
+            print("  该版本已发布, 且 version.json 与资产 sha256 一致 —— "
+                  "跳过重复上传(幂等)")
+            return 0
         if gh_available():
             download_url = upload_via_gh(repo, args.version, asset, exe_path, notes)
         else:
-            token = get_token()
             if not token:
                 print("[ERROR] 没有 gh CLI, 也找不到 token"
                       "(GITHUB_TOKEN / ~/.github_token)")
@@ -577,8 +635,20 @@ def main(argv=None):
             download_url = upload_asset(repo, token, rid, exe_path, asset)
         print(f"  下载地址: {download_url}")
 
+        # ★ 上传后、写清单前核对一次: GitHub 的资产 digest 必须等于本地产物。
+        #   对不上就**不要**写 version.json —— 否则又会出现"清单 sha 与用户下到的
+        #   包不一致"的半成品(v2.0.28 就是这么坏掉的)。
+        local_sha = compute_sha256(exe_path)
+        if token:
+            remote_sha = release_asset_digest(repo, token, args.version, asset)
+            if remote_sha and remote_sha != local_sha:
+                print(f"[ERROR] 上传后资产 sha256 与本地不一致: "
+                      f"远端 {remote_sha[:16]}… / 本地 {local_sha[:16]}… —— "
+                      "不更新 version.json(否则清单与包不符)")
+                return 1
+
         print("[4/4] 更新 version.json + tag")
-        update_version_json_and_tag(repo, args.version, compute_sha256(exe_path),
+        update_version_json_and_tag(repo, args.version, local_sha,
                                     download_url, notes)
         if args.verify:
             print("[5/5] 校验用户那条链路(取清单 -> sha256 -> 资产 -> zip 头)...")
