@@ -28,9 +28,12 @@
 | `check_env.py` | 离线: 运行环境自检(Python/依赖/ADB/设备) |
 | `check_update_e2e.py` | 手动: 起本地假更新源, 端到端走一遍"检查更新 → 下载 → 校验" |
 | `rehearse_autoupdate.py` | 手动: 用真实安装目录彩排一次自动更新(替换/回滚), **不碰线上** |
+| `runtime_snapshot.py` | 真机(P1): 进入设备页/菜单/打扫报告, 采集无障碍树+OCR 文本存快照; 与基线 diff —— 覆盖 APK 里没有的服务端/WebView 动态文案(基线有、现在没有 = 回归) |
 
 ## 三、约定
 
+- **`selector_health.py` / `runtime_snapshot.py` 仅用于 CI/测试**, 不被 `core/gui` 引用、也不参与打包;
+  它们与具体 APP 的文案/页面绑定(基线、导航), 换 APP 时要重新生成基线或调整页面路径;
 - 新脚本请在上面对应小节登记一行, 不要让它变成"0 引用的神秘文件";
 - 只在"自动流程"小节里的脚本才允许被 CI / build.bat 依赖;
 - 工具脚本**只调用 core 的公开 API**(不要 `from core.xxx import _private`), 唯一例外见

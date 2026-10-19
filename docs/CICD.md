@@ -256,7 +256,28 @@ python tools/selector_health.py --apk <新APK> --repo . --config config/config.c
     --write-baseline tools/selector_baseline.json
 ```
 
-**限制**：插件页/服务端的动态文案不在 APK 里，APK 检查覆盖不到（报告里归为 `unverifiable`）；这类文案要靠运行时的页面文本快照另做 diff（后续 P1）。
+**限制**：插件页/服务端的动态文案不在 APK 里，APK 检查覆盖不到（报告里归为 `unverifiable`）；这类文案要靠运行时的页面文本快照另做 diff（P1，见 3.7）。
+
+### 3.7 运行时页面文本快照（P1，2026-10-19）
+
+P0 只能核对编进 APK 的文案；SmartThings 的设备页/插件页大部分文案是运行时下发的
+（`打扫报告`、`正在干燥拖布` 等在 base.apk 里 0 命中）。`tools/runtime_snapshot.py`
+用真机把关键页面**实际显示**的文字（无障碍树 + OCR）存成快照，并与基线 diff：
+
+```bat
+:: 采集基线（进入设备页 → 菜单 → 打扫报告）
+python tools/runtime_snapshot.py --device 127.0.0.1:7555 ^
+    --device-name "扫地机器人 0050" --snapshot tools/runtime_baseline.json
+
+:: 之后采集并与基线比较（基线有、现在没有 = 回归，退出码 1）
+python tools/runtime_snapshot.py --device 127.0.0.1:7555 ^
+    --device-name "扫地机器人 0050" --snapshot reports/runtime-snapshot.json ^
+    --diff tools/runtime_baseline.json
+```
+
+- 文本先做归一化（时间/数字 → `#`），避免电量、倒计时、面积等动态值造成噪音；
+- 某页点击失败时该页跳过 diff（记录 `error`），不会误报“整页文案都没了”；
+- 目前是**手动工具**，还没接进 CI；接法是在真机 runner 上跑一次并与入库基线 diff。
 
 ---
 
