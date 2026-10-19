@@ -80,6 +80,19 @@ def _isolate_group_preconditions(monkeypatch, tmp_path):
     import core.driver as driver
     sandbox = tmp_path / "Test_preconditions"
     sandbox.mkdir(parents=True, exist_ok=True)
+    # ★ 读**真实内容**、写仍落沙箱(2026-10-19): 只把路径钉走的话, 读也是空的 ——
+    #   于是 `--mode real` 的真机用例(冒烟)读不到 Test_preconditions/<组>.yaml, 会静默
+    #   回退到 config.yaml 的全局预设(实测: 跑出来的是"退出省电模式", 而不是组里配的
+    #   "结束烘干拖布", 前置与 GUI 完全不是一套)。这里先把真实文件复制进沙箱:
+    #   读 ✓ 拿到用户的组配置; 写 ✓ 仍只写沙箱, 不会覆盖用户文件。
+    real_dir = os.path.join(getattr(driver, "BASE_DIR", ""), "Test_preconditions")
+    if os.path.isdir(real_dir):
+        for fn in os.listdir(real_dir):
+            if fn.endswith((".yaml", ".yml")):
+                try:
+                    shutil.copy2(os.path.join(real_dir, fn), sandbox / fn)
+                except OSError:
+                    pass
     monkeypatch.setattr(driver, "group_preconditions_path",
                         lambda g: str(sandbox / f"{g}.yaml"), raising=False)
     yield

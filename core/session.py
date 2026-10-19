@@ -3,6 +3,7 @@
 
 GUI 的四个勾选项与 pytest 入口共用这里的 prepare()。
 """
+import os
 import re
 import time
 
@@ -164,6 +165,13 @@ def click_template(d, img_name, timeout=10, should_cancel=None, detail=None):
       (实测: 回充模板 0.62 分命中在"启动"按钮上, 0.62 就是引擎阈值本身, 一点余量都没有)。
     """
     img_path = vision.resolve_template(img_name)
+    if not os.path.isfile(img_path):
+        # ★ 模板不存在要**说清楚**, 不能让它在下一次 `template_features` 里炸成
+        #   `FileNotFoundError: '开始回充.png'`(实测: 真机冒烟第一次跑就崩在这, 报错里
+        #   看不出"是没找到模板"还是"路径组没设")。返回 None → 调用方按"没点到"继续。
+        log.warning(f"[前置] 模板不存在: {img_name} (解析为 {img_path}) —— "
+                    f"确认它在 Test_cases/<组>/templates/ 里, 且当前模板组已设置")
+        return None
     end = time.time() + timeout
     while time.time() < end:
         if should_cancel and should_cancel():

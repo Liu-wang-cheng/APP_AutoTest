@@ -129,6 +129,12 @@ def device(request, report):
     group = (os.path.basename(os.path.dirname(case_path)) if case_path else "") \
         or request.config.getoption("--group") or ""
     if group:
+        # ★ 模板按组解析(2026-10-19): GUI 跑用例前会用
+        #   `vision.set_template_app_group(用例所在组)`; 真机用例这条路径原来**没设** ——
+        #   于是前置/用例里的 `click_template: 开始回充.png` 解析成裸文件名,
+        #   `template_features` 直接 FileNotFoundError(实测: 冒烟第一次真跑就崩在这)。
+        from core import vision as _vision
+        _vision.set_template_app_group(group)
         items, src = session.preconditions_for_group(group)
         print(f"[前置] 按组「{group}」的配置({src})执行 {len(items)} 项")
         results = session.prepare_items(d, cfg, items)
