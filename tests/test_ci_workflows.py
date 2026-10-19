@@ -142,10 +142,15 @@ def test_real_smoke_does_not_use_setup_python():
     assert not [s for s in steps if str(s.get("uses", "")).startswith("actions/setup-python")], \
         "自建 runner 上 setup-python 必挂(见本测试 docstring), 真机冒烟不许用它"
     assert "SMOKE_PYTHON" in text, "要有可覆盖本机 Python 路径的入口"
-    assert "SMOKE_PY" in text and "-m pytest" in text, "后续步骤必须显式用选定的 Python"
     assert "sys.version_info" in text, "要断言 Python 版本是 3.13"
+    # ★ 这台 runner 只有 Windows PowerShell 5.1: shell 写成 pwsh 会
+    #   ##[error]pwsh: command not found(2026-10-19 实测)。
+    #   只认真正的 shell 指令行 —— 注释里提到 pwsh 不算。
+    pwsh_directives = [l for l in text.splitlines() if l.strip() == "shell: pwsh"]
+    assert not pwsh_directives, "自建 runner 上没有 pwsh, 只能用 shell: powershell"
     pytest_step = [s for s in steps if s.get("name") == "跑真机冒烟"][0]
-    assert "$env:SMOKE_PY" in pytest_step["run"], "pytest 要用 venv 里的 python 跑"
+    assert "smoke-venv" in pytest_step["run"] and "-m pytest" in pytest_step["run"], \
+        "pytest 要用复用 venv 里的 python 跑"
 
 
 def test_static_workflow_runs_lint_and_case_validation():

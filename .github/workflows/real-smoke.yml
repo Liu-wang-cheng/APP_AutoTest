@@ -61,8 +61,11 @@ jobs:
       #   所以改用这台 runner 上**已经装好的** Python(3.13; 可用仓库变量 SMOKE_PYTHON
       #   指定路径), 依赖装进 RUNNER_WORKSPACE 下的复用 venv —— 不污染系统 Python,
       #   也不用在每次跑之前先装一份 Python。
+      # ★ 这套 runner 上只有 Windows PowerShell 5.1, **没有** PowerShell 7 ——
+      #   实测写 `shell: pwsh` 会直接 `##[error]pwsh: command not found`, 整步红。
+      #   所以下面所有步骤统一用 `shell: powershell`。
       - name: 选用本机 Python(自建 runner)
-        shell: pwsh
+        shell: powershell
         run: |
           $py = "${{ vars.SMOKE_PYTHON }}"
           if (-not $py) { $py = "C:\Python\python.exe" }
@@ -72,15 +75,17 @@ jobs:
           $v = (& $py -c "import sys; print('%d.%d' % sys.version_info[:2])").Trim()
           if ($v -ne "3.13") { throw "需要 Python 3.13, 实际 $v ($py)" }
           Write-Host "Python: $py ($(& $py --version))"
-          "SMOKE_PY=$py" >> $env:GITHUB_ENV
+          # ★ 不往 GITHUB_ENV 写跨步骤变量: Windows PowerShell 5.1 的 `>>` 默认写 UTF-16,
+          #   runner 按 UTF-8 读, 变量会坏。下面每步自己算路径(就两行, 不折腾)。
 
       - name: 安装依赖
-        shell: pwsh
+        shell: powershell
         run: |
+          $base = "${{ vars.SMOKE_PYTHON }}"
+          if (-not $base) { $base = "C:\Python\python.exe" }
           $venv = Join-Path $env:RUNNER_WORKSPACE 'smoke-venv'
-          if (-not (Test-Path "$venv\Scripts\python.exe")) { & $env:SMOKE_PY -m venv $venv }
+          if (-not (Test-Path "$venv\Scripts\python.exe")) { & $base -m venv $venv }
           $py = Join-Path $venv 'Scripts\python.exe'
-          "SMOKE_PY=$py" >> $env:GITHUB_ENV
           & $py -m pip install --upgrade pip
           & $py -m pip install -r requirements.txt
           & $py -c "import uiautomator2, cv2, numpy, yaml; print('deps ok')"
@@ -92,7 +97,7 @@ jobs:
         # ★ 只有 config/config.yaml 例外: 它被 .gitignore(含本机设备信息、由 GUI 回写),
         #   没法入库, 所以仓库里放一份 config/config.ci.yaml(内容 = 用户那台工具在用的配置),
         #   跑之前复制成 config.yaml。改配置只需改这一处。
-        shell: pwsh
+        shell: powershell
         run: |
           if (-not (Test-Path config/config.ci.yaml)) { throw "缺少 config/config.ci.yaml(冒烟用的配置)" }
           Copy-Item config/config.ci.yaml config/config.yaml -Force
@@ -104,7 +109,7 @@ jobs:
           }
 
       - name: "探活设备(设备没起来就明说, 别让用例背锅)"
-        shell: pwsh
+        shell: powershell
         run: |
           $dev = "${{ vars.SMOKE_DEVICE }}"
           if (-not $dev) { $dev = "127.0.0.1:7555" }
@@ -114,10 +119,9 @@ jobs:
           if ($out -notmatch ([regex]::Escape($dev) + "\s+device")) {
             throw "模拟器/真机没在线($dev) —— 请先启动模拟器再重跑本 workflow(可用仓库变量 SMOKE_DEVICE 改地址)"
           }
-          "SMOKE_DEV=$dev" >> $env:GITHUB_ENV
 
       - name: 跑真机冒烟
-        shell: pwsh
+        shell: powershell
         env:
           # ★ 进哪台机器(APP 设备列表里可能同时挂着 0050/0087/0090 好几台): 用仓库变量
           #   SMOKE_DEVICE_NAME 指定(如「扫地机器人 0050」)。留空 = 用 config.ci.yaml 里的
@@ -129,9 +133,13 @@ jobs:
           if (-not $group) { $group = "三星" }
           $case = "${{ github.event.inputs.case }}"
           if (-not $case) { $case = "全局清扫" }
-          Write-Host "冒烟: 组=$group 用例=$case 设备=$env:SMOKE_DEV python=$env:SMOKE_PY"
-          & $env:SMOKE_PY -m pytest tests/test_yaml_runner.py -q -rs `
-            --mode real --device "$env:SMOKE_DEV" --group "$group" --case "$case" `
+          # 与探活步骤同一个默认值(不跨步骤传变量, 见上面 GITHUB_ENV 的说明)
+          $dev = "${{ vars.SMOKE_DEVICE }}"
+          if (-not $dev) { $dev = "127.0.0.1:7555" }
+          $py = Join-Path $env:RUNNER_WORKSPACE 'smoke-venv\Scripts\python.exe'
+          Write-Host "冒烟: 组=$group 用例=$case 设备=$dev python=$py"
+          & $py -m pytest tests/test_yaml_runner.py -q -rs `
+            --mode real --device "$dev" --group "$group" --case "$case" `
             --junit-xml=reports/junit-real.xml
 
       - name: "失败时上传现场(junit + 截图 + 调试产物)"
