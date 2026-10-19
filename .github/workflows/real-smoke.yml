@@ -50,6 +50,17 @@ jobs:
           fetch-depth: 1
 
       - uses: actions/setup-python@v7
+        # ★ 必加(2026-10-19 实测): 自建 runner 的进程环境里带着
+        #   NoDefaultCurrentDirectoryInExePath=1 —— cmd 不再从"当前目录"找可执行文件。
+        #   而 setup-python 在 Windows 上的安装脚本正是:
+        #     cmd /c "cd <toolcache> && call python-3.13.16-amd64.exe ..."
+        #   于是必然报 ##[error]'python-3.13.16-amd64.exe' is not recognized as an internal
+        #   or external command → Error happened during Python installation。
+        #   实测: 该变量**只有空值**能让 cmd 恢复搜索行为('0'/'false' 都不行),
+        #   而 GitHub Actions 会把空字符串照样传给进程, cmd 视同未设置。
+        #   (只在 setup-python 这步置空, 不影响其它步骤的安全默认。)
+        env:
+          NoDefaultCurrentDirectoryInExePath: ''
         with:
           python-version: '3.13'
           cache: pip

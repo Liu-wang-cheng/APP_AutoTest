@@ -120,6 +120,30 @@ def test_real_smoke_probes_device_and_uploads_scene():
     assert "junit-real.xml" in text and "upload-artifact" in text, "失败要传 junit 与截图现场"
 
 
+def test_real_smoke_clears_nodefaultcurrentdirectoryforexe_on_setup_python():
+    """★ 自建 runner 的隐藏地雷(2026-10-19 实测踩到, 冒烟第一次真跑就死在这):
+
+    runner 进程环境里带着 `NoDefaultCurrentDirectoryInExePath=1` → cmd.exe 不再从
+    "当前目录"找 exe。而 setup-python 在 Windows 上的安装脚本是
+        cmd /c "cd <toolcache> && call python-3.13.16-amd64.exe ... /quiet"
+    于是必然报 `'python-3.13.16-amd64.exe' is not recognized` →
+    `Error happened during Python installation`, 整个 job 在装 Python 处就红了。
+
+    实测该变量**只有空值**能恢复搜索('0'/'false' 都不行), 且 Actions 会把空字符串
+    照样传进进程, cmd 视同未设置。所以 setup-python 这步必须带着空 env ——
+    删掉这行就会重现上面的失败。
+    """
+    data, _text = _load("real-smoke.yml")
+    steps = data["jobs"]["smoke"]["steps"]
+    setup = [s for s in steps if str(s.get("uses", "")).startswith("actions/setup-python")]
+    assert len(setup) == 1, "真机冒烟应当只有一处 setup-python"
+    env = setup[0].get("env") or {}
+    assert env.get("NoDefaultCurrentDirectoryInExePath") == "" or \
+        "NoDefaultCurrentDirectoryInExePath" in env, "setup-python 这步必须把该变量置空"
+    assert env.get("NoDefaultCurrentDirectoryInExePath") == "", \
+        "该变量只有**空值**能让 cmd 恢复'当前目录找 exe'('0'/'false' 都不行)"
+
+
 def test_static_workflow_runs_lint_and_case_validation():
     """★ 与设备无关的质量门禁: pyflakes + 用例 YAML 校验"""
     data, text = _load("static.yml")
