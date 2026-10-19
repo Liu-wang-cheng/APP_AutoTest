@@ -5,7 +5,7 @@
 
 # 只导入本模块用到的名字(结构整理 2026-10-15)
 from PySide6.QtCore import QEvent, QPoint, QRect, QSize, QTimer, Qt, Signal
-from PySide6.QtGui import QAction, QColor, QFontMetrics
+from PySide6.QtGui import QAction, QColor, QFontMetrics, QKeySequence
 from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QFrame,
                                 QLabel, QLayout, QListView, QListWidget, QMenu,
                                 QStyle, QStyleOptionViewItem, QStyledItemDelegate)
@@ -406,6 +406,28 @@ class CaseListWidget(QListWidget):
         self.setDefaultDropAction(Qt.MoveAction)
         self._arrow_w = 44          # 右侧箭头命中区宽(↑22 + ↓22)
         self.setItemDelegate(CaseItemDelegate(self))
+        # ★ 右键菜单(2026-10-19 用户要求): 复制/粘贴右键选中的用例。
+        #   菜单内容由主窗口构建(item 的 UserRole/CASE_STATE_ROLE 只有它认识)。
+        self.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.customContextMenuRequested.connect(self._on_context_menu)
+
+    def _on_context_menu(self, pos):
+        owner = getattr(self, "_owner", None)
+        if owner is not None and hasattr(owner, "_show_case_context_menu"):
+            owner._show_case_context_menu(pos)
+
+    def keyPressEvent(self, event):
+        """Ctrl+C / Ctrl+V 与右键菜单同源(焦点在用例列表上时生效)。"""
+        owner = getattr(self, "_owner", None)
+        if owner is not None and event.matches(QKeySequence.Copy):
+            owner._copy_current_case()
+            event.accept()
+            return
+        if owner is not None and event.matches(QKeySequence.Paste):
+            owner._paste_current()
+            event.accept()
+            return
+        super().keyPressEvent(event)
 
     def set_owner(self, win):
         self._owner = win

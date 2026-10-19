@@ -4367,3 +4367,80 @@ def test_case_wait_field_shows_integer_without_dot_zero(win):
     win.current_case["wait"] = 5.0
     win._load_case_into_ui()
     assert win.case_wait_edit.text() == "5", win.case_wait_edit.text()
+
+
+# ── 用例右键复制/粘贴(2026-10-19 用户要求) ──────────────────────────────
+
+def _find_case_item(win, filename):
+    from PySide6.QtCore import Qt
+    for i in range(win.case_list.count()):
+        p = win.case_list.item(i).data(Qt.UserRole)
+        if p and os.path.basename(p) == filename:
+            return win.case_list.item(i)
+    raise AssertionError(f"列表里没有 {filename}")
+
+
+def test_case_context_menu_copy_paste_enabled(win_with_cases):
+    from PySide6.QtCore import Qt
+    from gui import main_window as mw
+
+    win = win_with_cases
+    src = os.path.join(mw.CASES_DIR, "涂鸦智能", "全局清扫.yaml")
+    item = _find_case_item(win, "全局清扫.yaml")
+
+    menu = win._case_context_menu(item)
+    labels = [a.text() for a in menu.actions() if a.text()]
+    assert labels == ["复制用例", "粘贴用例", "删除用例"], labels
+    assert not menu.actions()[1].isEnabled(), "没有复制源时粘贴应禁用"
+
+    win._copy_case(src)
+    assert win._case_context_menu(item).actions()[1].isEnabled(), "复制后应可粘贴"
+
+    head = next(win.case_list.item(i) for i in range(win.case_list.count())
+                if win.case_list.item(i).data(Qt.UserRole) is None
+                and win.case_list.item(i).data(mw.CASE_STATE_ROLE) == "涂鸦智能")
+    labels = [a.text() for a in win._case_context_menu(head).actions() if a.text()]
+    assert labels == ["粘贴到「涂鸦智能」", "删除整组"], labels
+
+
+def test_copy_paste_case_same_group(win_with_cases):
+    from gui import main_window as mw
+
+    win = win_with_cases
+    src = os.path.join(mw.CASES_DIR, "涂鸦智能", "全局清扫.yaml")
+    win._copy_case(src)
+    win._paste_case_to_group("涂鸦智能")
+    dst = os.path.join(mw.CASES_DIR, "涂鸦智能", "全局清扫_副本.yaml")
+    assert os.path.isfile(dst)
+    assert Path(dst).read_bytes() == Path(src).read_bytes(), "复制必须字节级保留"
+
+    cur = win.case_list.currentItem()
+    assert cur is not None and os.path.abspath(cur.data(0x0100)) == os.path.abspath(dst), \
+        "粘贴后应选中新用例"
+
+    win._paste_case_to_group("涂鸦智能")
+    assert os.path.isfile(os.path.join(mw.CASES_DIR, "涂鸦智能", "全局清扫_副本2.yaml"))
+
+
+def test_copy_paste_case_to_another_group(win_with_cases):
+    from gui import main_window as mw
+
+    win = win_with_cases
+    other = os.path.join(mw.CASES_DIR, "三星")
+    os.makedirs(other, exist_ok=True)
+    win._fill_case_list()
+    src = os.path.join(mw.CASES_DIR, "涂鸦智能", "全局清扫.yaml")
+    win._copy_case(src)
+    win._paste_case_to_group("三星")
+    assert os.path.isfile(os.path.join(other, "全局清扫.yaml")), \
+        "目标组没有同名文件时应保留原文件名"
+
+
+def test_paste_without_copy_is_noop(win_with_cases):
+    from gui import main_window as mw
+
+    win = win_with_cases
+    gdir = os.path.join(mw.CASES_DIR, "涂鸦智能")
+    before = sorted(os.listdir(gdir))
+    win._paste_case_to_group("涂鸦智能")
+    assert sorted(os.listdir(gdir)) == before

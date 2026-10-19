@@ -851,6 +851,8 @@ class MainWindow(QMainWindow):
         self.case_list.set_owner(self)
         self.case_list.setFixedWidth(200)    # 宽度与设备下拉框视觉对齐;高度随步骤详情区填满右列
         self._case_states = {}               # path → 'running'/'passed'/'failed'(状态灯)
+        #: 右键/快捷键"复制用例"的源文件(进程内剪贴板; 不走系统剪贴板, 避免路径泄露到别处)
+        self._case_clipboard = None
         self._collapsed_groups = set()       # 折叠的组目录名
         #: 见过哪些组 —— 只对"第一次见到"的组做默认折叠, 用户手动展开过的不再动它
         self._known_groups = set()
@@ -1121,6 +1123,112 @@ class MainWindow(QMainWindow):
             self._unload_case()
         self._fill_case_list()
         self._set_status(f"已删除用例: {name}")
+
+    # ── 用例右键: 复制 / 粘贴(2026-10-19 用户要求) ─────────────────────────
+    def _show_case_context_menu(self, pos):
+        """在用例列表的 pos(视口坐标) 处弹菜单; 右键会先选中该行。"""
+        item = self.case_list.itemAt(pos)
+        if item is not None:
+            self.case_list.setCurrentItem(item)
+        menu = self._case_context_menu(item)
+        if menu.actions():
+            menu.exec(self.case_list.viewport().mapToGlobal(pos))
+
+    def _case_context_menu(self, item):
+        """构建右键菜单(单独抽出来便于离屏测试, 不弹窗)。"""
+        menu = QMenu(self.case_list)
+        if item is None:
+            return menu
+        path = item.data(Qt.UserRole)
+        group = item.data(CASE_STATE_ROLE)
+        if path:
+            # ── 用例行 ──
+            act_copy = menu.addAction("复制用例")
+            act_copy.triggered.connect(lambda _=False, p=path: self._copy_case(p))
+            target_group = os.path.basename(os.path.dirname(path))
+            act_paste = menu.addAction("粘贴用例")
+            act_paste.setEnabled(bool(self._case_clipboard)
+                                 and os.path.isdir(os.path.join(CASES_DIR, target_group)))
+            act_paste.triggered.connect(
+                lambda _=False, g=target_group: self._paste_case_to_group(g))
+            menu.addSeparator()
+            act_del = menu.addAction("删除用例")
+            act_del.triggered.connect(self.on_delete_selected)
+        elif group:
+            # ── 组头行 ──
+            act_paste = menu.addAction(f"粘贴到「{group}」")
+            act_paste.setEnabled(bool(self._case_clipboard)
+                                 and os.path.isdir(os.path.join(CASES_DIR, group)))
+            act_paste.triggered.connect(
+                lambda _=False, g=group: self._paste_case_to_group(g))
+            menu.addSeparator()
+            act_del = menu.addAction("删除整组")
+            act_del.triggered.connect(self.on_delete_selected)
+        return menu
+
+    def _copy_case(self, path):
+        if not path or not os.path.isfile(path):
+            return
+        self._case_clipboard = path
+        name = os.path.splitext(os.path.basename(path))[0]
+        self._set_status(f"已复制用例: {name}")
+
+    def _copy_current_case(self):
+        item = self.case_list.currentItem()
+        if item is not None:
+            self._copy_case(item.data(Qt.UserRole))
+
+    def _paste_current(self):
+        item = self.case_list.currentItem()
+        if item is None:
+            return
+        path = item.data(Qt.UserRole)
+        group = item.data(CASE_STATE_ROLE) if not path else \
+            os.path.basename(os.path.dirname(path))
+        if group:
+            self._paste_case_to_group(group)
+
+    def _paste_case_to_group(self, group):
+        """把剪贴板里的用例复制到 group 目录; 重名自动加 _副本/_副本2。"""
+        src = self._case_clipboard
+        if not src or not os.path.isfile(src):
+            return
+        gdir = os.path.join(CASES_DIR, group)
+        if not os.path.isdir(gdir):
+            return
+        base, ext = os.path.splitext(os.path.basename(src))
+        ext = ext or ".yaml"
+        dst = self._unique_case_path(gdir, base, ext)
+        try:
+            shutil.copy2(src, dst)       # 字节级复制: 注释/格式/编码原样保留
+        except OSError as e:
+            QMessageBox.warning(self, "粘贴失败", f"无法复制用例文件:\n{e}")
+            return
+        # 折叠组里粘贴后要让新用例可见(否则用户以为没生效)
+        self._collapsed_groups.discard(group)
+        self._known_groups.add(group)
+        self._fill_case_list()
+        target = os.path.abspath(dst)
+        for i in range(self.case_list.count()):
+            p = self.case_list.item(i).data(Qt.UserRole)
+            if p and os.path.abspath(p) == target:
+                self.case_list.setCurrentRow(i)
+                break
+        self._set_status(f"已粘贴用例: {os.path.basename(dst)}")
+
+    @staticmethod
+    def _unique_case_path(gdir, base, ext):
+        """base.ext 存在时依次尝试 base_副本.ext、base_副本2.ext…"""
+        cand = os.path.join(gdir, base + ext)
+        if not os.path.exists(cand):
+            return cand
+        n = 1
+        while True:
+            suffix = "_副本" if n == 1 else f"_副本{n}"
+            cand = os.path.join(gdir, base + suffix + ext)
+            if not os.path.exists(cand):
+                return cand
+            n += 1
 
     def set_case_state(self, path, state):
         """设置用例执行状态灯:未执行置灰,执行中黄,通过绿,失败红。
