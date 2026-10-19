@@ -57,15 +57,15 @@ def test_release_workflow_avoids_the_three_known_traps():
     # 坑①: 不能用 release.py 自己的 CI 闸门(会查到自己 → 卡死)
     assert "--no-ci-check" in text, "CD 里必须跳过 release.py 的 CI 自查(否则自我卡死)"
     assert "build.bat" in text, "测试要由同 job 的 build.bat 兜住(它内部跑 pytest)"
-    # 坑②: tag 触发是 detached HEAD → 显式 checkout master
-    assert "ref: master" in text, "必须基于 master 发版(tag 触发时是 detached HEAD)"
+    # 坑②: 必须显式基于 master(发版要更新 version.json 并推 master)
+    assert "ref: master" in text, "必须基于 master 发版"
     # 坑③: CI 里没有 git 身份
     assert "git config user.name" in text and "git config user.email" in text, \
         "CI 里要先配 git 身份, 否则 release.py 的 commit 会失败"
 
 
 def test_release_workflow_permissions_and_guards():
-    """★ 权限用 job 级最小声明; 发布前校验 tag 就在 master 上; 支持审批闸门"""
+    """★ 权限用 job 级最小声明; 发版只由手动触发; 支持演练闸门"""
     data, text = _load("release.yml")
     assert (data.get("permissions") or {}).get("contents") == "write", \
         "建 Release/推提交需要 contents: write(写在 workflow 里, 不动仓库默认设置)"
@@ -73,8 +73,11 @@ def test_release_workflow_permissions_and_guards():
     #   否则"验证流水线"就等于"真发一版"
     assert "environment:" not in text, "用户要求全自动, 不该有审批闸门"
     assert "dry_run" in text and "--pack-only" in text, "要有 dry_run 演练(只打包不发布)"
-    assert "rev-list -n 1" in text, "tag 触发时要确认 tag 指向 master HEAD, 避免发错提交"
-    assert "--dry-run" in text,         "发布前要预检「这个身份能不能推 master」—— 否则会留下半成品发布(Release 发了但清单没更新)"
+    assert "ref: master" in text, "始终基于 master 发版"
+    triggers = data.get("on") or data.get(True) or {}
+    assert "push" not in triggers, \
+        "★ release.yml 不能再被 push/tag 触发: release.py 自己会推 tag, 会二次重建并覆盖资产(v2.0.28 事故)"
+    assert "workflow_dispatch" in triggers, "发版入口是 Actions 页手动 Run workflow"
     job = data["jobs"]["release"]
     assert job.get("timeout-minutes"), "发版 job 要有超时, 免得卡住占着 runner"
 

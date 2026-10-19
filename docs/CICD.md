@@ -11,7 +11,7 @@
 | 单元/集成测试 CI | ✅ 每次 push/PR 在 windows-latest 上跑 913 条（含静态/结构守护） | `.github/workflows/tests.yml` |
 | 分支门禁 | ✅ ruleset「合入规则」：要求 `pytest` 通过 + 禁强推/删分支；bypass = 你本人 / RepositoryRole(admin) / 一个 Integration；允许建新分支 | 仓库 Settings → Rules |
 | 打包自检（方案 A） | ✅ 手动/推 `v*` tag → `build.bat` → zip 传 artifact（7 天） | `.github/workflows/package.yml` |
-| 全自动发版（方案 B） | ✅ 手动填版本号/推 `v*.*.*` tag → 全套发版；勾 `dry_run` 可演练（不发布） | `.github/workflows/release.yml` |
+| 全自动发版（方案 B） | ✅ Actions 页手动填版本号 → 全套发版；勾 `dry_run` 可演练（不发布）。**推 tag 不再触发发版**（会自触发重入） | `.github/workflows/release.yml` |
 | 真机用例入口 | ✅ `pytest tests/test_yaml_runner.py --mode real --device <id> --case <名>`（`--mode` 默认 mock，裸跑不会碰设备） | `conftest.py` |
 | 存储瘦身（每月自动） | ✅ 保留最近 5 个 Release，更老的连同资产删掉（不动 tag/历史） | `.github/workflows/prune.yml` + `tools/prune_releases.py` |
 
@@ -29,7 +29,7 @@ push/PR ──► [tests.yml]  854 条测试            ─┐
 手动 ────► [static.yml]  pyflakes + 用例校验   ─┘        （C1，新增）
 
 推 tag ──► [package.yml] 打包自检 → artifact           （方案 A，已有）
-推 tag ──► [release.yml] 打包 → 传 Release → 清单 → tag （方案 B，已有）
+手动 ────► [release.yml] 打包 → 传 Release → 清单 → tag （方案 B，已有；tag 不触发）
 
 手动/定时 ─► [real-smoke.yml] 自建 runner 上跑真机冒烟  （C2/C3，新增）
                               → junit + 失败截图 artifact
@@ -287,7 +287,7 @@ python tools/runtime_snapshot.py --device 127.0.0.1:7555 ^
 - **通知**：GitHub 默认会给仓库 watcher（你）发失败邮件 ✓ 够用。想更即时可以：
   - 手机装 GitHub App（推送通知）；
   - 或加一步 webhook（企业微信/钉钉机器人）—— 需要你给 URL，我再写。
-- **别做的事**：不要 nightly 发版（版本发布应是人工决策；`release.yml` 保持手动/tag 触发）。
+- **别做的事**：不要 nightly 发版（版本发布应是人工决策；`release.yml` 保持手动触发）。
 
 ---
 
@@ -375,6 +375,29 @@ python tools/verify_release.py --version 2.0.27 --pkg <刚下载的 zip>
 现在的预检是两步：① 没配 `RELEASE_DEPLOY_KEY` → 直接拦（这种身份必被拒，说清怎么修）；
 ② 配了就**真推两次**探针分支（见上面的对照实验），第 2 次的成败才是判据。`tests/test_ci_workflows.py`
 里有一条守护盯着："命令行里不许出现 `push --dry-run`" + "必须推两次"。
+
+### 5.2 下载包校验失败：`version.json` 的 sha256 与资产不一致
+
+**症状**：客户端或手工校验报"下载包 sha256 不符"；Release 资产的更新时间/大小与
+第一次发版日志里的不一致。
+
+**原因（v2.0.28，2026-10-19）**：`release.py` 发完版会自己推 tag `v{ver}`，而
+`release.yml` 当时还监听 `push: tags` → tag 把发版流程**第二次**拉起。PyInstaller
+产物不是字节可复现的，第二遍构建出的 zip 与第一遍不同；`upload_asset` 又会先删同名
+旧资产再上传，于是**资产被替换**。若此时 `master` 恰好又前进了（例如并发推了修复提交），
+第二遍运行的 `git push origin master` 会被 `fetch first` 拒绝 → `version.json` 没更新，
+清单仍指向第一遍的包 → 用户下载必然校验失败。
+
+**已采用的修法**：
+1. `release.yml` **移除 `push: tags` 触发**，发版只保留 Actions 页 `workflow_dispatch`
+   一种入口（release.py 推 tag 不再自触发）；
+2. `release.py` 增加幂等闸门：Release 资产的 digest 与 `version.json` 的 sha256 一致时，
+   重复触发直接跳过上传；
+3. 上传后用 GitHub 资产 digest 与本地 sha256 核对，不一致就**不写** version.json。
+
+**已经坏了怎么补**：按 5.1 的补法 ①②③ —— 用**已上传资产**（下载下来）的 sha256
+更新 version.json，不要重新打包上传；再用 `verify_release.py --pkg <下载的 zip>` 验证。
+
 
 ---
 
