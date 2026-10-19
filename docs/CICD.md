@@ -235,6 +235,29 @@ jobs:
 - 但每次 checkout 不会删这些 → 在 runner 上加一条**每周一次的清理**（Windows 任务计划或一个 cleanup workflow）：删 `C:\actions-runner\_work\APP_AutoTest\APP_AutoTest\{Test_cases,Test_img}\**\screenshots`、`build\`、`dist\`；
 - 机器人侧复位：冒烟用例自己会回充/停止；万一中途失败留在清扫中，下一步的 `restart` 前置会重启 APP，但**机器人本体**要人工确认 —— 这也是"先只跑只读冒烟"的理由。
 
+### 3.6 选择器健康检查（P0，2026-10-19）
+
+APP 一升级，用例里的文案（`正在清洁`、`打扫报告`、`今天/昨天`…）可能就没了。以前要等真机冒烟跑到一半才失败，一轮 10 分钟白跑。
+现在 `real-smoke.yml` 在**探活设备之后、跑真机冒烟之前**多了一步：
+
+1. 用 `pm path` 找到设备上的 base.apk，`adb pull` 下来；
+2. `tools/selector_health.py` 从 `Test_cases/**/*.yaml`、`Test_preconditions/*.yaml`、`config/config.yaml` 提取所有文本选择器（自动排除 `.png`、坐标、`电量>50` 这类表达式）；
+3. 在 APK 的 `classes*.dex` / `resources.arsc` / `assets`（JS/HTML）里逐个查找；
+4. 与入库基线 `tools/selector_baseline.json` 比较：
+   - **基线有、现在没有 = 回归** → 立刻失败，冒烟跳过；
+   - 基线也没有的（当前 49 个，多为服务端/WebView 下发的插件页文案）→ 只报告，不算失败；
+5. 报告写到 `reports/selector-health.json`，失败时随现场一起上传。
+
+**更新基线**（APP 升级、确认新文案可接受后，本地跑一次并提交）：
+
+```bat
+:: 用 CI 同一份配置生成(CI 里的 config.yaml 是从 config.ci.yaml 复制来的)
+python tools/selector_health.py --apk <新APK> --repo . --config config/config.ci.yaml ^
+    --write-baseline tools/selector_baseline.json
+```
+
+**限制**：插件页/服务端的动态文案不在 APK 里，APK 检查覆盖不到（报告里归为 `unverifiable`）；这类文案要靠运行时的页面文本快照另做 diff（后续 P1）。
+
 ---
 
 ## 4. C3 定时与通知

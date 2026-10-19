@@ -1,0 +1,962 @@
+{
+ "generated_at": "2026-10-19T13:46:51+08:00",
+ "apk": {
+  "path": "sample_smartthings.apk",
+  "size": 244532001,
+  "sha256": "a79c4b1190b475f9c0c1954fcae25f2b64c6799e0e0e4851ce9b4dcae2335abf"
+ },
+ "baseline": "",
+ "summary": {
+  "selectors": 86,
+  "found": 34,
+  "missing": 52,
+  "regressions": 0,
+  "newly_found": 34,
+  "unverifiable": 52
+ },
+ "regressions": [],
+ "newly_found": [
+  "正在清洁",
+  "今天",
+  "已取消",
+  "昨天",
+  "已完成",
+  "菜单",
+  "安静",
+  "确认",
+  "暂停",
+  "充电中",
+  "开始时间",
+  "结束时间",
+  "定时",
+  "扫地机器人",
+  "确定",
+  "2x",
+  "x2",
+  "保存",
+  "客厅",
+  "退出",
+  "标准",
+  "设备控制",
+  "服务",
+  "全部",
+  "房间",
+  "充电",
+  "返回",
+  "待机",
+  "等待",
+  "故障",
+  "错误",
+  "问题",
+  "失败",
+  "异常"
+ ],
+ "unverifiable": [
+  "清洗拖布",
+  "干燥拖布",
+  "打扫报告",
+  "清扫中",
+  "清洁偏好",
+  "强力",
+  "充电完成",
+  "清扫记录",
+  "划区清扫",
+  "清扫区域",
+  "勿扰模式",
+  "快速建图",
+  "开始清扫",
+  "建图",
+  "地图管理",
+  "保存首页地图",
+  "重置首页地图",
+  "地图载入主页",
+  "地图编辑",
+  "地图自定义编辑",
+  "定制模式",
+  "2次",
+  "清扫顺序",
+  "面积",
+  "清扫面积",
+  "区域分割",
+  "区域合并",
+  "重置分区",
+  "恢复分区",
+  "区域命名",
+  "阳台",
+  "禁区编辑",
+  "扫拖禁区",
+  "禁过禁区",
+  "拖地禁区",
+  "虚拟墙",
+  "虚拟墙#2",
+  "选区清扫",
+  "选区清扫中",
+  "遥控控制",
+  "吸力",
+  "水量设置",
+  "智能清扫中",
+  "全屋清扫中",
+  "更改区域",
+  "地图正在加载",
+  "正在干燥拖布",
+  "满电",
+  "关闭省电模式",
+  "空闲",
+  "卡住",
+  "被困"
+ ],
+ "selectors": {
+  "清洗拖布": {
+   "kind": "text",
+   "found": false,
+   "locations": [],
+   "sources": [
+    "Test_cases/三星/全局清扫.yaml: cases[0].steps[1] (判断是否清洗拖布).if"
+   ]
+  },
+  "正在清洁": {
+   "kind": "text",
+   "found": true,
+   "locations": [
+    "resources.arsc"
+   ],
+   "sources": [
+    "Test_cases/三星/全局清扫.yaml: cases[0].steps[2] (判断是否处于清扫状态).assert"
+   ]
+  },
+  "今天": {
+   "kind": "text",
+   "found": true,
+   "locations": [
+    "resources.arsc"
+   ],
+   "sources": [
+    "Test_cases/三星/全局清扫.yaml: cases[0].steps[6] (判断是否有清扫记录悬浮卡).if",
+    "Test_cases/三星/全局清扫.yaml: cases[0].steps[8] (检测菜单界面是否可见).if"
+   ]
+  },
+  "已取消": {
+   "kind": "text",
+   "found": true,
+   "locations": [
+    "resources.arsc"
+   ],
+   "sources": [
+    "Test_cases/三星/全局清扫.yaml: cases[0].steps[6] (判断是否有清扫记录悬浮卡).if",
+    "Test_cases/三星/全局清扫.yaml: cases[0].steps[8] (检测菜单界面是否可见).if"
+   ]
+  },
+  "昨天": {
+   "kind": "text",
+   "found": true,
+   "locations": [
+    "resources.arsc"
+   ],
+   "sources": [
+    "Test_cases/三星/全局清扫.yaml: cases[0].steps[6] (判断是否有清扫记录悬浮卡).if",
+    "Test_cases/三星/全局清扫.yaml: cases[0].steps[8] (检测菜单界面是否可见).if"
+   ]
+  },
+  "已完成": {
+   "kind": "text",
+   "found": true,
+   "locations": [
+    "resources.arsc"
+   ],
+   "sources": [
+    "Test_cases/三星/全局清扫.yaml: cases[0].steps[6] (判断是否有清扫记录悬浮卡).if",
+    "Test_cases/三星/全局清扫.yaml: cases[0].steps[8] (检测菜单界面是否可见).if"
+   ]
+  },
+  "干燥拖布": {
+   "kind": "text",
+   "found": false,
+   "locations": [],
+   "sources": [
+    "Test_cases/三星/全局清扫.yaml: cases[0].steps[7] (判断是否清扫完成).assert"
+   ]
+  },
+  "菜单": {
+   "kind": "text",
+   "found": true,
+   "locations": [
+    "resources.arsc"
+   ],
+   "sources": [
+    "Test_cases/三星/全局清扫.yaml: cases[0].steps[8] (检测菜单界面是否可见).else[0] (进入菜单界面).click",
+    "Test_cases/三星/全局清扫.yaml: cases[0].steps[8] (检测菜单界面是否可见).then[1] (进入菜单界面).click"
+   ]
+  },
+  "打扫报告": {
+   "kind": "text",
+   "found": false,
+   "locations": [],
+   "sources": [
+    "Test_cases/三星/全局清扫.yaml: cases[0].steps[9] (进入清扫报告界面).click"
+   ]
+  },
+  "清扫中": {
+   "kind": "text",
+   "found": false,
+   "locations": [],
+   "sources": [
+    "Test_cases/涂鸦智能T4/全局清扫.yaml: cases[0].steps[1] (确认设备进入清扫状态).assert",
+    "Test_cases/涂鸦智能T4/全局清扫.yaml: cases[0].steps[9] (确认设备继续清扫中).assert",
+    "Test_cases/涂鸦智能T4/地图编辑.yaml: cases[0].steps[0] (检查是否有地图，无图则先建图).else[1] (确认设备处于建图或清扫状态).assert",
+    "Test_cases/涂鸦智能T4/定制清扫.yaml: cases[0].steps[32] (确认设备处于清扫状态).assert",
+    "Test_cases/涂鸦智能T4/快速建图.yaml: cases[0].steps[2] (确认设备处于建图或清扫状态).assert",
+    "Test_cases/涂鸦智能T4/选区清扫.yaml: cases[0].steps[7] (确认设备处于选区清扫状态).assert"
+   ]
+  },
+  "清洁偏好": {
+   "kind": "text",
+   "found": false,
+   "locations": [],
+   "sources": [
+    "Test_cases/涂鸦智能T4/全局清扫.yaml: cases[0].steps[2] (点击清洁偏好).click",
+    "Test_cases/涂鸦智能T4/定制清扫.yaml: cases[0].steps[23] (进入清洁偏好).click",
+    "Test_cases/涂鸦智能T4/定制清扫.yaml: cases[0].steps[44] (进入清洁偏好).click"
+   ]
+  },
+  "强力": {
+   "kind": "text",
+   "found": false,
+   "locations": [],
+   "sources": [
+    "Test_cases/涂鸦智能T4/全局清扫.yaml: cases[0].steps[3] (点击切换强力档吸力).click",
+    "Test_cases/涂鸦智能T4/定制清扫.yaml: cases[0].steps[13] (设置吸力为强力档).click",
+    "Test_cases/涂鸦智能T4/预约清扫.yaml: cases[0].steps[8] (选择安静挡位).wait_for"
+   ]
+  },
+  "安静": {
+   "kind": "text",
+   "found": true,
+   "locations": [
+    "resources.arsc"
+   ],
+   "sources": [
+    "Test_cases/涂鸦智能T4/全局清扫.yaml: cases[0].steps[4] (点击切换安静档吸力).click",
+    "Test_cases/涂鸦智能T4/定制清扫.yaml: cases[0].steps[8] (设置吸力为安静档).click",
+    "Test_cases/涂鸦智能T4/预约清扫.yaml: cases[0].steps[8] (选择安静挡位).click",
+    "Test_cases/涂鸦智能T4/预约清扫.yaml: cases[0].steps[8] (选择安静挡位).wait_for"
+   ]
+  },
+  "确认": {
+   "kind": "text",
+   "found": true,
+   "locations": [
+    "resources.arsc"
+   ],
+   "sources": [
+    "Test_cases/涂鸦智能T4/全局清扫.yaml: cases[0].steps[5] (点击确认返回主界面).click",
+    "Test_cases/涂鸦智能T4/划区清扫.yaml: cases[0].steps[2] (确认清扫模式).click",
+    "Test_cases/涂鸦智能T4/勿扰模式.yaml: cases[0].steps[13] (保存定时任务).click",
+    "Test_cases/涂鸦智能T4/勿扰模式.yaml: cases[0].steps[4] (确认开始时间).click",
+    "Test_cases/涂鸦智能T4/勿扰模式.yaml: cases[0].steps[7] (确认结束时间).click",
+    "Test_cases/涂鸦智能T4/地图编辑.yaml: cases[0].steps[4] (检测弹窗并点击确认).if_click",
+    "Test_cases/涂鸦智能T4/定制清扫.yaml: cases[0].steps[10] (确认房间1设置).click",
+    "Test_cases/涂鸦智能T4/定制清扫.yaml: cases[0].steps[15] (确认房间2设置).click",
+    "Test_cases/涂鸦智能T4/定制清扫.yaml: cases[0].steps[26] (确认清洁偏好).if_click",
+    "Test_cases/涂鸦智能T4/定制清扫.yaml: cases[0].steps[47] (确认清洁偏好).if_click",
+    "Test_cases/涂鸦智能T4/房间编辑.yaml: cases[0].steps[17] (确认命名).click",
+    "Test_cases/涂鸦智能T4/选区清扫.yaml: cases[0].steps[4] (确认清扫模式).click",
+    "Test_cases/涂鸦智能T4/遥控模式.yaml: cases[0].steps[13] (确认回充).if_click",
+    "Test_cases/涂鸦智能T4/遥控模式.yaml: cases[0].steps[9] (确认退出).if_click",
+    "Test_cases/涂鸦智能T4/预约清扫.yaml: cases[0].steps[12] (确认水量设置).if_click",
+    "Test_cases/涂鸦智能T4/预约清扫.yaml: cases[0].steps[13] (保存预约清扫设置).if_click",
+    "Test_cases/涂鸦智能T4/预约清扫.yaml: cases[0].steps[9] (确认吸力设置).if_click"
+   ]
+  },
+  "暂停": {
+   "kind": "text",
+   "found": true,
+   "locations": [
+    "resources.arsc"
+   ],
+   "sources": [
+    "Test_cases/涂鸦智能T4/全局清扫.yaml: cases[0].steps[7] (确认设备已暂停).assert"
+   ]
+  },
+  "充电中": {
+   "kind": "text",
+   "found": true,
+   "locations": [
+    "resources.arsc"
+   ],
+   "sources": [
+    "Test_cases/涂鸦智能T4/全局清扫.yaml: cases[0].steps[10] (等待清扫完成并返回充电).assert",
+    "Test_cases/涂鸦智能T4/划区清扫.yaml: cases[0].steps[6] (等待清扫完成并返回充电).assert",
+    "Test_cases/涂鸦智能T4/勿扰模式.yaml: cases[0].steps[17] (确认勿扰生效（定时任务未执行，设备处于充电）).assert",
+    "Test_cases/涂鸦智能T4/地图编辑.yaml: cases[0].steps[0] (检查是否有地图，无图则先建图).else[2] (等待建图完成并返回充电).assert",
+    "Test_cases/涂鸦智能T4/定制清扫.yaml: cases[0].steps[33] (等待清扫完成并返回充电).assert",
+    "Test_cases/涂鸦智能T4/快速建图.yaml: cases[0].steps[3] (等待建图完成并返回充电).assert",
+    "Test_cases/涂鸦智能T4/选区清扫.yaml: cases[0].steps[0] (检查设备处于充电状态).assert",
+    "Test_cases/涂鸦智能T4/选区清扫.yaml: cases[0].steps[8] (等待清扫完成并返回充电).assert",
+    "Test_cases/涂鸦智能T4/预约清扫.yaml: cases[0].steps[18] (等待清扫完成并返回充电).assert"
+   ]
+  },
+  "充电完成": {
+   "kind": "text",
+   "found": false,
+   "locations": [],
+   "sources": [
+    "Test_cases/涂鸦智能T4/全局清扫.yaml: cases[0].steps[10] (等待清扫完成并返回充电).assert",
+    "Test_cases/涂鸦智能T4/划区清扫.yaml: cases[0].steps[6] (等待清扫完成并返回充电).assert",
+    "Test_cases/涂鸦智能T4/勿扰模式.yaml: cases[0].steps[17] (确认勿扰生效（定时任务未执行，设备处于充电）).assert",
+    "Test_cases/涂鸦智能T4/地图编辑.yaml: cases[0].steps[0] (检查是否有地图，无图则先建图).else[2] (等待建图完成并返回充电).assert",
+    "Test_cases/涂鸦智能T4/定制清扫.yaml: cases[0].steps[33] (等待清扫完成并返回充电).assert",
+    "Test_cases/涂鸦智能T4/快速建图.yaml: cases[0].steps[3] (等待建图完成并返回充电).assert",
+    "Test_cases/涂鸦智能T4/选区清扫.yaml: cases[0].steps[0] (检查设备处于充电状态).assert",
+    "Test_cases/涂鸦智能T4/选区清扫.yaml: cases[0].steps[8] (等待清扫完成并返回充电).assert",
+    "Test_cases/涂鸦智能T4/预约清扫.yaml: cases[0].steps[18] (等待清扫完成并返回充电).assert"
+   ]
+  },
+  "清扫记录": {
+   "kind": "text",
+   "found": false,
+   "locations": [],
+   "sources": [
+    "Test_cases/涂鸦智能T4/全局清扫.yaml: cases[0].steps[13] (进入清扫记录界面).click",
+    "Test_cases/涂鸦智能T4/划区清扫.yaml: cases[0].steps[9] (进入清扫记录界面).click",
+    "Test_cases/涂鸦智能T4/定制清扫.yaml: cases[0].steps[38] (进入清扫记录界面).click",
+    "Test_cases/涂鸦智能T4/定点清扫.yaml: cases[0].steps[3] (进入清扫记录界面).click",
+    "Test_cases/涂鸦智能T4/选区清扫.yaml: cases[0].steps[11] (进入清扫记录界面).click",
+    "Test_cases/涂鸦智能T4/预约清扫.yaml: cases[0].steps[23] (进入清扫记录界面).click"
+   ]
+  },
+  "划区清扫": {
+   "kind": "text",
+   "found": false,
+   "locations": [],
+   "sources": [
+    "Test_cases/涂鸦智能T4/划区清扫.yaml: cases[0].steps[1] (选择划区清扫).click",
+    "Test_cases/涂鸦智能T4/划区清扫.yaml: cases[0].steps[5] (确认设备处于划区清扫状态).assert"
+   ]
+  },
+  "清扫区域": {
+   "kind": "text",
+   "found": false,
+   "locations": [],
+   "sources": [
+    "Test_cases/涂鸦智能T4/划区清扫.yaml: cases[0].steps[3] (添加清扫区域).click"
+   ]
+  },
+  "勿扰模式": {
+   "kind": "text",
+   "found": false,
+   "locations": [],
+   "sources": [
+    "Test_cases/涂鸦智能T4/勿扰模式.yaml: cases[0].steps[19] (进入勿扰模式关闭).click",
+    "Test_cases/涂鸦智能T4/勿扰模式.yaml: cases[0].steps[1] (进入勿扰模式界面).click",
+    "Test_cases/涂鸦智能T4/预约清扫.yaml: cases[0].steps[1] (进入勿扰模式界面).click"
+   ]
+  },
+  "开始时间": {
+   "kind": "text",
+   "found": true,
+   "locations": [
+    "resources.arsc"
+   ],
+   "sources": [
+    "Test_cases/涂鸦智能T4/勿扰模式.yaml: cases[0].steps[2] (点击设置勿扰开始时间).click"
+   ]
+  },
+  "结束时间": {
+   "kind": "text",
+   "found": true,
+   "locations": [
+    "resources.arsc"
+   ],
+   "sources": [
+    "Test_cases/涂鸦智能T4/勿扰模式.yaml: cases[0].steps[5] (点击设置勿扰结束时间).click"
+   ]
+  },
+  "定时": {
+   "kind": "text",
+   "found": true,
+   "locations": [
+    "resources.arsc"
+   ],
+   "sources": [
+    "Test_cases/涂鸦智能T4/勿扰模式.yaml: cases[0].steps[10] (进入定时清扫界面).click",
+    "Test_cases/涂鸦智能T4/预约清扫.yaml: cases[0].steps[4] (进入预约清扫界面).click"
+   ]
+  },
+  "扫地机器人": {
+   "kind": "text",
+   "found": true,
+   "locations": [
+    "resources.arsc"
+   ],
+   "sources": [
+    "Test_cases/涂鸦智能T4/地图编辑.yaml: cases[0].steps[0] (检查是否有地图，无图则先建图).if not",
+    "Test_cases/涂鸦智能T4/快速建图.yaml: cases[0].steps[0] (检查是否无图状态).if"
+   ]
+  },
+  "快速建图": {
+   "kind": "text",
+   "found": false,
+   "locations": [],
+   "sources": [
+    "Test_cases/涂鸦智能T4/地图编辑.yaml: cases[0].steps[0] (检查是否有地图，无图则先建图).else[0] (启动建图（优先快速建图，否则开始清扫）).find_click",
+    "Test_cases/涂鸦智能T4/快速建图.yaml: cases[0].steps[1] (启动建图（优先快速建图，否则开始清扫）).find_click"
+   ]
+  },
+  "开始清扫": {
+   "kind": "text",
+   "found": false,
+   "locations": [],
+   "sources": [
+    "Test_cases/涂鸦智能T4/地图编辑.yaml: cases[0].steps[0] (检查是否有地图，无图则先建图).else[0] (启动建图（优先快速建图，否则开始清扫）).find_click",
+    "Test_cases/涂鸦智能T4/快速建图.yaml: cases[0].steps[1] (启动建图（优先快速建图，否则开始清扫）).find_click"
+   ]
+  },
+  "建图": {
+   "kind": "text",
+   "found": false,
+   "locations": [],
+   "sources": [
+    "Test_cases/涂鸦智能T4/地图编辑.yaml: cases[0].steps[0] (检查是否有地图，无图则先建图).else[1] (确认设备处于建图或清扫状态).assert",
+    "Test_cases/涂鸦智能T4/快速建图.yaml: cases[0].steps[2] (确认设备处于建图或清扫状态).assert"
+   ]
+  },
+  "地图管理": {
+   "kind": "text",
+   "found": false,
+   "locations": [],
+   "sources": [
+    "Test_cases/涂鸦智能T4/地图编辑.yaml: cases[0].steps[2] (进入地图管理).click",
+    "Test_cases/涂鸦智能T4/快速建图.yaml: cases[0].steps[0] (检查是否无图状态).else[1] (进入地图管理).click"
+   ]
+  },
+  "保存首页地图": {
+   "kind": "text",
+   "found": false,
+   "locations": [],
+   "sources": [
+    "Test_cases/涂鸦智能T4/地图编辑.yaml: cases[0].steps[3] (保存当前地图).click"
+   ]
+  },
+  "确定": {
+   "kind": "text",
+   "found": true,
+   "locations": [
+    "resources.arsc"
+   ],
+   "sources": [
+    "Test_cases/涂鸦智能T4/地图编辑.yaml: cases[0].steps[4] (检测弹窗并点击确认).if_click",
+    "Test_cases/涂鸦智能T4/定制清扫.yaml: cases[0].steps[26] (确认清洁偏好).if_click",
+    "Test_cases/涂鸦智能T4/定制清扫.yaml: cases[0].steps[47] (确认清洁偏好).if_click",
+    "Test_cases/涂鸦智能T4/遥控模式.yaml: cases[0].steps[13] (确认回充).if_click",
+    "Test_cases/涂鸦智能T4/遥控模式.yaml: cases[0].steps[9] (确认退出).if_click",
+    "Test_cases/涂鸦智能T4/预约清扫.yaml: cases[0].steps[12] (确认水量设置).if_click",
+    "Test_cases/涂鸦智能T4/预约清扫.yaml: cases[0].steps[13] (保存预约清扫设置).if_click",
+    "Test_cases/涂鸦智能T4/预约清扫.yaml: cases[0].steps[9] (确认吸力设置).if_click"
+   ]
+  },
+  "重置首页地图": {
+   "kind": "text",
+   "found": false,
+   "locations": [],
+   "sources": [
+    "Test_cases/涂鸦智能T4/地图编辑.yaml: cases[0].steps[5] (重置首页地图).click",
+    "Test_cases/涂鸦智能T4/快速建图.yaml: cases[0].steps[0] (检查是否无图状态).else[2] (重置首页地图).click"
+   ]
+  },
+  "地图载入主页": {
+   "kind": "text",
+   "found": false,
+   "locations": [],
+   "sources": [
+    "Test_cases/涂鸦智能T4/地图编辑.yaml: cases[0].steps[7] (载入云端地图).click"
+   ]
+  },
+  "地图编辑": {
+   "kind": "text",
+   "found": false,
+   "locations": [],
+   "sources": [
+    "Test_cases/涂鸦智能T4/定制清扫.yaml: cases[0].steps[1] (进入地图编辑).click",
+    "Test_cases/涂鸦智能T4/房间编辑.yaml: cases[0].steps[0] (进入地图编辑).click",
+    "Test_cases/涂鸦智能T4/禁区设置.yaml: cases[0].steps[1] (点击地图编辑).click",
+    "Test_cases/涂鸦智能T4/禁区设置.yaml: cases[0].steps[6] (点击地图编辑).click",
+    "Test_preconditions/涂鸦智能T4.yaml: preconditions[2] (map_load).ready_text",
+    "config/config.ci.yaml: preconditions[3] (map_load).ready_text"
+   ]
+  },
+  "地图自定义编辑": {
+   "kind": "text",
+   "found": false,
+   "locations": [],
+   "sources": [
+    "Test_cases/涂鸦智能T4/定制清扫.yaml: cases[0].steps[2] (进入地图自定义编辑).click",
+    "Test_cases/涂鸦智能T4/房间编辑.yaml: cases[0].steps[1] (进入地图自定义编辑).click"
+   ]
+  },
+  "定制模式": {
+   "kind": "text",
+   "found": false,
+   "locations": [],
+   "sources": [
+    "Test_cases/涂鸦智能T4/定制清扫.yaml: cases[0].steps[25] (打开定制模式开关).switch_label",
+    "Test_cases/涂鸦智能T4/定制清扫.yaml: cases[0].steps[46] (关闭定制模式开关).switch_label",
+    "Test_cases/涂鸦智能T4/定制清扫.yaml: cases[0].steps[5] (进入定制模式).click"
+   ]
+  },
+  "2次": {
+   "kind": "text",
+   "found": false,
+   "locations": [],
+   "sources": [
+    "Test_cases/涂鸦智能T4/定制清扫.yaml: cases[0].steps[12] (设置清扫次数2次).find_click",
+    "Test_cases/涂鸦智能T4/定制清扫.yaml: cases[0].steps[7] (设置清扫次数2次).find_click"
+   ]
+  },
+  "2x": {
+   "kind": "text",
+   "found": true,
+   "locations": [
+    "classes.dex"
+   ],
+   "sources": [
+    "Test_cases/涂鸦智能T4/定制清扫.yaml: cases[0].steps[12] (设置清扫次数2次).find_click",
+    "Test_cases/涂鸦智能T4/定制清扫.yaml: cases[0].steps[7] (设置清扫次数2次).find_click"
+   ]
+  },
+  "x2": {
+   "kind": "text",
+   "found": true,
+   "locations": [
+    "classes.dex"
+   ],
+   "sources": [
+    "Test_cases/涂鸦智能T4/定制清扫.yaml: cases[0].steps[12] (设置清扫次数2次).find_click",
+    "Test_cases/涂鸦智能T4/定制清扫.yaml: cases[0].steps[7] (设置清扫次数2次).find_click"
+   ]
+  },
+  "保存": {
+   "kind": "text",
+   "found": true,
+   "locations": [
+    "resources.arsc"
+   ],
+   "sources": [
+    "Test_cases/涂鸦智能T4/定制清扫.yaml: cases[0].steps[16] (保存定制模式设置).click",
+    "Test_cases/涂鸦智能T4/定制清扫.yaml: cases[0].steps[21] (保存清扫顺序).click",
+    "Test_cases/涂鸦智能T4/房间编辑.yaml: cases[0].steps[18] (保存命名).click",
+    "Test_cases/涂鸦智能T4/禁区设置.yaml: cases[0].steps[10] (保存虚拟墙).click",
+    "Test_cases/涂鸦智能T4/禁区设置.yaml: cases[0].steps[5] (保存禁区).click"
+   ]
+  },
+  "清扫顺序": {
+   "kind": "text",
+   "found": false,
+   "locations": [],
+   "sources": [
+    "Test_cases/涂鸦智能T4/定制清扫.yaml: cases[0].steps[17] (进入清扫顺序界面).click"
+   ]
+  },
+  "面积": {
+   "kind": "text",
+   "found": false,
+   "locations": [],
+   "sources": [
+    "Test_cases/涂鸦智能T4/定制清扫.yaml: cases[0].steps[35] (等待清扫数据出现).wait_for",
+    "Test_cases/涂鸦智能T4/预约清扫.yaml: cases[0].steps[20] (等待清扫数据出现).wait_for"
+   ]
+  },
+  "清扫面积": {
+   "kind": "text",
+   "found": false,
+   "locations": [],
+   "sources": [
+    "Test_cases/涂鸦智能T4/定制清扫.yaml: cases[0].steps[35] (等待清扫数据出现).wait_for",
+    "Test_cases/涂鸦智能T4/预约清扫.yaml: cases[0].steps[20] (等待清扫数据出现).wait_for"
+   ]
+  },
+  "区域分割": {
+   "kind": "text",
+   "found": false,
+   "locations": [],
+   "sources": [
+    "Test_cases/涂鸦智能T4/房间编辑.yaml: cases[0].steps[3] (进入分割模式并截图).click"
+   ]
+  },
+  "区域合并": {
+   "kind": "text",
+   "found": false,
+   "locations": [],
+   "sources": [
+    "Test_cases/涂鸦智能T4/房间编辑.yaml: cases[0].steps[7] (进入合并模式并截图).click"
+   ]
+  },
+  "重置分区": {
+   "kind": "text",
+   "found": false,
+   "locations": [],
+   "sources": [
+    "Test_cases/涂鸦智能T4/房间编辑.yaml: cases[0].steps[11] (重置房间分区).find_click"
+   ]
+  },
+  "恢复分区": {
+   "kind": "text",
+   "found": false,
+   "locations": [],
+   "sources": [
+    "Test_cases/涂鸦智能T4/房间编辑.yaml: cases[0].steps[11] (重置房间分区).find_click"
+   ]
+  },
+  "区域命名": {
+   "kind": "text",
+   "found": false,
+   "locations": [],
+   "sources": [
+    "Test_cases/涂鸦智能T4/房间编辑.yaml: cases[0].steps[14] (进入房间命名).click"
+   ]
+  },
+  "客厅": {
+   "kind": "text",
+   "found": true,
+   "locations": [
+    "resources.arsc"
+   ],
+   "sources": [
+    "Test_cases/涂鸦智能T4/房间编辑.yaml: cases[0].steps[16] (选择房间名称).find_click"
+   ]
+  },
+  "阳台": {
+   "kind": "text",
+   "found": false,
+   "locations": [],
+   "sources": [
+    "Test_cases/涂鸦智能T4/房间编辑.yaml: cases[0].steps[16] (选择房间名称).find_click"
+   ]
+  },
+  "禁区编辑": {
+   "kind": "text",
+   "found": false,
+   "locations": [],
+   "sources": [
+    "Test_cases/涂鸦智能T4/禁区设置.yaml: cases[0].steps[2] (进入禁区编辑).click",
+    "Test_cases/涂鸦智能T4/禁区设置.yaml: cases[0].steps[7] (进入禁区编辑).click"
+   ]
+  },
+  "扫拖禁区": {
+   "kind": "text",
+   "found": false,
+   "locations": [],
+   "sources": [
+    "Test_cases/涂鸦智能T4/禁区设置.yaml: cases[0].steps[3] (添加扫拖禁区).find_click"
+   ]
+  },
+  "禁过禁区": {
+   "kind": "text",
+   "found": false,
+   "locations": [],
+   "sources": [
+    "Test_cases/涂鸦智能T4/禁区设置.yaml: cases[0].steps[3] (添加扫拖禁区).find_click"
+   ]
+  },
+  "拖地禁区": {
+   "kind": "text",
+   "found": false,
+   "locations": [],
+   "sources": [
+    "Test_cases/涂鸦智能T4/禁区设置.yaml: cases[0].steps[4] (添加拖地禁区).click"
+   ]
+  },
+  "虚拟墙": {
+   "kind": "text",
+   "found": false,
+   "locations": [],
+   "sources": [
+    "Test_cases/涂鸦智能T4/禁区设置.yaml: cases[0].steps[8] (切换至虚拟墙).click"
+   ]
+  },
+  "虚拟墙#2": {
+   "kind": "text",
+   "found": false,
+   "locations": [],
+   "sources": [
+    "Test_cases/涂鸦智能T4/禁区设置.yaml: cases[0].steps[9] (添加虚拟墙).click"
+   ]
+  },
+  "选区清扫": {
+   "kind": "text",
+   "found": false,
+   "locations": [],
+   "sources": [
+    "Test_cases/涂鸦智能T4/选区清扫.yaml: cases[0].steps[3] (选择选区清扫).click"
+   ]
+  },
+  "选区清扫中": {
+   "kind": "text",
+   "found": false,
+   "locations": [],
+   "sources": [
+    "Test_cases/涂鸦智能T4/选区清扫.yaml: cases[0].steps[7] (确认设备处于选区清扫状态).assert"
+   ]
+  },
+  "遥控控制": {
+   "kind": "text",
+   "found": false,
+   "locations": [],
+   "sources": [
+    "Test_cases/涂鸦智能T4/遥控模式.yaml: cases[0].steps[2] (进入遥控界面).click"
+   ]
+  },
+  "退出": {
+   "kind": "text",
+   "found": true,
+   "locations": [
+    "resources.arsc"
+   ],
+   "sources": [
+    "Test_cases/涂鸦智能T4/遥控模式.yaml: cases[0].steps[8] (退出遥控模式).click"
+   ]
+  },
+  "吸力": {
+   "kind": "text",
+   "found": false,
+   "locations": [],
+   "sources": [
+    "Test_cases/涂鸦智能T4/预约清扫.yaml: cases[0].steps[7] (设置吸力为安静挡).click"
+   ]
+  },
+  "标准": {
+   "kind": "text",
+   "found": true,
+   "locations": [
+    "resources.arsc"
+   ],
+   "sources": [
+    "Test_cases/涂鸦智能T4/预约清扫.yaml: cases[0].steps[8] (选择安静挡位).wait_for"
+   ]
+  },
+  "水量设置": {
+   "kind": "text",
+   "found": false,
+   "locations": [],
+   "sources": [
+    "Test_cases/涂鸦智能T4/预约清扫.yaml: cases[0].steps[10] (设置水量为低挡).click"
+   ]
+  },
+  "智能清扫中": {
+   "kind": "text",
+   "found": false,
+   "locations": [],
+   "sources": [
+    "Test_cases/涂鸦智能T4/预约清扫.yaml: cases[0].steps[17] (确认预约清扫开始执行).assert"
+   ]
+  },
+  "全屋清扫中": {
+   "kind": "text",
+   "found": false,
+   "locations": [],
+   "sources": [
+    "Test_cases/涂鸦智能T4/预约清扫.yaml: cases[0].steps[17] (确认预约清扫开始执行).assert"
+   ]
+  },
+  "设备控制": {
+   "kind": "text",
+   "found": true,
+   "locations": [
+    "resources.arsc"
+   ],
+   "sources": [
+    "Test_preconditions/三星.yaml: preconditions[1] (enter_device).ready_text",
+    "config/config.ci.yaml: preconditions[1] (enter_device).ready_text"
+   ]
+  },
+  "服务": {
+   "kind": "text",
+   "found": true,
+   "locations": [
+    "resources.arsc"
+   ],
+   "sources": [
+    "Test_preconditions/三星.yaml: preconditions[1] (enter_device).ready_text",
+    "config/config.ci.yaml: preconditions[1] (enter_device).ready_text"
+   ]
+  },
+  "全部": {
+   "kind": "text",
+   "found": true,
+   "locations": [
+    "resources.arsc"
+   ],
+   "sources": [
+    "Test_preconditions/三星.yaml: preconditions[3] (map_load).ready_text",
+    "Test_preconditions/涂鸦智能T4.yaml: preconditions[2] (map_load).ready_text"
+   ]
+  },
+  "房间": {
+   "kind": "text",
+   "found": true,
+   "locations": [
+    "resources.arsc"
+   ],
+   "sources": [
+    "Test_preconditions/三星.yaml: preconditions[3] (map_load).ready_text"
+   ]
+  },
+  "更改区域": {
+   "kind": "text",
+   "found": false,
+   "locations": [],
+   "sources": [
+    "Test_preconditions/三星.yaml: preconditions[3] (map_load).ready_text"
+   ]
+  },
+  "地图正在加载": {
+   "kind": "text",
+   "found": false,
+   "locations": [],
+   "sources": [
+    "Test_preconditions/三星.yaml: preconditions[3] (map_load).loading_text",
+    "Test_preconditions/涂鸦智能T4.yaml: preconditions[2] (map_load).loading_text",
+    "config/config.ci.yaml: preconditions[3] (map_load).loading_text"
+   ]
+  },
+  "正在干燥拖布": {
+   "kind": "text",
+   "found": false,
+   "locations": [],
+   "sources": [
+    "Test_preconditions/三星.yaml: preconditions[4] (steps)[0] (判断是否处于烘干状态).if not"
+   ]
+  },
+  "充电": {
+   "kind": "text",
+   "found": true,
+   "locations": [
+    "resources.arsc"
+   ],
+   "sources": [
+    "Test_preconditions/三星.yaml: preconditions[5] (charging).ready_text",
+    "Test_preconditions/涂鸦智能T4.yaml: preconditions[1] (charging).ready_text",
+    "config/config.ci.yaml: preconditions[2] (charging).ready_text"
+   ]
+  },
+  "满电": {
+   "kind": "text",
+   "found": false,
+   "locations": [],
+   "sources": [
+    "Test_preconditions/三星.yaml: preconditions[5] (charging).ready_text"
+   ]
+  },
+  "返回": {
+   "kind": "text",
+   "found": true,
+   "locations": [
+    "resources.arsc"
+   ],
+   "sources": [
+    "Test_preconditions/三星.yaml: preconditions[5] (charging).recharge_text"
+   ]
+  },
+  "关闭省电模式": {
+   "kind": "text",
+   "found": false,
+   "locations": [],
+   "sources": [
+    "Test_preconditions/涂鸦智能T4.yaml: preconditions[4] (steps)[0] (关闭省电模式).if_click"
+   ]
+  },
+  "待机": {
+   "kind": "text",
+   "found": true,
+   "locations": [
+    "resources.arsc"
+   ],
+   "sources": [
+    "config/config.ci.yaml: runner.idle_texts"
+   ]
+  },
+  "空闲": {
+   "kind": "text",
+   "found": false,
+   "locations": [],
+   "sources": [
+    "config/config.ci.yaml: runner.idle_texts"
+   ]
+  },
+  "等待": {
+   "kind": "text",
+   "found": true,
+   "locations": [
+    "resources.arsc"
+   ],
+   "sources": [
+    "config/config.ci.yaml: runner.idle_texts"
+   ]
+  },
+  "故障": {
+   "kind": "text",
+   "found": true,
+   "locations": [
+    "resources.arsc"
+   ],
+   "sources": [
+    "config/config.ci.yaml: runner.fault_texts"
+   ]
+  },
+  "错误": {
+   "kind": "text",
+   "found": true,
+   "locations": [
+    "resources.arsc"
+   ],
+   "sources": [
+    "config/config.ci.yaml: runner.fault_texts"
+   ]
+  },
+  "卡住": {
+   "kind": "text",
+   "found": false,
+   "locations": [],
+   "sources": [
+    "config/config.ci.yaml: runner.fault_texts"
+   ]
+  },
+  "被困": {
+   "kind": "text",
+   "found": false,
+   "locations": [],
+   "sources": [
+    "config/config.ci.yaml: runner.fault_texts"
+   ]
+  },
+  "问题": {
+   "kind": "text",
+   "found": true,
+   "locations": [
+    "resources.arsc"
+   ],
+   "sources": [
+    "config/config.ci.yaml: runner.fault_texts"
+   ]
+  },
+  "失败": {
+   "kind": "text",
+   "found": true,
+   "locations": [
+    "resources.arsc"
+   ],
+   "sources": [
+    "config/config.ci.yaml: runner.fault_texts"
+   ]
+  },
+  "异常": {
+   "kind": "text",
+   "found": true,
+   "locations": [
+    "resources.arsc"
+   ],
+   "sources": [
+    "config/config.ci.yaml: runner.fault_texts"
+   ]
+  }
+ }
+}

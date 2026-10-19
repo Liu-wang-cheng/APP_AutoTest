@@ -123,6 +123,24 @@ def test_real_smoke_probes_device_and_uploads_scene():
     assert "junit-real.xml" in text and "upload-artifact" in text, "失败要传 junit 与截图现场"
 
 
+def test_real_smoke_runs_selector_health_before_device_test():
+    """★ P0(2026-10-19): APP 升级后先做选择器健康检查，别等 10 分钟真机冒烟跑到一半才失败。
+
+    顺序必须是: 探活设备 → 选择器健康检查 → 跑真机冒烟。
+    检查脚本扫设备上的 APK + 入库基线，回归立刻失败；服务端/WebView 动态文案只报告。
+    """
+    data, text = _load("real-smoke.yml")
+    steps = data["jobs"]["smoke"]["steps"]
+    names = [s.get("name", "") for s in steps]
+    i_health = next(i for i, n in enumerate(names) if "选择器健康检查" in n)
+    i_smoke = next(i for i, n in enumerate(names) if n == "跑真机冒烟")
+    assert i_health < i_smoke, "选择器健康检查必须在跑真机冒烟之前"
+    assert "tools/selector_health.py" in text
+    assert "tools/selector_baseline.json" in text
+    assert (ROOT / "tools" / "selector_baseline.json").is_file(), "基线文件必须入库"
+    assert "reports/selector-health.json" in text, "失败时要能拿到报告"
+
+
 def test_real_smoke_does_not_use_setup_python():
     """★ 真机冒烟**不用** actions/setup-python(2026-10-19 实测, 第一次真跑就死在这)。
 

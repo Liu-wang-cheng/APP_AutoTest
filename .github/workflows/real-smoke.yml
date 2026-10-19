@@ -121,6 +121,33 @@ jobs:
             throw "模拟器/真机没在线($dev) —— 请先启动模拟器再重跑本 workflow(可用仓库变量 SMOKE_DEVICE 改地址)"
           }
 
+      # ★ 选择器健康检查(P0, 2026-10-19): APP 一升级, 文案/插件页变化会让用例跑到一半才失败,
+      #   一轮真机冒烟 10 分钟白跑。这里先从设备上把 APK 拉下来, 扫 DEX/resources.arsc/assets,
+      #   把仓库里用到的文本选择器逐个核对, 并与入库基线比较:
+      #     · 基线里能找到、现在找不到 = 回归 → 立刻失败(冒烟跳过)
+      #     · 基线里也没有的(49 个, 多为服务端/WebView 下发的插件页文案) → 只报告, 不算失败
+      #   基线更新时机: APP 升级且确认新文案可接受后, 本地跑一次
+      #     python tools/selector_health.py --apk <新APK> --repo . --write-baseline tools/selector_baseline.json
+      - name: "选择器健康检查(App 更新先快速报错)"
+        shell: powershell
+        run: |
+          $dev = "${{ vars.SMOKE_DEVICE }}"
+          if (-not $dev) { $dev = "127.0.0.1:7555" }
+          $py = Join-Path $env:RUNNER_WORKSPACE 'smoke-venv\Scripts\python.exe'
+          $pkg = (& $py -c "import yaml; print(yaml.safe_load(open('config/config.yaml', encoding='utf-8'))['app']['package'])").Trim()
+          $lines = @(& adb -s $dev shell pm path $pkg)
+          if (-not $lines -or -not $lines[0]) { throw "设备上没装 $pkg —— 无法做选择器健康检查" }
+          $remote = $lines[0].Substring($lines[0].IndexOf(':') + 1).Trim()
+          $apk = Join-Path $env:RUNNER_TEMP 'selector-base.apk'
+          Write-Host "拉取 APK: $remote -> $apk"
+          & adb -s $dev pull $remote $apk
+          if ($LASTEXITCODE -ne 0) { throw "APK 拉取失败: $remote" }
+          & $py tools/selector_health.py --apk $apk --repo . `
+              --baseline tools/selector_baseline.json --json reports/selector-health.json
+          if ($LASTEXITCODE -ne 0) {
+            throw "选择器健康检查未通过(有回归) —— 详见 reports/selector-health.json"
+          }
+
       - name: 跑真机冒烟
         shell: powershell
         env:
@@ -150,6 +177,7 @@ jobs:
           name: real-failure-${{ github.run_id }}
           path: |
             reports/junit-real.xml
+            reports/selector-health.json
             Test_cases/*/screenshots/**
             Test_img/debug/**
           retention-days: 7
