@@ -99,6 +99,8 @@ svc.cmd start
 | **本机 `config/config.yaml`** | 它被 gitignore，checkout **不会**带来；real 模式要知道连哪台设备 | 手工建一份（或从你本机拷），确保 `target_device` / `device.default` 指向模拟器 |
 | **模拟器/真机在线** | 没设备 = 全红 | runner 机器上常开；workflow 会先探活并给明确提示 |
 | **ADB 可用** | `uiautomator2.connect` 走 adb | `adb devices` 能看到设备 |
+| **Python 3.13** | 冒烟跑 pytest 用；**不用** `setup-python`（见下方踩坑） | 机器上装一份，默认认 `C:\Python\python.exe`；放在别处就用仓库变量 `SMOKE_PYTHON` 指定 |
+| **Windows PowerShell 5.1** | 所有步骤的 shell；**不需要** PowerShell 7 | 系统自带 |
 | **盘空间** | 每次真机会写截图/debug 产物 | 定期清 `C:\actions-runner\_work`（下面 3.5） |
 
 > 注意：workflow 里我会显式传 `--device`（默认 `127.0.0.1:7555`，可用仓库变量覆盖），**不完全依赖** config.yaml —— 少一层"为什么连不上"的排查。
@@ -152,35 +154,37 @@ jobs:
       #   只有 config/config.yaml 入不了库(被 .gitignore、含本机设备信息) —— 所以库里放一份
       #   config/config.ci.yaml(= 用户那台工具在用的配置), 跑前复制成 config.yaml。
       - name: 准备冒烟配置(用仓库里的 config/config.ci.yaml)
-        shell: pwsh
+        shell: powershell
         run: |
           Copy-Item config/config.ci.yaml config/config.yaml -Force
           foreach ($f in @("Test_cases/三星/全局清扫.yaml", "config/config.ci.yaml")) {
             Write-Host ("  {0} sha256 {1}" -f $f, (Get-FileHash $f -Algorithm SHA256).Hash.Substring(0, 12))
           }
 
-      # 不用 setup-python（见 3.2 踩坑说明）：用 runner 上已装好的 Python 3.13，
-      # 依赖装进 RUNNER_WORKSPACE 下的复用 venv。
+      # ★ 不用 setup-python（见 3.2 踩坑说明）：用 runner 上已装好的 Python 3.13，
+      #   依赖装进 RUNNER_WORKSPACE 下的复用 venv。
+      # ★ 这台 runner 只有 Windows PowerShell 5.1，**没有 pwsh**：所有步骤写
+      #   `shell: powershell`（写成 pwsh 会 `##[error]pwsh: command not found`）。
+      # ★ 不往 GITHUB_ENV 写跨步骤变量：5.1 的 `>>` 默认 UTF-16，runner 按 UTF-8 读会坏 ——
+      #   每个步骤自己算 python/venv/设备地址（都只有一两行）。
       - name: 选用本机 Python(自建 runner)
-        shell: pwsh
+        shell: powershell
         run: |
           $py = "${{ vars.SMOKE_PYTHON }}"; if (-not $py) { $py = "C:\Python\python.exe" }
           if (-not (Test-Path $py)) { throw "找不到 Python: $py" }
           $v = (& $py -c "import sys; print('%d.%d' % sys.version_info[:2])").Trim()
           if ($v -ne "3.13") { throw "需要 Python 3.13, 实际 $v ($py)" }
-          "SMOKE_PY=$py" >> $env:GITHUB_ENV
       - name: 安装依赖
-        shell: pwsh
+        shell: powershell
         run: |
           $venv = Join-Path $env:RUNNER_WORKSPACE 'smoke-venv'
-          if (-not (Test-Path "$venv\Scripts\python.exe")) { & $env:SMOKE_PY -m venv $venv }
+          if (-not (Test-Path "$venv\Scripts\python.exe")) { & "C:\Python\python.exe" -m venv $venv }
           $py = Join-Path $venv 'Scripts\python.exe'
-          "SMOKE_PY=$py" >> $env:GITHUB_ENV
           & $py -m pip install --upgrade pip
           & $py -m pip install -r requirements.txt
 
       - name: 探活设备(探不到就明确报"设备没起来", 而不是让用例背锅)
-        shell: pwsh
+        shell: powershell
         run: |
           $dev = "${{ vars.SMOKE_DEVICE }}"; if (-not $dev) { $dev = "127.0.0.1:7555" }
           adb connect $dev | Out-Host
@@ -188,15 +192,15 @@ jobs:
           if ($out -notmatch [regex]::Escape($dev) + "\s+device") {
             throw "模拟器/真机没在线($dev) —— 请先启动模拟器, 再重跑本 workflow"
           }
-          "DEVICE=$dev" >> $env:GITHUB_ENV
 
       - name: 跑冒烟(真机)
-        shell: pwsh
+        shell: powershell
         run: |
           $case = "${{ github.event.inputs.case }}"
           if (-not $case) { $case = "全局清扫" }      # ← 冒烟集(见 3.4)
-          & $env:SMOKE_PY -m pytest tests/test_yaml_runner.py -q -rs `
-            --mode real --device "$env:DEVICE" --case "$case" `
+          $py = Join-Path $env:RUNNER_WORKSPACE 'smoke-venv\Scripts\python.exe'
+          & $py -m pytest tests/test_yaml_runner.py -q -rs `
+            --mode real --device "127.0.0.1:7555" --case "$case" `
             --junit-xml=reports/junit-real.xml
 
       - name: 失败时上传现场(截图 + junit)
