@@ -16,8 +16,7 @@
 | 存储瘦身（每月自动） | ✅ 保留最近 5 个 Release，更老的连同资产删掉（不动 tag/历史） | `.github/workflows/prune.yml` + `tools/prune_releases.py` |
 
 **runner 已就位**（2026-10-16 起）：`smoke-pc` 在线，标签 `self-hosted/Windows/X64/realtest/emulator`。
-真机冒烟的**定时已开**（2026-10-19 手动冒烟在 CI 上跑绿后开启，满足"验证通过了再开定时"）：
-每天 **北京 02:00**（UTC 18:00）跑一次；也能随时在 Actions 页面手动 Run。
+真机冒烟**只在 Actions 页面手动 Run**；每日定时已于 **2026-10-28 按用户要求关闭**。
 
 ---
 
@@ -126,7 +125,7 @@ svc.cmd start
 
 ```yaml
 name: 真机冒烟
-# ★ 触发**只给手动和定时** —— 见下面"红线"第 1 条(public 仓库 + 自建 runner 的 fork PR 风险)
+# ★ 触发**只给手动** —— 见下面"红线"第 1 条(public 仓库 + 自建 runner 的 fork PR 风险)
 on:
   workflow_dispatch:
     inputs:
@@ -134,8 +133,6 @@ on:
         description: 跑哪个用例(模糊匹配, 留空=冒烟集)
         required: false
         default: ''
-  schedule:
-    - cron: '0 18 * * *'      # UTC 18:00 = 北京 02:00(2026-10-19 已开启)
 
 jobs:
   smoke:
@@ -283,7 +280,9 @@ python tools/runtime_snapshot.py --device 127.0.0.1:7555 ^
 
 ## 4. C3 定时与通知
 
-- **定时**：`schedule` 用 **UTC**（北京 02:00 = `0 18 * * *`）。2026-10-19 手动冒烟在 CI 跑绿后**已开启**；如果夜里要占设备（OTA/手工测试），把 `schedule:` 两行注释回去即可。
+- **定时**：**已关闭**（用户 2026-10-28 要求）。真机冒烟只在 Actions 页手动触发；
+  需要夜间自动跑时再加回 `schedule`（UTC 18:00 = 北京 02:00），并同步修改
+  `tests/test_ci_workflows.py` 的守护断言。
 - **通知**：GitHub 默认会给仓库 watcher（你）发失败邮件 ✓ 够用。想更即时可以：
   - 手机装 GitHub App（推送通知）；
   - 或加一步 webhook（企业微信/钉钉机器人）—— 需要你给 URL，我再写。
@@ -403,7 +402,7 @@ python tools/verify_release.py --version 2.0.27 --pkg <刚下载的 zip>
 
 ## 6. 红线与风险
 
-1. **public 仓库 + 自建 runner = 绝不给 fork PR 跑**。别人 fork 后发 PR，workflow 会在**你的机器**上执行任意代码。所以 `real-smoke.yml` 的触发**只有** `workflow_dispatch` / `schedule`，**没有** `pull_request`。万一日后要接 PR，必须加：
+1. **public 仓库 + 自建 runner = 绝不给 fork PR 跑**。别人 fork 后发 PR，workflow 会在**你的机器**上执行任意代码。所以 `real-smoke.yml` 的触发**只有** `workflow_dispatch`，**没有** `pull_request` / `schedule`。万一日后要接 PR，必须加：
    ```yaml
    if: github.event.pull_request.head.repo.full_name == github.repository
    ```
@@ -424,8 +423,8 @@ python tools/verify_release.py --version 2.0.27 --pkg <刚下载的 zip>
 | ④ 手动点一次真机冒烟，看产物 | 你/我 | 5 分钟 | —— |
 | ⑤ 打开 `schedule`（可选） | 你拍板 | 1 分钟 | 与手动测试抢设备 |
 
-**进度**：①—⑤ 均已完成。④ 于 2026-10-19 在 CI 上跑绿（`1 passed in 674.58s`，run 39192657405）；
-⑤ 随后开启（北京 02:00）。
+**进度**：①—④ 均已完成。④ 于 2026-10-19 在 CI 上跑绿（`1 passed in 674.58s`，run 39192657405）；
+⑤ 曾于 2026-10-19 开启，**2026-10-28 按用户要求关闭**（恢复为只手动触发）。
 
 ---
 

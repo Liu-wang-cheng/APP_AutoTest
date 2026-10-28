@@ -3,8 +3,9 @@ name: 真机冒烟
 # 方案 C2(2026-10-16): 在**自建 runner**(那台连着模拟器/真机的机器)上跑一条真机用例,
 # 目的只有一个 —— 每天/每次改动后确认"APP + 机器人这条链路还通不通"。
 #
-# ★ 触发**故意只留手动和定时**, 没有 pull_request —— 本仓库是 public,
-#   自建 runner 一旦被 fork 的 PR 触发, 别人就能在你的机器上执行任意代码。
+# ★ 触发**故意只留手动**, 没有 pull_request / schedule —— 本仓库是 public,
+#   自建 runner 一旦被 fork 的 PR 触发, 别人就能在你的机器上执行任意代码;
+#   定时也按用户 2026-10-28 的要求关闭, 只在需要时手动跑。
 #   将来若要接 PR, 必须加: if: github.event.pull_request.head.repo.full_name == github.repository
 #
 # ★ 冒烟集(用户 2026-10-16 定): 三星 APP 的「全局清扫」。
@@ -31,13 +32,11 @@ on:
         description: APP 组目录名(精确, 留空=三星)
         required: false
         default: ''
-  # ★ 定时已开(2026-10-19): 当天手动冒烟在自建 runner 上跑绿
-  #   (`1 passed in 674.58s`, run 39192657405), 满足用户 2026-10-16 定的开启条件
-  #   "等冒烟测试验证通过了再开定时"。
-  #   cron 是 **UTC**: 18:00 UTC = 北京 02:00, 夜里没人用设备。
-  #   要停就把下面两行注释回去(改动会经 tests 里的守护测试复核)。
-  schedule:
-    - cron: '0 18 * * *'
+  # ★ 定时已关闭(用户 2026-10-28 要求): 只在 Actions 页手动触发, 不再每天
+  #   占用设备。要恢复就重新加回:
+  #     schedule:
+  #       - cron: '0 18 * * *'      # UTC 18:00 = 北京 02:00
+  #   改动会经 tests/test_ci_workflows.py 的守护测试复核。
 
 jobs:
   smoke:

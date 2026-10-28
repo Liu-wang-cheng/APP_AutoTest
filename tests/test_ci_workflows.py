@@ -101,7 +101,7 @@ def test_real_smoke_never_runs_on_fork_pull_requests():
     """★ 红线: 自建 runner + public 仓库 —— 真机 workflow **不能**被 PR 触发
 
     别人 fork 后发 PR 就能在你的机器上执行任意代码(跑的是他仓库里的 workflow 版本)。
-    所以触发只允许 workflow_dispatch / schedule; 万一日后要接 PR, 必须带
+    所以触发只允许 workflow_dispatch; 万一日后要接 PR, 必须带
     `if: github.event.pull_request.head.repo.full_name == github.repository`。
     """
     data, text = _load("real-smoke.yml")
@@ -109,11 +109,9 @@ def test_real_smoke_never_runs_on_fork_pull_requests():
     assert "pull_request" not in triggers, "真机 workflow 绝不能被 PR 触发(public 仓库 + 自建 runner)"
     assert "workflow_dispatch" in triggers, "至少要能手动触发"
     assert "self-hosted" in text and "realtest" in text, "要落在带 realtest 标签的自建 runner 上"
-    # 定时已开(2026-10-19 手动冒烟跑绿后, 满足用户"验证通过了再开定时"的条件)。
-    # 时段 = UTC 18:00 = 北京 02:00(用户选的夜里没人用设备的时段)。
-    schedule = triggers.get("schedule")
-    assert schedule, "冒烟已验证通过, 定时应当开着(见 workflow 顶部说明)"
-    assert schedule[0]["cron"] == "0 18 * * *", "cron 必须是北京 02:00 对应的 UTC 18:00"
+    # 定时已关闭(用户 2026-10-28 要求): 只在需要时手动跑, 不再每天占用设备。
+    # 要恢复定时时, 同步改这条守护和 workflow 顶部说明。
+    assert "schedule" not in triggers, "定时真机冒烟已取消, 不应再出现 schedule 触发"
 
 
 def test_real_smoke_probes_device_and_uploads_scene():
