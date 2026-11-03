@@ -78,15 +78,15 @@ def _make_field_widget(field, value, steps=None, exclude_index=None,
             options.append((f"step:{i + 1}", f"步骤{i + 1}: {desc}"))
             # ★ 子步骤(用户 2026-10-14): then/else 里点过/截过图的也算 ——
             #   值用 shot:<描述>, 执行端按结果表描述匹配(忽略分支前缀)
-            for branch in ("then", "else"):
+            for branch in ("then", "else", "do"):
                 for j, sub in enumerate(st.get(branch) or []):
                     if not (sub.get("screenshot") or
                             reg.is_click_action(reg.primary_action_key(sub))):
                         continue
                     sub_desc = sub.get("desc") or "(无描述)"
-                    mark = "成立" if branch == "then" else "不成立"
+                    mark = {"then": "成立", "else": "不成立", "do": "循环体"}[branch]
                     options.append((f"shot:{sub_desc}",
-                                    f"↳ 步骤{i + 1}[条件{mark}]子{j + 1}: {sub_desc}"))
+                                    f"↳ 步骤{i + 1}[{mark}]子{j + 1}: {sub_desc}"))
         # ★ 前置项截图(用户 2026-10-14): 前置先于用例执行, 是很常用的对比基准
         for pre in preconditions or []:
             if not pre.get("enabled", True):
@@ -239,10 +239,13 @@ class StepCard(QFrame):
         #   区分吗")。then 全在前、else 全在后地缩进连排, 光看序号分不清第几张是 else 的第一
         #   步; 这里补一个徽标, 与执行结果里的 `[条件成立]`/`[条件不成立]` 前缀对得上。
         if self.is_sub:
-            badge = QLabel("▸then" if self.branch == "then" else "▸else")
+            _badge = {"then": ("▸then", "条件成立时执行的子步骤"),
+                      "else": ("▸else", "条件不成立时执行的子步骤"),
+                      "do": ("▸循环体", "循环每轮执行的子步骤")}
+            text, tip = _badge.get(self.branch, (f"▸{self.branch}", ""))
+            badge = QLabel(text)
             badge.setObjectName("branchBadge")
-            badge.setToolTip("条件成立时执行的子步骤" if self.branch == "then"
-                             else "条件不成立时执行的子步骤")
+            badge.setToolTip(tip)
             head.addWidget(badge)
 
         action = self.main._find_action(self.step)
@@ -379,8 +382,26 @@ class StepCard(QFrame):
         # if / if not: then / else 两个分支的子步骤管理区(子卡片在 render_cards 里紧随其后渲染)
         if action and action["key"] in ("if", "if not"):
             self._build_branch_sections(fv)
+        # for / while: 循环体 `do`(与 then/else 共用同一套子卡片机制)
+        if action and action["key"] in ("for", "while"):
+            self._build_loop_section(fv)
 
         lay.addWidget(form)
+
+    def _build_loop_section(self, fv):
+        """循环体(`do`)的子步骤管理区 —— 子卡片在 render_cards 里缩进紧随其后。"""
+        row = QHBoxLayout()
+        lbl = QLabel("循环体(每轮执行, 子步骤见下方缩进卡片)")
+        lbl.setObjectName("fieldLabel")
+        row.addWidget(lbl)
+        add_btn = QPushButton("＋ 子步骤")
+        add_btn.setObjectName("chipBtn")
+        add_btn.setToolTip("给循环体加一条子步骤")
+        add_btn.setMenu(make_action_menu(
+            add_btn, lambda k: self.main.add_sub(self.index, k, "do")))
+        row.addWidget(add_btn)
+        row.addStretch()
+        fv.addLayout(row)
 
     def _build_branch_sections(self, fv):
         """条件成立(then) / 不成立(else) 两个分支各一组子步骤(子步骤见下方缩进卡片)。
@@ -732,7 +753,7 @@ class _StepsEditor(QWidget):
             ek = self.host.expanded_key
             step = self.host.steps[i]
             if ek and ek[0] == i:
-                for branch in ("then", "else"):        # 两个分支的子卡片都要渲染
+                for branch in ("then", "else", "do"):   # 三个分支的子卡片都要渲染
                     subs = step.get(branch)
                     if not isinstance(subs, list):
                         continue

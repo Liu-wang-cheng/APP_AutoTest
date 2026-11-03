@@ -385,6 +385,17 @@ def extract_value(runner, nodes, kw):
     记录详情),空间法逐个尝试,某个失败不影响后面的 —— 2026-09-16 记录页
     实测:第一个标签因转场动画错位,数据其实在详情页的另一个'面积'节点旁。
     """
+    # ★ 电量/电池(2026-11-03): 下面的空间法与下标法都**显式跳过带 `%` 的文本**
+    #   (防止把湿度/进度当成面积/时间), 所以 `if: 电量 > 50` 在这条路上永远读不到。
+    #   电量改用与前置/断言同一套读取(树优先 + OCR 兜底), 同时排除手机状态栏。
+    if "电量" in str(kw) or "电池" in str(kw):
+        from core.session import get_battery_level
+        if runner is None or not hasattr(runner, "d"):
+            raise ValueError("没有设备连接, 读不到电量")
+        val = get_battery_level(runner.d)
+        if val is None or val < 0:
+            raise ValueError("读不到电量")
+        return str(val)
     texts = [t for t, _ in nodes]
     # 面积/时间 对应的单位关键词
     unit_map = {

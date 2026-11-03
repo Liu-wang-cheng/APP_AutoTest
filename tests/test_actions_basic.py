@@ -1062,6 +1062,123 @@ def test_branch_substeps_are_labelled_in_results(runner):
         runner._pending_sub_results
 
 
+# ── for / while 循环(用户 2026-11-03) ────────────────────────────────────
+
+def test_for_loop_exits_immediately_when_condition_met(runner):
+    """for: 条件一开始就成立 → 0 轮, 循环体不执行"""
+    runner._execute({"for": "确认",
+                     "do": [{"desc": "不该执行", "click": [10, 20]}]})
+    assert runner.d.clicked_at is None
+
+
+def test_while_loop_exits_immediately_when_condition_fails(runner):
+    """while: 条件一开始就不成立 → 0 轮"""
+    runner._execute({"while": "不存在的文本",
+                     "do": [{"desc": "不该执行", "click": [10, 20]}]})
+    assert runner.d.clicked_at is None
+
+
+def test_for_loop_runs_body_until_battery_condition_met(runner, monkeypatch):
+    """for: 电量未达标时循环执行循环体, 达标后退出; 子步骤带 [第N次] 前缀。
+
+    ★ 电量条件走 session.get_battery_level(extract_value 的电量特判) —— 用例:
+      第一轮 50(≥20 继续循环), 第二轮 15(<20 退出)。
+    """
+    import core.session as session
+    readings = iter([50, 15])
+    monkeypatch.setattr(session, "get_battery_level", lambda d: next(readings))
+    runner._execute({"for": "电量 < 20",
+                     "do": [{"desc": "点开始清扫", "click": [10, 10]}]})
+    assert runner.d.clicked_at == (10, 10)
+    descs = [r["desc"] for r in runner._pending_sub_results]
+    assert descs == ["[第1次] 点开始清扫"], descs
+
+
+def test_while_loop_runs_body_while_condition_holds(runner, monkeypatch):
+    """while: 条件成立就循环, 不成立退出(与 for 语义相反)。"""
+    import core.session as session
+    readings = iter([80, 79, 20])             # 第三次判定 20 → 不满足 → 退出
+    monkeypatch.setattr(session, "get_battery_level", lambda d: next(readings))
+    runner._execute({"while": "电量 > 30",
+                     "do": [{"desc": "继续等", "click": [5, 5]}]})
+    assert runner.d.clicked_at == (5, 5)
+    descs = [r["desc"] for r in runner._pending_sub_results]
+    assert descs == ["[第1次] 继续等", "[第2次] 继续等"], descs
+
+
+def test_loop_max_loops_exceeded_fails(runner):
+    """到最大次数仍未结束 → 抛错(该步 FAIL), 循环体已执行的轮数留痕。"""
+    with pytest.raises(RuntimeError, match="已循环 3 次"):
+        runner._execute({"for": "不存在的文本",
+                         "max_loops": 3,
+                         "do": [{"desc": "轮次", "click": [1, 1]}]})
+    descs = [r["desc"] for r in runner._pending_sub_results]
+    assert descs == ["[第1次] 轮次", "[第2次] 轮次", "[第3次] 轮次"], descs
+
+
+def test_loop_body_failure_propagates(runner):
+    """循环体里某一步失败 → 立即抛出, 失败子行已入列表。"""
+    with pytest.raises(AssertionError):
+        runner._execute({"for": "不存在的文本",
+                         "do": [{"desc": "会失败", "click": "不存在的按钮"}]})
+    assert runner._pending_sub_results and \
+        runner._pending_sub_results[0]["passed"] is False
+
+
+def test_loop_empty_body_does_not_busy_loop(runner):
+    """空循环体 = 等条件: 条件成立即退出, 不报错也不死循环。"""
+    runner._execute({"for": "确认", "max_loops": 5})
+
+
+def test_loop_condition_evaluated_once_per_round(runner, monkeypatch):
+    """★ 条件每轮只判一次(checks=1) —— 若复用 if 的 10 次轮询, 一轮就要几十秒。"""
+    import core.session as session
+    calls = {"n": 0}
+
+    def fake_batt(_d):
+        calls["n"] += 1
+        return 10                     # < 20 恒成立 → for 第一轮即退出
+    monkeypatch.setattr(session, "get_battery_level", fake_batt)
+    runner._execute({"for": "电量 < 20"})
+    assert calls["n"] == 1, calls
+
+
+def test_loop_nested_if_keeps_prior_iterations_results(runner):
+    """★ 回归守护: 循环里嵌 if 时, 前面几轮的子结果不得被 if 的重置弄丢。
+
+    循环体 = [if(成立→点A)] —— 共 2 轮: 每轮产生 1 条 [第N次] 子行。
+    若容器深度没做好, 第 2 轮的 if 会重置攒账列表, 第 1 轮的行就丢了。
+    条件恒不成立 → 跑满 max_loops=2 后按设计抛错。
+    """
+    with pytest.raises(RuntimeError, match="已循环 2 次"):
+        runner._execute({"for": "不存在的文本", "max_loops": 2,
+                         "do": [{"desc": "分支", "if": "确认",
+                                 "then": [{"desc": "点A", "click": [7, 7]}]}]})
+    descs = [r["desc"] for r in runner._pending_sub_results]
+    # 外层带循环轮次标签, 内层 if 的子行带它自己的分支标签(两层标签自然组合)
+    assert descs == ["[第1次] 分支", "[条件成立] 点A",
+                     "[第2次] 分支", "[条件成立] 点A"], descs
+    assert runner.d.clicked_at == (7, 7)
+
+
+def test_extract_value_battery_reads_from_device(monkeypatch):
+    """电量/电池关键字直接读设备(树+OCR), 不走页面节点 —— extract_value 原本
+    会跳过带 % 的文本, `电量 > 50` 在旧实现里永远读不到。"""
+    import core.session as session
+    from core.actions import data_ops
+
+    class R:
+        d = object()
+
+    monkeypatch.setattr(session, "get_battery_level", lambda d: 43)
+    assert data_ops.extract_value(R(), [], "电量") == "43"
+    assert data_ops.extract_value(R(), [], "电池") == "43"
+
+    monkeypatch.setattr(session, "get_battery_level", lambda d: -1)
+    with pytest.raises(ValueError, match="读不到电量"):
+        data_ops.extract_value(R(), [], "电量")
+
+
 def test_sleep_log_shows_integer_seconds_without_dot_zero(caplog):
     """★ 用户 2026-10-16: "延迟等待这里为何还是5.0的秒数显示" —— 日志里那句
     「等待结束(实际 5.0 秒)」在小数位为 0 时要写成 5 秒(5.3 秒这种真小数照旧)。

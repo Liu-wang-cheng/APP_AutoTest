@@ -1,0 +1,192 @@
+# -*- coding: utf-8 -*-
+"""电量监测: 运行期间按固定间隔采样电量, 统计「每下降 N% 用了多久」。
+
+★ 设计(用户 2026-11-03 确认):
+  · 运行条勾选后启动, 从本轮第一条用例开始采样, 整轮结束/手动停止时停止;
+  · 独立线程, **共用执行线程的 uiautomator2 设备对象** —— 不新建连接, 避免与点击/
+    截图抢资源; 设备端请求本就是串行处理, 采样时最多让一次操作多等几百毫秒;
+  · 报告在原有 Excel 里新增一页「电量监测」, 同一页分**汇总**与**详细**两段。
+
+★ 这个模块只负责「采样 + 纯统计」, 不 import PySide6 / openpyxl —— 纯函数可直接单测。
+  报告排版在 core/excel_report.py。
+"""
+import threading
+import time
+from dataclasses import dataclass
+
+
+@dataclass
+class BatterySample:
+    """一次采样。battery = -1 表示这一轮读不到(页面没展示电量/设备抖动)。"""
+    t: float                       # 相对监测开始的时间(秒)
+    battery: int                   # 机器人电量百分比; -1 = 读不到
+    label: str = ""                # 当时的「用例名(第N次)」
+
+
+def format_mmss(seconds):
+    """秒 → "分:秒"(两位秒); 无效值给 "--:--"。"""
+    try:
+        s = float(seconds)
+    except (TypeError, ValueError):
+        return "--:--"
+    if s < 0:
+        return "--:--"
+    s = int(round(s))
+    return f"{s // 60:02d}:{s % 60:02d}"
+
+
+def _valid(samples):
+    return [s for s in samples if getattr(s, "battery", -1) >= 0]
+
+
+def build_points(samples, step_pct=5):
+    """原始变化点 + N% 里程碑。
+
+    返回 dict:
+      valid / invalid: 有效/无效采样数
+      start_battery / end_battery: 首/末有效电量(没有有效样本时 None)
+      raw:       [{"t","battery","label","delta","dt"}]  —— 每次电量实际变化一行
+      milestones:[{"t","battery","label","target","dt"}] —— 每降 N% 一行
+
+    ★ 里程碑锚点 = **相对监测起点的累计下降量**(起点 87%、N=5 → 82/77/…)，
+      起点不是整十也不影响。
+    ★ 一次采样跨过多个阈值时只记一行(实际电量 + 跨过的目标)，下一锚点从实际电量
+      重算 —— 否则会出现好几条 dt=0 的噪声行。
+    """
+    step = max(1, int(step_pct or 1))
+    vals = _valid(samples)
+    out = {"valid": len(vals), "invalid": len(samples) - len(vals),
+           "start_battery": None, "end_battery": None,
+           "raw": [], "milestones": []}
+    if not vals:
+        return out
+
+    out["start_battery"] = vals[0].battery
+    out["end_battery"] = vals[-1].battery
+
+    prev = vals[0]
+    for s in vals[1:]:
+        if s.battery != prev.battery:
+            out["raw"].append({
+                "t": s.t, "battery": s.battery, "label": s.label,
+                "delta": s.battery - prev.battery, "dt": max(0.0, s.t - prev.t),
+            })
+            prev = s
+
+    start = vals[0]
+    next_thr = start.battery - step
+    prev_t = start.t
+    for s in vals[1:]:
+        if s.battery <= next_thr:
+            out["milestones"].append({
+                "t": s.t, "battery": s.battery, "label": s.label,
+                "target": next_thr, "dt": max(0.0, s.t - prev_t),
+            })
+            prev_t = s.t
+            next_thr = s.battery - step
+    return out
+
+
+def build_summary(samples, step_pct=5):
+    """汇总: 全局指标 + 按「用例/轮次」分段。
+
+    average_per_1pct: 只在**确实有下降**时给值, 充电(电量上升)时为 None。
+    """
+    pts = build_points(samples, step_pct)
+    vals = _valid(samples)
+    out = {
+        "valid": pts["valid"], "invalid": pts["invalid"],
+        "start_battery": pts["start_battery"], "end_battery": pts["end_battery"],
+        "total_seconds": 0.0, "total_drop": 0,
+        "average_per_1pct": None, "milestone_average": None,
+        "cases": [],
+    }
+    if not vals:
+        return out
+    out["total_seconds"] = max(0.0, vals[-1].t - vals[0].t)
+    out["total_drop"] = (pts["start_battery"] or 0) - (pts["end_battery"] or 0)
+    if out["total_drop"] > 0:
+        out["average_per_1pct"] = out["total_seconds"] / out["total_drop"]
+    dts = [m["dt"] for m in pts["milestones"]]
+    if dts:
+        out["milestone_average"] = sum(dts) / len(dts)
+
+    # 按 label 的连续出现分组(同一标签即一次执行; 重复轮次标签带"第N次", 天然唯一)
+    groups = []
+    for s in vals:
+        if not groups or groups[-1][0] != s.label:
+            groups.append((s.label, [s]))
+        else:
+            groups[-1][1].append(s)
+    for label, items in groups:
+        first, last = items[0], items[-1]
+        drop = first.battery - last.battery
+        secs = max(0.0, last.t - first.t)
+        out["cases"].append({
+            "label": label,
+            "start_battery": first.battery,
+            "end_battery": last.battery,
+            "drop": drop,
+            "seconds": secs,
+            "average_per_1pct": (secs / drop) if drop > 0 else None,
+        })
+    return out
+
+
+def _default_reader(device):
+    """默认电量读取: 复用前置/断言同一套实现(树优先 + OCR 兜底)。"""
+    from core import session
+    return session.get_battery_level(device)
+
+
+class BatteryMonitor(threading.Thread):
+    """后台采样线程: 启动立即采一次, 之后每 interval 秒一次。
+
+    ★ 共用执行线程的设备对象(用户确认): 不新建 uiautomator2 连接。
+    ★ stop() 幂等且带 join 超时 —— 停止/异常路径都不能留下僵尸线程。
+    """
+
+    def __init__(self, device, interval=60.0, label_getter=None, reader=None):
+        super().__init__(daemon=True, name="battery-monitor")
+        self.device = device
+        self.interval = max(1.0, float(interval or 60.0))
+        self._label_getter = label_getter or (lambda: "")
+        self._reader = reader or _default_reader
+        self.samples = []
+        self._stop_event = threading.Event()
+        self._t0 = None
+        self._joined = False
+
+    def _label(self):
+        try:
+            return str(self._label_getter() or "")
+        except Exception:
+            return ""
+
+    def _sample_once(self):
+        try:
+            battery = int(self._reader(self.device))
+        except Exception:
+            battery = -1
+        self.samples.append(BatterySample(
+            t=max(0.0, time.monotonic() - self._t0) if self._t0 else 0.0,
+            battery=battery, label=self._label()))
+
+    def run(self):
+        self._sample_once()
+        while not self._stop_event.wait(self.interval):
+            self._sample_once()
+
+    def start(self):
+        self._t0 = time.monotonic()
+        super().start()
+
+    def stop(self, timeout=5.0):
+        """停止采样并等待线程退出; 可重复调用。"""
+        self._stop_event.set()
+        if self.is_alive() and not self._joined:
+            try:
+                self.join(timeout)
+            except RuntimeError:
+                pass
+            self._joined = True

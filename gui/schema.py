@@ -222,6 +222,25 @@ ACTIONS = [
          "hint": "同「条件满足则跳过」,判断结果取反"},
     ], "tip": "条件**取反后成立**时执行 then 子步骤(没配 then 就跳过本步); 不成立时执行 "
             "else 子步骤。展开卡片后在下方分别添加/编辑"},
+    # ★ 循环(用户 2026-11-03): 两个动作语义相反, 共用同一套条件语法与循环体 `do`
+    {"key": "for", "label": "循环直到条件满足", "category": "流程控制", "fields": [
+        {"key": "for", "label": "条件", "type": "text", "required": True,
+         "hint": "与 if 相同: 文本 / 电量>20 / 图片名 / resource-id"},
+        {"key": "max_loops", "label": "最大次数", "type": "int", "default": 100,
+         "hint": "达到次数仍不满足则本步失败; 默认 100"},
+        {"key": "loop_wait", "label": "每次间隔(秒)", "type": "int", "default": 0,
+         "hint": "两轮循环之间等待; 循环体为空时默认 5 秒"},
+    ], "tip": "循环体写在 do 里(展开卡片后在下方添加子步骤)。每轮先判条件, "
+            "**成立就结束循环**; 不成立则执行循环体。"},
+    {"key": "while", "label": "条件满足时循环", "category": "流程控制", "fields": [
+        {"key": "while", "label": "条件", "type": "text", "required": True,
+         "hint": "与 if 相同: 文本 / 电量>20 / 图片名 / resource-id"},
+        {"key": "max_loops", "label": "最大次数", "type": "int", "default": 100,
+         "hint": "达到次数仍满足则本步失败; 默认 100"},
+        {"key": "loop_wait", "label": "每次间隔(秒)", "type": "int", "default": 0,
+         "hint": "两轮循环之间等待; 循环体为空时默认 5 秒"},
+    ], "tip": "循环体写在 do 里(展开卡片后在下方添加子步骤)。每轮先判条件, "
+            "**不成立就结束循环**; 成立则执行循环体。"},
 ]
 
 ACTION_BY_KEY = {a["key"]: a for a in ACTIONS}
@@ -290,8 +309,8 @@ def serialize_step(step):
                 continue
             out[k] = v
             continue
-        # 子步骤列表(条件成立 then / 不成立 else)递归清理(必须在 int4 分支前)
-        if k in ("then", "else") and isinstance(v, list):
+        # 子步骤列表(条件成立 then / 不成立 else / 循环体 do)递归清理
+        if k in ("then", "else", "do") and isinstance(v, list):
             out[k] = [serialize_step(s) for s in v]
             continue
         if isinstance(v, list):  # int4
@@ -340,7 +359,8 @@ def validate_step(step):
             errors.append(f"「{f['label']}」必填")
     if errors and action.get("tip"):
         errors.append(action["tip"])
-    for branch, label in (("then", "then子步骤"), ("else", "else子步骤")):
+    for branch, label in (("then", "then子步骤"), ("else", "else子步骤"),
+                          ("do", "do子步骤")):
         for i, sub in enumerate(step.get(branch) or []):
             if isinstance(sub, dict):
                 for err in validate_step(sub):
@@ -394,10 +414,11 @@ def step_summary(step):
     else:
         main = detail
     badges = []
-    for branch in ("then", "else"):
+    for branch in ("then", "else", "do"):
         items = step.get(branch)
         if isinstance(items, list) and items:
-            badges.append(f"▸{branch} {len(items)}步")
+            name = {"then": "▸then", "else": "▸else", "do": "▸循环体"}[branch]
+            badges.append(f"{name} {len(items)}步")
     if step.get("screenshot"):
         badges.append("📷")
     if step.get("wait"):

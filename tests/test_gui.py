@@ -4673,6 +4673,60 @@ def test_case_list_header_has_no_delete_button(win_with_cases):
     assert "删除用例" in labels, labels      # 右键删除保留
 
 
+def test_loop_step_do_branch_and_battery_widgets(win_with_cases):
+    """★ for/while 循环体(do)与电量监测控件(用户 2026-11-03)。
+
+    · do 与 then/else 共用子卡片机制, 徽标显示「▸循环体」;
+    · 电量监测未勾选 → RunWorker 配置 None; 勾选后带步长与间隔。
+    """
+    from PySide6.QtWidgets import QLabel
+    from gui.step_card import StepCard
+
+    win = win_with_cases
+    # ── 电量监测控件 ──
+    win.batt_monitor_chk.setChecked(False)
+    assert win._battery_monitor_config() is None
+    win.batt_monitor_chk.setChecked(True)
+    win.batt_step_spin.setValue(3)
+    win.batt_interval_spin.setValue(30)
+    assert win._battery_monitor_config() == {"enabled": True, "step_pct": 3,
+                                             "interval": 30}
+    win.batt_monitor_chk.setChecked(False)
+
+    # ── 循环体子步骤 ──
+    win.steps.append({"desc": "循环清扫", "for": "电量 < 20",
+                      "max_loops": 100, "loop_wait": 0})
+    win.add_sub(len(win.steps) - 1, "click", "do")
+    assert win.steps[-1].get("do"), win.steps[-1]
+    assert isinstance(win.expanded_key, tuple) and win.expanded_key[2] == 0
+    texts = [lb.text() for lb in win.findChildren(QLabel)]
+    assert "▸循环体" in texts, texts
+    cards = [c for c in win.findChildren(StepCard)
+             if c.is_sub and c.branch == "do"]
+    assert cards, "do 子卡片没有渲染"
+
+
+def test_runworker_finish_battery_adds_report_page(tmp_path, qapp):
+    """RunWorker 收尾: 停监测线程 + 报告加「电量监测」页(幂等)。"""
+    from gui import runner_thread as rt
+    from core.excel_report import ExcelReport
+    from core.battery_monitor import BatteryMonitor, BatterySample
+
+    w = rt.RunWorker("fake-dev", [], [], 1,
+                     battery_cfg={"enabled": True, "step_pct": 5, "interval": 10})
+    m = BatteryMonitor(device=None, interval=0.05, reader=lambda d: 50)
+    m.samples = [BatterySample(t=0, battery=80, label="用例A(第1次)"),
+                 BatterySample(t=10, battery=75, label="用例A(第1次)")]
+    w.batt_monitor = m
+    report = ExcelReport(path=tmp_path / "r.xlsx")
+    w._finish_battery(report)
+    assert w.batt_monitor is None, "收尾后不得再持有监测线程"
+    assert not m.is_alive()
+    assert "电量监测" in report.wb.sheetnames
+    w._finish_battery(report)          # 异常路径再调一次: 幂等, 不建第二页
+    assert report.wb.sheetnames.count("电量监测") == 1
+
+
 def test_paste_and_rename_refuse_during_run(win_with_cases):
     from gui import main_window as mw
 

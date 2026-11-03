@@ -155,6 +155,7 @@ class ActionRunner:
         self.on_pause_state = None
         self._sub_seq = 0        # 子步骤行序号(界面按它在原地更新嵌套容器的行)
         self._if_depth = 0       # if 嵌套深度: 只有**最外层** if 结束后统一落账
+        self._loop_depth = 0     # for/while 嵌套深度(与 _if_depth 共用攒账闸门)
         self.router = VisionRouter(config)
         self._locators = self._load_locators()
         # 执行过程中动态写入的状态,集中在此初始化

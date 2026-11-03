@@ -15,8 +15,8 @@ import yaml
 from PySide6.QtCore import QSettings, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QAction, QColor, QIcon, QIntValidator, QPixmap
 from PySide6.QtWidgets import (
-    QAbstractItemView, QApplication, QComboBox, QDialog, QFileDialog, QFrame,
-    QHBoxLayout, QHeaderView, QLabel, QLineEdit, QListWidgetItem,
+    QAbstractItemView, QApplication, QCheckBox, QComboBox, QDialog, QFileDialog,
+    QFrame, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QListWidgetItem,
     QMainWindow, QMenu, QMessageBox, QPlainTextEdit, QPushButton, QScrollArea,
     QSizePolicy, QSpinBox, QSplitter, QTabWidget, QTableWidget, QTableWidgetItem,
     QVBoxLayout, QWidget,
@@ -495,6 +495,28 @@ class MainWindow(CaseFileMixin, QMainWindow):
         self.repeat_spin.setToolTip("勾选用例队列重复的轮数")
         lay.addWidget(self.repeat_spin)
 
+        # ── 电量监测(用户 2026-11-03): 勾选后整轮后台采样, 报告多一页「电量监测」──
+        self.batt_monitor_chk = QCheckBox("电量监测")
+        self.batt_monitor_chk.setToolTip(
+            "勾选后从本轮第一条用例开始后台采样电量, 报告新增一页「电量监测」\n"
+            "(汇总 + 详细: 每 1% 变化与每 N% 里程碑的用时)")
+        lay.addWidget(self.batt_monitor_chk)
+        self.batt_step_spin = QSpinBox()
+        self.batt_step_spin.setRange(1, 50)
+        self.batt_step_spin.setValue(5)
+        self.batt_step_spin.setSuffix("%")
+        self.batt_step_spin.setFixedWidth(64)
+        self.batt_step_spin.setToolTip("里程碑步长: 每下降 N% 记一段用时")
+        lay.addWidget(self.batt_step_spin)
+        self.batt_interval_spin = QSpinBox()
+        self.batt_interval_spin.setRange(5, 3600)
+        self.batt_interval_spin.setValue(60)
+        self.batt_interval_spin.setSuffix("s")
+        self.batt_interval_spin.setFixedWidth(76)
+        self.batt_interval_spin.setToolTip("采样间隔(秒)")
+        lay.addWidget(self.batt_interval_spin)
+        self._load_battery_monitor_settings()
+
         self.run_btn = QPushButton("▶ 运行")
         self.run_btn.setObjectName("runBtn")
         self.run_btn.clicked.connect(self.on_run)
@@ -907,6 +929,37 @@ class MainWindow(CaseFileMixin, QMainWindow):
             new_text = "".join(lines)
         with open(path, "w", encoding="utf-8", newline="") as f:
             f.write(new_text)
+
+    def _load_battery_monitor_settings(self):
+        """恢复上次的电量监测勾选与参数(用户 2026-11-03)。"""
+        try:
+            st = QSettings("vacuum_test", "case_studio")
+            self.batt_monitor_chk.setChecked(
+                str(st.value("batt_monitor/enabled", "false")).lower() == "true")
+            self.batt_step_spin.setValue(
+                max(1, int(st.value("batt_monitor/step", 5))))
+            self.batt_interval_spin.setValue(
+                max(5, int(st.value("batt_monitor/interval", 60))))
+        except Exception:
+            pass
+
+    def _save_battery_monitor_settings(self):
+        try:
+            st = QSettings("vacuum_test", "case_studio")
+            st.setValue("batt_monitor/enabled",
+                        "true" if self.batt_monitor_chk.isChecked() else "false")
+            st.setValue("batt_monitor/step", self.batt_step_spin.value())
+            st.setValue("batt_monitor/interval", self.batt_interval_spin.value())
+        except Exception:
+            pass
+
+    def _battery_monitor_config(self):
+        """传给 RunWorker 的电量监测配置; 未勾选返回 None。"""
+        if not self.batt_monitor_chk.isChecked():
+            return None
+        return {"enabled": True,
+                "step_pct": self.batt_step_spin.value(),
+                "interval": self.batt_interval_spin.value()}
 
     def _load_expanded_groups(self):
         """读回上次**展开**过的组名(用户要求: 折叠状态跨启动保持原状)。
@@ -1913,10 +1966,10 @@ class MainWindow(CaseFileMixin, QMainWindow):
         for i in range(len(self.steps)):
             step = self.steps[i]
             self.cards_lay.insertWidget(self.cards_lay.count() - 1, StepCard(self, i))
-            # 父卡片(或其子步骤)展开时, then/else 两个分支的子步骤都以缩进子卡片紧随其后
+            # 父卡片(或其子步骤)展开时, then/else/循环体 的子步骤都以缩进子卡片紧随其后
             ek = self.expanded_key
             if ek and ek[0] == i:
-                for branch in ("then", "else"):
+                for branch in ("then", "else", "do"):
                     subs = step.get(branch)
                     if not isinstance(subs, list):
                         continue
@@ -2244,6 +2297,8 @@ class MainWindow(CaseFileMixin, QMainWindow):
         widgets = [self.new_btn, self.open_btn, self.save_btn, self.add_btn,
                    self.case_name_edit, self.priority_combo,
                    self.case_wait_edit, self.case_combo,
+                   self.batt_monitor_chk, self.batt_step_spin,
+                   self.batt_interval_spin,
                    self.yaml_refresh_btn, self.yaml_apply_btn,
                    # 用例执行期间「检查更新」置灰: 变了也没法立刻重启安装,
                    # 点它只会得到一个"请等本轮跑完"的提示 —— 不如直接禁用
@@ -2536,7 +2591,9 @@ class MainWindow(CaseFileMixin, QMainWindow):
         #   Python 包装 —— C++ 对象归窗口所有, 析构永远在 run() 返回之后, "线程还
         #   活着就被析构"的 qFatal 闪退从根上不再可能(退休机制因此整体删除)。
         self.worker = RunWorker(device_id, case_files, pre_items, repeat,
-                                parent=self, pre_by_group=pre_by_group)
+                                parent=self, pre_by_group=pre_by_group,
+                                battery_cfg=self._battery_monitor_config())
+        self._save_battery_monitor_settings()   # 记住这次的勾选与参数
         self.worker.finished.connect(self.worker.deleteLater)
         self.worker.step_done.connect(self.on_step_done)
         # ★ 步骤开始就插一行「执行中」, 跑完再就地改成通过/失败(用户要求 2026-10-12)

@@ -11,7 +11,7 @@ MUST = {"click", "click_template", "assert", "input", "latest_record", "find_cli
         "back", "long_click", "switch_to", "assert_switch", "add_timer", "swipe",
         "room_zones", "room_click", "merge_zones", "split_zone", "if_click",
         "compare", "set_time", "wait_loading", "wait_for", "diff",
-        "grab", "match", "spot_clean", "sleep"}
+        "grab", "match", "spot_clean", "sleep", "for", "while"}
 GENERIC = {"desc", "screenshot", "wait", "timeout", "retry"}
 
 
@@ -94,6 +94,28 @@ def test_validate_else_recursive():
     s = {"if": "x", "else": [{"desc": "坏的子步骤", "click": ""}]}
     errs = schema.validate_step(s)
     assert any("else子步骤1" in e for e in errs)
+
+
+def test_serialize_do_recursive_and_new_step_defaults():
+    """for/while: do 循环体递归序列化; 新建步骤带默认 最大次数 100。"""
+    s = schema.new_step("for")
+    s["for"] = "电量 < 20"
+    s["do"] = [{"desc": "子步骤", "click": " 确认 ", "timeout": None}]
+    out = schema.serialize_step(s)
+    assert out["max_loops"] == 100                 # 默认最大次数
+    assert out["do"][0]["click"] == "确认"
+    assert "timeout" not in out["do"][0]
+    assert schema.validate_step(out) == []
+
+    # 校验递归到 do 子步骤(与 then/else 同一套)
+    bad = {"for": "x", "do": [{"desc": "坏的", "click": ""}]}
+    assert any("do子步骤1" in e for e in schema.validate_step(bad))
+
+
+def test_step_summary_do_badge():
+    s = {"desc": "循环", "for": "电量 < 20", "do": [{"click": "a"}, {"click": "b"}]}
+    txt = schema.step_summary(s)
+    assert "▸循环体 2步" in txt
 
 
 def test_step_summary_badges():

@@ -69,10 +69,13 @@ class RunWorker(QThread):
     step_paused = Signal(bool)         # 步骤暂停/恢复(True=暂停中) → 结果表标「⏸ 暂停中」
 
     def __init__(self, device_id, case_files, preconditions, repeat=1, parent=None,
-                 pre_by_group=None, device_name=""):
+                 pre_by_group=None, device_name="", battery_cfg=None):
         super().__init__(parent)
         self.device_id = device_id
         self.case_files = case_files       # list: yaml 路径
+        # 电量监测配置(用户 2026-11-03): {"enabled","step_pct","interval"} 或 None
+        self.battery_cfg = battery_cfg or None
+        self.batt_monitor = None           # BatteryMonitor(运行期间)
         # 前置项列表 [{type, enabled, ...参数}](旧版传 dict 时自动转换, 兼容)
         if isinstance(preconditions, dict):
             preconditions = [{"type": k, "enabled": bool(v)}
@@ -96,6 +99,46 @@ class RunWorker(QThread):
         self._stop_requested = True
         if self.runner:
             self.runner.stop()
+        if self.batt_monitor:
+            self.batt_monitor.stop()
+
+    # ── 电量监测(用户 2026-11-03) ────────────────────────────────────────
+    def _start_battery_monitor(self, d):
+        """勾选了电量监测时启动后台采样线程(共用执行线程的设备对象)。"""
+        cfg = self.battery_cfg or {}
+        if not cfg.get("enabled"):
+            return
+        try:
+            from core.battery_monitor import BatteryMonitor
+            self.batt_monitor = BatteryMonitor(
+                d, interval=cfg.get("interval", 60),
+                label_getter=lambda: self._exec_label)
+            self.batt_monitor.start()
+            self.status.emit(f"[电量监测] 已启动(步长 {cfg.get('step_pct', 5)}%, "
+                             f"间隔 {cfg.get('interval', 60)} 秒)")
+        except Exception as e:
+            log.warning(f"[电量监测] 启动失败(不影响执行): {type(e).__name__}: {e}")
+            self.batt_monitor = None
+
+    def _finish_battery(self, report):
+        """停止采样线程并尽力把「电量监测」页写进报告(失败不影响主流程)。"""
+        m = self.batt_monitor
+        if m is None:
+            return
+        self.batt_monitor = None          # 防重复(异常路径 finally 也会调)
+        try:
+            m.stop()
+        except Exception:
+            pass
+        if report is None:
+            return
+        try:
+            cfg = self.battery_cfg or {}
+            report.add_battery_report(m.samples, cfg.get("step_pct", 5),
+                                      cfg.get("interval"))
+        except Exception as e:
+            log.warning(f"[电量监测] 报告页写入失败(不影响执行): "
+                        f"{type(e).__name__}: {e}")
 
     # ── 暂停/继续(用户 2026-10-13) ──
     def request_pause(self):
@@ -230,6 +273,7 @@ class RunWorker(QThread):
             import uiautomator2 as u2
             d = u2.connect(self.device_id)
             d.implicitly_wait(10)
+            self._start_battery_monitor(d)
             if self._stop_requested:
                 # ★ 统一消息(审查 2026-10-12): 界面按"消息 == 已手动停止"识别中性停止,
                 #   两种写法会让其中一种被渲染成红色"未通过"
@@ -443,6 +487,7 @@ class RunWorker(QThread):
                     except Exception:
                         pass
 
+            self._finish_battery(report)      # 电量监测页(在正常 save 之前)
             report.save()
             report_saved = True
             self.status.emit(f"报告已生成: {report.path}")
@@ -458,6 +503,8 @@ class RunWorker(QThread):
             self.log_line.emit(f"[异常] {type(e).__name__}: {e}")
             self.finished_run.emit(False, f"执行异常: {e}")
         finally:
+            # 电量监测: 哪条路径退出都要停线程 + 尽力写页(正常路径已写过, 幂等)
+            self._finish_battery(report)
             # 中途异常也保住已执行部分的报告
             if report is not None and not report_saved:
                 try:

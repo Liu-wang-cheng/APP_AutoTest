@@ -28,6 +28,45 @@ def test_two_phase_desc_and_stats(tmp_path):
     assert ws.cell(row=3, column=3).value == "超时"
 
 
+def test_battery_report_page_summary_and_details(tmp_path):
+    """「电量监测」页: 上汇总 + 下详细; 幂等(只建一页); 空样本给原因。"""
+    from core.battery_monitor import BatterySample
+
+    p = tmp_path / "r.xlsx"
+    r = ExcelReport(path=p)
+    r.add_result("用例A", True)
+    samples = [BatterySample(t=t, battery=b, label="用例A(第1次)")
+               for t, b in [(0, 80), (30, 80), (60, 79), (90, 78), (120, 75)]]
+    r.add_battery_report(samples, step_pct=5, interval=30)
+    r.add_battery_report(samples, step_pct=5, interval=30)   # 幂等
+    r.save()
+
+    wb = load_workbook(p)
+    assert wb.sheetnames.count("电量监测") == 1
+    ws = wb["电量监测"]
+    texts = [str(c.value) for row in ws.iter_rows() for c in row if c.value]
+    assert "一、汇总" in texts and "二、详细数据" in texts
+    assert "总运行时长" in texts
+    assert any("02:00" == t for t in texts), texts          # 总时长 120s
+    assert any(t == "5%" for t in texts), texts             # 总耗电 5%
+    assert any("每 5% 段平均用时" in t for t in texts), texts
+    # 详细区: 原始变化 79/78/75 各一行 + 里程碑(75)一行 = 4 行数据
+    kinds = [t for t in texts if t in ("1% 原始", "5% 里程碑")]
+    assert kinds.count("1% 原始") == 3 and kinds.count("5% 里程碑") == 1, kinds
+
+
+def test_battery_report_page_empty_samples(tmp_path):
+    from core.battery_monitor import BatterySample
+
+    p = tmp_path / "r.xlsx"
+    r = ExcelReport(path=p)
+    r.add_battery_report([BatterySample(t=0, battery=-1)], step_pct=5)
+    r.save()
+    ws = load_workbook(p)["电量监测"]
+    texts = [str(c.value) for row in ws.iter_rows() for c in row if c.value]
+    assert any("未采集到有效电量数据" in t for t in texts), texts
+
+
 def test_summary_sheet_has_pass_rate(tmp_path):
     p = tmp_path / "r.xlsx"
     r = ExcelReport(path=p)

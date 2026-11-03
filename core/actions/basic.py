@@ -293,6 +293,86 @@ def do_if_not(runner, step):
     do_if_impl(runner, step, negate=True)
 
 
+# ── 循环(用户 2026-11-03) ────────────────────────────────────────────────
+# for   : 循环直到条件满足 —— 每轮先判, 成立→结束; 不成立→执行循环体
+# while : 条件满足时循环 —— 每轮先判, 不成立→结束; 成立→执行循环体
+# 循环体写在 `do` 子步骤里(GUI 与 then/else 共用同一套子卡片机制)。
+# ★ 安全上限: 最多执行 max_loops 轮(默认 100, 用户可改); 到上限仍未结束 → 本步失败。
+# ★ 条件每轮只判**一次**(checks=1): if 的 10 次轮询是为"等页面出现"设计的, 放进
+#   循环会让每轮多等几十秒。
+
+def _loop_int(step, key, default):
+    try:
+        return max(1, int(step.get(key, default) or default))
+    except (TypeError, ValueError):
+        return default
+
+
+def _loop_wait(step, body):
+    try:
+        wait_s = float(step.get("loop_wait", 0) or 0)
+    except (TypeError, ValueError):
+        wait_s = 0.0
+    if wait_s < 0:
+        wait_s = 0.0
+    # 空循环体 = "等条件满足"; 不给间隔会忙等(每次判断都要 dump 页面)
+    if not body and wait_s <= 0:
+        wait_s = 5.0
+    return wait_s
+
+
+def _run_loop(runner, step, key):
+    cond = str(step.get(key) or "").strip()
+    if not cond:
+        raise ValueError(f"{key} 条件为空 —— 请在卡片里填写条件")
+    body = step.get("do") or []
+    max_loops = _loop_int(step, "max_loops", 100)
+    wait_s = _loop_wait(step, body)
+    n = 0
+    # ★ 循环是"容器"动作, 与 if 共用同一套子步骤深度/攒账机制: 进循环时深度 +1,
+    #   最外层才重置攒账列表 —— 否则"循环里嵌 if"时, if 会在深度 1 重置列表,
+    #   把**前面几轮**已攒的子结果整体弄丢(与 _run_branch/do_if_impl 的注释同一类坑)。
+    runner._if_depth = getattr(runner, "_if_depth", 0) + 1
+    runner._loop_depth = getattr(runner, "_loop_depth", 0) + 1
+    if runner._if_depth == 1:
+        runner._pending_sub_results = []
+    _t0 = time.time()
+    try:
+        while True:
+            met = eval_condition(runner, cond, checks=1)
+            # for: 条件成立 = 该结束了; while: 条件不成立 = 该结束了
+            done = met if key == "for" else (not met)
+            if done:
+                log.info(f"[{key}] 条件 {cond!r} {'成立' if met else '不成立'} → "
+                         f"结束循环(共执行 {n} 轮, 耗时 {time.time() - _t0:.1f} 秒)")
+                return
+            n += 1
+            if n > max_loops:
+                raise RuntimeError(
+                    f"[{key}] 已循环 {max_loops} 次, 条件 {cond!r} 仍未结束 —— "
+                    f"检查条件阈值是否写错, 或调大「最大次数」")
+            log.info(f"[{key}] 第 {n}/{max_loops} 轮: 条件尚未结束, "
+                     f"执行循环体({len(body)} 步)")
+            _run_branch(runner, body, f"第{n}次")
+            if wait_s > 0:
+                runner._sleep(wait_s)
+    finally:
+        runner._if_depth = max(0, getattr(runner, "_if_depth", 1) - 1)
+        runner._loop_depth = max(0, getattr(runner, "_loop_depth", 1) - 1)
+
+
+@reg.action("for", priority=40)
+def do_for(runner, step):
+    """循环直到条件满足(条件成立后退出)。"""
+    _run_loop(runner, step, "for")
+
+
+@reg.action("while", priority=45)
+def do_while(runner, step):
+    """条件满足时循环(条件不成立后退出)。"""
+    _run_loop(runner, step, "while")
+
+
 #: if 条件的检测节奏(用户 2026-10-12 定): **两轮 × 每轮五次 = 10 次检测**;
 #: 每轮**前四次普通检测、第五次上 OCR 兜底**(正好落在第 5、10 次)。
 #: ★ 原来是 timeout=5 秒兜底, 用户反馈"5s 容错太低" → 改成**按次数**跑满两轮, 不再被秒数支配;
@@ -313,6 +393,77 @@ def _if_checks(step):
         return IF_TOTAL_CHECKS
 
 
+def eval_condition(runner, condition, checks=None, num_seen=None):
+    """判断一个条件是否成立(if / if not / for / while 共用同一套语法)。
+
+    文本:   扫地机器人 / 多个候选用逗号顿号分隔(任一命中)
+    数值:   电量 > 50 / 面积 < 5(电量/电池直接读设备, 见 data_ops.extract_value)
+    图片:   按钮.png —— 在页面里找这张模板图
+    ID:     com.xxx:id/btn
+
+    checks: 检测次数。if 用默认的 10 次(两轮×五次); 循环每轮只需要**判一次**,
+            传 1 —— 否则一次条件判断就要跑满 90 秒, 循环根本没法用。
+    num_seen: 可选 dict, 回填数值条件的实测值 {"v": 值|None, "read": bool}。
+    """
+    condition = str(condition or "").strip()
+    if not condition:
+        raise ValueError("条件为空")
+    if checks is None:
+        checks = IF_TOTAL_CHECKS
+    if num_seen is None:
+        num_seen = {"v": None, "read": False}
+
+    for op, fn in runner._NUM_OPS.items():
+        if op in condition:
+            keyword, expected = condition.split(op, 1)
+            from core.actions.data_ops import extract_value
+
+            def _num_ok(_i):
+                try:
+                    val = extract_value(runner, runner._get_all_nodes(),
+                                        keyword.strip())
+                except ValueError:
+                    num_seen["read"] = False
+                    return False
+                num_seen["v"] = num_seen["read"] = val
+                try:
+                    return bool(fn(float(val), float(expected.strip())))
+                except (TypeError, ValueError):
+                    return False
+            return runner._poll_until(checks, _num_ok)
+
+    if runner._is_image(condition):
+        # ★ 图片条件只判"这张模板图出现在页面上"(用户要求 2026-10-13: if 判断与
+        #   图像对比**分为两个步骤**) —— 以前这里还认 step["threshold"] 走整屏
+        #   相似度对比, 那是 compare 步骤的职责(阈值属于它), if 里已移除。
+        #   老用例 YAML 里写的 threshold 会被忽略(模板匹配本就是严格判断)。
+        import cv2
+        from core import vision
+        # ★ 先解析到组模板目录(审查 2026-10-12): 裸名直接丢给 find_in_gray 会在
+        #   getmtime 处 FileNotFoundError —— wait_for/_assert_template 都先
+        #   resolve, 这里原本漏了。
+        tpl = vision.resolve_template(condition)
+
+        def _tpl_ok(_i):
+            screen = runner.d.screenshot(format="opencv")
+            return vision.find_in_gray(
+                cv2.cvtColor(screen, cv2.COLOR_BGR2GRAY),
+                tpl, min_matches=3) is not None
+        return runner._poll_until(checks, _tpl_ok)
+
+    if ":id/" in condition:
+        return runner._poll_until(
+            checks, lambda _i: runner.d(resourceId=condition).exists(timeout=0.2))
+
+    # 多值(逗号/顿号/分号/换行分隔): 任一命中即条件成立(与 assert 的多值语义一致)。
+    # v1.4 的 TextViewContentChecker(driver, ["充电中","充电完成"], t) 就是这个语义,
+    # 转换后的用例大量依赖它。
+    # ★ 判断走 runner._text_present(原生优先 + OCR 兜底)
+    # ★ 文本: 按**次数**跑(两轮×五次); 第 5、10 次走 OCR 兜底(见 core/ocr.py)
+    return runner._text_present(*(split_texts(condition) or [condition]),
+                                rounds=checks)
+
+
 def do_if_impl(runner, step, negate):
     """条件分支(语义反直觉): 条件成立→直接跳过;条件不成立→执行 else 列表。
 
@@ -324,58 +475,9 @@ def do_if_impl(runner, step, negate):
     """
     condition = step.get("if", step.get("if not", ""))
     # (timeout 已不再被直接读 —— 检测次数统一由 _if_checks 按"两轮×五次, 上限 120"定)
-    passed = False
-
-    checks = _if_checks(step)
     num_seen = {"v": None, "read": False}    # 数值条件的实测值(留痕, 用户 2026-10-15)
-    for op, fn in runner._NUM_OPS.items():
-        if op in condition:
-            keyword, expected = condition.split(op, 1)
-            from core.actions.data_ops import extract_value
-
-            def _num_ok(_i):
-                try:
-                    val = extract_value(runner, runner._get_all_nodes(), keyword.strip())
-                except ValueError:
-                    num_seen["read"] = False
-                    return False
-                num_seen["v"] = num_seen["read"] = val
-                try:
-                    return bool(fn(float(val), float(expected.strip())))
-                except (TypeError, ValueError):
-                    return False
-            passed = runner._poll_until(checks, _num_ok)
-            break
-    else:
-        if runner._is_image(condition):
-            # ★ 图片条件只判"这张模板图出现在页面上"(用户要求 2026-10-13: if 判断与
-            #   图像对比**分为两个步骤**) —— 以前这里还认 step["threshold"] 走整屏
-            #   相似度对比, 那是 compare 步骤的职责(阈值属于它), if 里已移除。
-            #   老用例 YAML 里写的 threshold 会被忽略(模板匹配本就是严格判断)。
-            import cv2
-            from core import vision
-            # ★ 先解析到组模板目录(审查 2026-10-12): 裸名直接丢给 find_in_gray 会在
-            #   getmtime 处 FileNotFoundError —— wait_for/_assert_template 都先
-            #   resolve, 这里原本漏了。
-            tpl = vision.resolve_template(condition)
-
-            def _tpl_ok(_i):
-                screen = runner.d.screenshot(format="opencv")
-                return vision.find_in_gray(
-                    cv2.cvtColor(screen, cv2.COLOR_BGR2GRAY),
-                    tpl, min_matches=3) is not None
-            passed = runner._poll_until(checks, _tpl_ok)
-        elif ":id/" in condition:
-            passed = runner._poll_until(
-                checks, lambda _i: runner.d(resourceId=condition).exists(timeout=0.2))
-        else:
-            # 多值(逗号/顿号/分号/换行分隔): 任一命中即条件成立(与 assert 的多值语义一致)。
-            # v1.4 的 TextViewContentChecker(driver, ["充电中","充电完成"], t) 就是这个语义,
-            # 转换后的用例大量依赖它。
-            # ★ 判断走 runner._text_present(原生优先 + OCR 兜底)
-            # ★ 文本: 按**次数**跑(两轮×五次); 第 5、10 次走 OCR 兜底(见 core/ocr.py)
-            passed = runner._text_present(*(split_texts(condition) or [condition]),
-                                          rounds=checks)
+    passed = eval_condition(runner, condition, checks=_if_checks(step),
+                            num_seen=num_seen)
 
     if negate:
         passed = not passed
@@ -472,10 +574,10 @@ def _run_branch(runner, steps, label=""):
         #     断言子步骤、乃至父 if 行**当成自己的**继承下去(截图错乱的根因)。
         runner._cur_step_desc = desc
         runner._pre_click_shot = None
-        # 容器型子步骤(嵌套 if): 先登记并推一行「执行中」, 跑完就地更新 —— 否则它的
-        # 子步骤会排在它前面(用户 2026-10-15 同类顺序问题)
+        # 容器型子步骤(嵌套 if / for / while): 先登记并推一行「执行中」, 跑完就地更新
+        # —— 否则它的子步骤会排在它前面(用户 2026-10-15 同类顺序问题)
         entry = None
-        if reg.primary_action_key(s) in ("if", "if not"):
+        if reg.primary_action_key(s) in ("if", "if not", "for", "while"):
             runner._sub_seq += 1
             entry = {"desc": desc, "sub": True, "sub_id": runner._sub_seq,
                      "running": True, "passed": None, "error": "", "screenshot": ""}

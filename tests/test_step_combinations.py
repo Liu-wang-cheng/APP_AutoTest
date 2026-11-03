@@ -208,7 +208,7 @@ def _iter_steps(doc):
             if not isinstance(s, dict):
                 continue
             yield where, s
-            for branch in ("then", "else"):        # 两个分支的子步骤都会执行
+            for branch in ("then", "else", "do"):   # 三个分支的子步骤都会执行
                 yield from walk(s.get(branch), where)
 
     for case in (doc.get("cases") or []):

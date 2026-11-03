@@ -141,19 +141,23 @@ class ExcelReport:
         cell.alignment = Alignment(horizontal="center", vertical="center")
         cell.border = self.BORDER
 
+    def _unique_sheet_title(self, base):
+        """openpyxl 的 sheet 名限制: 非法字符替换 + 31 字截断 + 撞名追加 -2/-3…"""
+        base = re.sub(r'[\\*?:/\[\]]', "_", str(base))[:31] or "用例"
+        title, n = base, 2
+        while title in self.wb.sheetnames:
+            suffix = f"-{n}"
+            title = base[:31 - len(suffix)] + suffix
+            n += 1
+        return title
+
     def _create_case_sheet(self, case_name):
         # ★ openpyxl 的 sheet 名不允许 [ ] : * ? / \ 这几个字符(实测: 传「温度: 设置」
         #   直接抛 ValueError: Invalid character : found in sheet title)。原实现只替换了
         #   / 和 \, 于是组名带「:」「[」「?」时 create_sheet 抛错 → 冒到 RunWorker.run
         #   的兜底 except → **整轮**以"执行异常"中断, 设备侧已跑的部分白跑。
         #   组名(module)是 GUI 里可自由编辑的文本, 很容易踩到。
-        base = re.sub(r'[\\*?:/\[\]]', "_", str(case_name))[:31] or "用例"
-        # ★ 31 字截断后可能撞名(openpyxl 对重名直接抛) → 追加 -2 / -3 …
-        title, n = base, 2
-        while title in self.wb.sheetnames:
-            suffix = f"-{n}"
-            title = base[:31 - len(suffix)] + suffix
-            n += 1
+        title = self._unique_sheet_title(case_name)
         ws = self.wb.create_sheet(title=title)
         for c, w in zip("ABCD", [28, 8, 28, 20]):
             ws.column_dimensions[c].width = w
@@ -168,6 +172,129 @@ class ExcelReport:
         for r in range(r1, r2 + 1):
             for c in range(c1, c2 + 1):
                 ws.cell(row=r, column=c).border = self.BORDER
+
+    # ── 电量监测(用户 2026-11-03) ─────────────────────────────────────────
+    BATTERY_TITLE = "电量监测"
+
+    def add_battery_report(self, samples, step_pct=5, interval=None):
+        """新增一页「电量监测」: 上半汇总、下半详细。
+
+        ★ 幂等: 一页只建一次(正常保存前调一次; 异常路径的部分报告也会调, 不能重复)。
+        ★ 没有有效样本时写清原因, 不伪造数据。
+        """
+        from core.battery_monitor import build_points, build_summary, format_mmss
+
+        if self.BATTERY_TITLE in self.wb.sheetnames:
+            return self.wb[self.BATTERY_TITLE]
+        ws = self.wb.create_sheet(self._unique_sheet_title(self.BATTERY_TITLE))
+        for col, w in zip("ABCDEFGH", [20, 12, 12, 10, 12, 14, 12, 14]):
+            ws.column_dimensions[col].width = w
+        summary = build_summary(samples, step_pct)
+        points = build_points(samples, step_pct)
+
+        def put(row, col, value, *, bold=False, fill=None, font_color=None,
+                align="left", size=10):
+            cell = ws.cell(row=row, column=col, value=value)
+            cell.font = Font(name="Microsoft YaHei", size=size, bold=bold,
+                             color=font_color or "000000")
+            if fill:
+                cell.fill = PatternFill(start_color=fill, end_color=fill,
+                                        fill_type="solid")
+            cell.alignment = Alignment(horizontal=align, vertical="center",
+                                       wrap_text=False)
+            cell.border = self.BORDER
+            return cell
+
+        def section(row, text):
+            ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=8)
+            put(row, 1, text, bold=True, font_color="1F4E79", size=12)
+            return row + 1
+
+        def header(row, labels):
+            for ci, text in enumerate(labels, 1):
+                put(row, ci, text, bold=True, fill="4472C4",
+                    font_color="FFFFFF", align="center")
+            return row + 1
+
+        # ── 标题 ──
+        ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=8)
+        put(1, 1, "电量监测", bold=True, font_color="1F4E79", align="center", size=16)
+        ws.row_dimensions[1].height = 34
+        ws.merge_cells(start_row=2, start_column=1, end_row=2, end_column=8)
+        sub = (f"步长 {int(step_pct or 1)}%    "
+               f"采样间隔 {int(interval) if interval else '-'} 秒    "
+               f"生成时间: {datetime.now().strftime(_tf.DATETIME)}")
+        put(2, 1, sub, font_color="808080", align="center", size=9)
+
+        r = 4
+        r = section(r, "一、汇总")
+
+        def kv(row, k, v):
+            ws.merge_cells(start_row=row, start_column=2, end_row=row, end_column=8)
+            put(row, 1, k, bold=True)
+            put(row, 2, v)
+            return row + 1
+
+        if not summary["valid"]:
+            ws.merge_cells(start_row=r, start_column=1, end_row=r, end_column=8)
+            put(r, 1, "未采集到有效电量数据 —— 页面始终未展示电量, 或设备中途断开。",
+                font_color="9C0006", align="center")
+            r += 2
+        else:
+            r = kv(r, "总运行时长", format_mmss(summary["total_seconds"]))
+            r = kv(r, "起始电量", f"{summary['start_battery']}%")
+            r = kv(r, "结束电量", f"{summary['end_battery']}%")
+            # ★ 充电时总耗电可能为负 —— 如实写「电量上升 N%」, 不硬凑成 0
+            drop = summary["total_drop"]
+            r = kv(r, "总耗电", f"{drop}%" if drop >= 0 else f"电量上升 {-drop}%")
+            r = kv(r, "平均每 1% 用时",
+                   format_mmss(summary["average_per_1pct"])
+                   if summary["average_per_1pct"] is not None else "无法计算(未下降)")
+            r = kv(r, f"每 {int(step_pct or 1)}% 段平均用时",
+                   format_mmss(summary["milestone_average"])
+                   if summary["milestone_average"] is not None else "暂无完整里程碑")
+            r = kv(r, "有效采样 / 读取失败",
+                   f"{summary['valid']} / {summary['invalid']}")
+            r += 1
+            r = section(r, "按用例分段")
+            r = header(r, ["用例/轮次", "起始电量", "结束电量", "耗电", "用时",
+                           "平均每 1%"])
+            for c in summary["cases"]:
+                put(r, 1, c["label"] or "(未标注)")
+                put(r, 2, f"{c['start_battery']}%", align="center")
+                put(r, 3, f"{c['end_battery']}%", align="center")
+                put(r, 4, f"{c['drop']}%", align="center")
+                put(r, 5, format_mmss(c["seconds"]), align="center")
+                put(r, 6, format_mmss(c["average_per_1pct"])
+                    if c["average_per_1pct"] is not None else "-", align="center")
+                r += 1
+            r += 1
+
+        r = section(r, "二、详细数据")
+        r = header(r, ["序号", "相对时间", "用例/轮次", "电量", "变化",
+                       "距上次变化", "累计用时", "类型"])
+        # 原始变化点与里程碑按时间合并; 同一时刻先写原始点再写里程碑
+        merged = ([dict(p, kind="raw") for p in points["raw"]] +
+                  [dict(p, kind="milestone") for p in points["milestones"]])
+        merged.sort(key=lambda p: (p["t"], 0 if p["kind"] == "raw" else 1))
+        if not merged:
+            ws.merge_cells(start_row=r, start_column=1, end_row=r, end_column=8)
+            put(r, 1, "无电量变化记录。", align="center", font_color="666666")
+        for i, p in enumerate(merged, 1):
+            put(r, 1, i, align="center")
+            put(r, 2, format_mmss(p["t"]), align="center")
+            put(r, 3, p.get("label") or "")
+            put(r, 4, f"{p['battery']}%", align="center")
+            if p["kind"] == "raw":
+                put(r, 5, f"{p['delta']:+d}%", align="center")
+                put(r, 8, "1% 原始", align="center")
+            else:
+                put(r, 5, f"目标 {p['target']}%", align="center")
+                put(r, 8, f"{int(step_pct or 1)}% 里程碑", align="center")
+            put(r, 6, format_mmss(p.get("dt")), align="center")
+            put(r, 7, format_mmss(p["t"]), align="center")
+            r += 1
+        return ws
 
     def save(self):
         ws = self.summary_ws

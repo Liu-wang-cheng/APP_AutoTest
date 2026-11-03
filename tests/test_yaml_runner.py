@@ -31,14 +31,14 @@ def iter_modules(data, filename):
 
 
 def iter_all_steps(steps, depth=0):
-    """递归遍历步骤(含 then / else 子步骤),产出 (step, depth)
+    """递归遍历步骤(含 then / else / do 子步骤),产出 (step, depth)
 
     分支里的子步骤同样是会执行的真实步骤 —— 统计/校验时只数顶层会漏掉
     它们。"快速建图" 顶层才 4 步,展开后是 9 步。
     """
     for s in steps or []:
         yield s, depth
-        for branch in ("then", "else"):
+        for branch in ("then", "else", "do"):
             if isinstance(s.get(branch), list):
                 yield from iter_all_steps(s[branch], depth + 1)
 
