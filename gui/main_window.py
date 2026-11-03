@@ -15,10 +15,10 @@ import yaml
 from PySide6.QtCore import QSettings, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QAction, QColor, QIcon, QIntValidator, QPixmap
 from PySide6.QtWidgets import (
-    QAbstractItemView, QApplication, QCheckBox, QComboBox, QDialog, QFileDialog,
+    QAbstractItemView, QApplication, QComboBox, QDialog, QFileDialog,
     QFrame, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QListWidgetItem,
     QMainWindow, QMenu, QMessageBox, QPlainTextEdit, QPushButton, QScrollArea,
-    QSizePolicy, QSpinBox, QSplitter, QTabWidget, QTableWidget, QTableWidgetItem,
+    QSizePolicy, QSplitter, QTabWidget, QTableWidget, QTableWidgetItem,
     QVBoxLayout, QWidget,
 )
 
@@ -487,34 +487,30 @@ class MainWindow(CaseFileMixin, QMainWindow):
         #   与 config 注释保持一致。ActionRunner 每次启动也会再调一次, 这里双保险。
         self._load_status_words_from_config()
 
-        # ── 执行次数 ──
-        lay.addWidget(QLabel("次数"))
-        self.repeat_spin = QSpinBox()
+        # ── 测试次数(用户 2026-11-03: 「次数」改「测试次数」, 输入框缩短) ──
+        lay.addWidget(QLabel("测试次数"))
+        self.repeat_spin = CompactSpin()
         self.repeat_spin.setRange(1, 99)
         self.repeat_spin.setValue(1)
+        self.repeat_spin.setFixedWidth(64)
+        self.repeat_spin.setAlignment(Qt.AlignCenter)
+        # ★ 全局 QSpinBox 的左右内距是 8/22px(给上下按钮留位), 64px 宽会被吃掉
+        #   大半 → 数字显示不下(用户实测"文本都看不到"); 这里单独收紧内距。
+        #   右侧按钮区的点击由 CompactSpin 重定向到数字末尾(点哪儿都有反应)。
+        self.repeat_spin.setStyleSheet("QSpinBox { padding: 4px 20px 4px 4px; }")
         self.repeat_spin.setToolTip("勾选用例队列重复的轮数")
         lay.addWidget(self.repeat_spin)
 
-        # ── 电量监测(用户 2026-11-03): 勾选后整轮后台采样, 报告多一页「电量监测」──
-        self.batt_monitor_chk = QCheckBox("电量监测")
-        self.batt_monitor_chk.setToolTip(
-            "勾选后从本轮第一条用例开始后台采样电量, 报告新增一页「电量监测」\n"
-            "(汇总 + 详细: 每 1% 变化与每 N% 里程碑的用时)")
-        lay.addWidget(self.batt_monitor_chk)
-        self.batt_step_spin = QSpinBox()
-        self.batt_step_spin.setRange(1, 50)
-        self.batt_step_spin.setValue(5)
-        self.batt_step_spin.setSuffix("%")
-        self.batt_step_spin.setFixedWidth(64)
-        self.batt_step_spin.setToolTip("里程碑步长: 每下降 N% 记一段用时")
-        lay.addWidget(self.batt_step_spin)
-        self.batt_interval_spin = QSpinBox()
-        self.batt_interval_spin.setRange(5, 3600)
-        self.batt_interval_spin.setValue(60)
-        self.batt_interval_spin.setSuffix("s")
-        self.batt_interval_spin.setFixedWidth(76)
-        self.batt_interval_spin.setToolTip("采样间隔(秒)")
-        lay.addWidget(self.batt_interval_spin)
+        # ── 电量监测(用户 2026-11-03): 参数收进弹窗, 按钮只显示 启用/关闭 ──
+        self.batt_enabled = False       # 是否启用(运行时后台采样)
+        self.batt_step = 5              # 里程碑步长 %
+        self.batt_interval = 60         # 采样间隔 秒
+        self.batt_btn = QPushButton("电量监测：关闭")
+        self.batt_btn.setToolTip(
+            "点击配置电量监测: 启用后从本轮第一条用例开始后台采样,\n"
+            "报告新增一页「电量监测」(汇总 + 详细, 每 N% 里程碑用时)")
+        self.batt_btn.clicked.connect(self.on_battery_settings)
+        lay.addWidget(self.batt_btn)
         self._load_battery_monitor_settings()
 
         self.run_btn = QPushButton("▶ 运行")
@@ -931,35 +927,49 @@ class MainWindow(CaseFileMixin, QMainWindow):
             f.write(new_text)
 
     def _load_battery_monitor_settings(self):
-        """恢复上次的电量监测勾选与参数(用户 2026-11-03)。"""
+        """恢复上次的电量监测启用状态与参数(用户 2026-11-03)。"""
         try:
             st = QSettings("vacuum_test", "case_studio")
-            self.batt_monitor_chk.setChecked(
+            self.batt_enabled = (
                 str(st.value("batt_monitor/enabled", "false")).lower() == "true")
-            self.batt_step_spin.setValue(
-                max(1, int(st.value("batt_monitor/step", 5))))
-            self.batt_interval_spin.setValue(
-                max(5, int(st.value("batt_monitor/interval", 60))))
+            self.batt_step = max(1, int(st.value("batt_monitor/step", 5)))
+            self.batt_interval = max(5, int(st.value("batt_monitor/interval", 60)))
         except Exception:
             pass
+        self._update_batt_btn_text()
 
     def _save_battery_monitor_settings(self):
         try:
             st = QSettings("vacuum_test", "case_studio")
             st.setValue("batt_monitor/enabled",
-                        "true" if self.batt_monitor_chk.isChecked() else "false")
-            st.setValue("batt_monitor/step", self.batt_step_spin.value())
-            st.setValue("batt_monitor/interval", self.batt_interval_spin.value())
+                        "true" if self.batt_enabled else "false")
+            st.setValue("batt_monitor/step", self.batt_step)
+            st.setValue("batt_monitor/interval", self.batt_interval)
         except Exception:
             pass
 
+    def _update_batt_btn_text(self):
+        self.batt_btn.setText("电量监测：启用" if self.batt_enabled
+                              else "电量监测：关闭")
+
+    def on_battery_settings(self):
+        """弹窗配置电量监测; 确定才写回, 取消不动。"""
+        dlg = BatteryMonitorDialog(self.batt_enabled, self.batt_step,
+                                   self.batt_interval, parent=self)
+        if dlg.exec() != QDialog.Accepted:
+            return
+        self.batt_enabled, self.batt_step, self.batt_interval = dlg.values()
+        self._update_batt_btn_text()
+        self._save_battery_monitor_settings()
+        self._set_status("已启用电量监测(本轮运行时采样)"
+                         if self.batt_enabled else "已关闭电量监测")
+
     def _battery_monitor_config(self):
-        """传给 RunWorker 的电量监测配置; 未勾选返回 None。"""
-        if not self.batt_monitor_chk.isChecked():
+        """传给 RunWorker 的电量监测配置; 未启用返回 None。"""
+        if not self.batt_enabled:
             return None
-        return {"enabled": True,
-                "step_pct": self.batt_step_spin.value(),
-                "interval": self.batt_interval_spin.value()}
+        return {"enabled": True, "step_pct": self.batt_step,
+                "interval": self.batt_interval}
 
     def _load_expanded_groups(self):
         """读回上次**展开**过的组名(用户要求: 折叠状态跨启动保持原状)。
@@ -2188,19 +2198,21 @@ class MainWindow(CaseFileMixin, QMainWindow):
         #   实测: 用例甲 P1/wait=5 → 切到用例乙 P0/wait=3, 乙的 wait 变成 5, 而且间隔框
         #   随后也显示 5(用户完全看不出异常); 300ms 后 _autosave_timer 直接写进磁盘。
         self._loading = True
-        normalized = False
+        normalized_from = None
         try:
             name = str(c.get("name") or "")
             # ★ 单 case 文件: 文件名就是用例名(用户 2026-10-19 要求双向绑定)。
-            #   打开旧文件时若 YAML 名字与文件名不一致, 以**文件名**为准归一,
-            #   并安排一次保存 —— 否则两处名字会一直各说各话。
+            #   打开旧文件时若 YAML 名字与文件名不一致, 以**文件名**为准归一。
+            #   ★ 归一后**不走自动保存**(safe_dump 会重排整个文件、丢掉注释 ——
+            #     2026-11-03 实测冒烟用例的 8 行设计注释被抹掉), 只做**文本级**
+            #     的 name 替换(见 _rename_case_name_in_yaml), 其余字节原样。
             if (normalize_name and self.case_path
                     and len(self.data.get("cases") or []) == 1):
                 stem = os.path.splitext(os.path.basename(self.case_path))[0]
                 if name != stem:
+                    normalized_from = name
                     name = stem
                     c["name"] = stem
-                    normalized = True
             self.case_name_edit.setText(name)
             pri = str(c.get("priority") or "P1")
             self.priority_combo.setCurrentIndex(max(0, self.priority_combo.findText(pri)))
@@ -2210,8 +2222,12 @@ class MainWindow(CaseFileMixin, QMainWindow):
                 "" if c.get("wait") is None else schema.fmt_num(c["wait"]))
         finally:
             self._loading = False
-        if normalized:
-            self._auto_save()          # 名字归一后落盘, 保证文件内外一致
+        if normalized_from is not None:
+            try:
+                self._rename_case_name_in_yaml(self.case_path, normalized_from,
+                                               str(self.current_case.get("name")))
+            except OSError as e:
+                log.warning(f"[用例名归一] 写回失败(不影响加载): {e}")
         # 这两步原本是 _sync_header 的副作用, 屏蔽之后要显式补上, 否则切用例后
         # YAML 视图不刷新(回归)
         self._refresh_case_item_text()
@@ -2297,8 +2313,7 @@ class MainWindow(CaseFileMixin, QMainWindow):
         widgets = [self.new_btn, self.open_btn, self.save_btn, self.add_btn,
                    self.case_name_edit, self.priority_combo,
                    self.case_wait_edit, self.case_combo,
-                   self.batt_monitor_chk, self.batt_step_spin,
-                   self.batt_interval_spin,
+                   self.batt_btn,
                    self.yaml_refresh_btn, self.yaml_apply_btn,
                    # 用例执行期间「检查更新」置灰: 变了也没法立刻重启安装,
                    # 点它只会得到一个"请等本轮跑完"的提示 —— 不如直接禁用
@@ -2931,14 +2946,14 @@ from gui.style import (
     _safe_relpath, CATEGORY_COLORS, QUICK_ACTIONS, STYLESHEET, _ASSETS,
 )
 from gui.widgets import (
-    ClickableLabel, ClickableFrame, FlowLayout, make_action_menu, _FormCheckBox,
+    ClickableLabel, ClickableFrame, FlowLayout, make_action_menu,
     _HistComboDelegate, _FitCombo, _FitListView, _HistCombo, CaseListWidget,
-    CaseItemDelegate, mouse_xy,
+    CaseItemDelegate, mouse_xy, StaticCheckBox, CompactSpin,
 )
 from gui.dialogs import (
     ImageViewDialog, StatusWordsDialog, PreconditionEditDialog,
     PreconditionsDialog, NewCaseDialog, TemplateCropDialog, _CropView, _to_qimage,
-    validate_template,
+    validate_template, BatteryMonitorDialog,
 )
 from gui.step_card import (
     _make_field_widget, _int_of, _float_of, _int4_of, StepCard, _StepsHost,
@@ -2955,15 +2970,15 @@ from gui.threads import (
 __all__ = [
     "ImageViewDialog", "StatusWordsDialog", "PreconditionEditDialog",
     "PreconditionsDialog", "NewCaseDialog", "TemplateCropDialog", "_CropView",
-    "_to_qimage", "validate_template",
+    "_to_qimage", "validate_template", "BatteryMonitorDialog",
     "CASE_STATE_COLORS", "CASE_STATE_ROLE", "_LAMP_SIZE", "_ARROW_W",
     "_FIELD_LABEL_W", "_CHECK_MIN_H", "make_lamp_pixmap", "_LAMP_PIX",
     "lamp_pixmap", "lamp_icon", "_safe_relpath", "CATEGORY_COLORS",
     "QUICK_ACTIONS", "STYLESHEET", "_ASSETS",
     "ClickableLabel", "ClickableFrame", "FlowLayout", "make_action_menu",
-    "_FormCheckBox", "_HistComboDelegate", "_FitCombo", "_FitListView",
+    "_HistComboDelegate", "_FitCombo", "_FitListView",
     "_HistCombo", "CaseListWidget", "CaseItemDelegate", "mouse_xy",
     "_make_field_widget", "_int_of", "_float_of", "_int4_of", "StepCard",
-    "_StepsHost", "_StepsEditor",
+    "_StepsHost", "_StepsEditor", "StaticCheckBox", "CompactSpin",
     "DeviceScanThread", "UpdateCheckThread", "UpdateDownloadThread",
 ]

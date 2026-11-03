@@ -5,13 +5,15 @@
 
 # 只导入本模块用到的名字(结构整理 2026-10-15)
 from PySide6.QtCore import QEvent, QPoint, QRect, QSize, QTimer, Qt, Signal
-from PySide6.QtGui import QAction, QColor, QFontMetrics, QKeySequence
-from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QFrame,
-                                QLabel, QLayout, QListView, QListWidget, QMenu,
-                                QStyle, QStyleOptionViewItem, QStyledItemDelegate)
+from PySide6.QtGui import (QAction, QColor, QFontMetrics, QKeySequence,
+                           QPainter, QPen)
+from PySide6.QtWidgets import (QAbstractButton, QAbstractItemView, QComboBox,
+                                QFrame, QLabel, QLayout, QListView, QListWidget,
+                                QMenu, QSpinBox, QStyle, QStyleOptionViewItem,
+                                QStyledItemDelegate)
 from core.logger import get_logger
 from gui import schema
-from gui.style import _ARROW_W, _CHECK_MIN_H
+from gui.style import _ARROW_W
 
 log = get_logger()
 
@@ -155,37 +157,113 @@ def make_action_menu(parent, on_pick):
     return menu
 
 
-class _FormCheckBox(QCheckBox):
-    """步骤表单里的勾选框(自动截图 / 条件 等)。
+class StaticCheckBox(QAbstractButton):
+    """**全工具统一**的自绘勾选框: 指示器与文字在一次 paintEvent 里整块画完。
 
-    ⚠ 两个坑(真机抓屏实测):
-    1. **不能被拉宽**: 表单曾把它拉成 200px 宽, 而 Qt 只认指示器那一小块命中 →
-       右边一大片是死区(点不动); 若改成"整块都可点", 又会变成"点旁边空白也选中"
-       (用户实测反馈)。所以**保持自然大小**(_add_field 对它跳过宽度限制):
-       看到多少就能点多少, 两个毛病都没有。
-    2. **悬停时"闪动"**: 真机抓屏(1.5x DPI)看到 —— 未悬停时方框四条边完整, 鼠标
-       一悬停就只剩左边和上边, 右/下边整块缺失, 移开又恢复 ⇒ 一进一出闪两下。
-       修法: 关掉该控件的 hover 属性, 让它不进入悬停态(勾选框没有需要 hover 的
-       行为), 悬停前后像素完全一致(实测 0 差异), 方框两态都完整。
-       ⚠ 离屏平台不执行真实绘制, **测不出**这类裁切/悬停态问题, 必须真机抓屏。
+    ★ 为什么要有它(用户 2026-11-03 电量监测弹窗, 后推广到所有独立勾选框):
+      原生勾选框走 Qt 状态机 —— 悬停 / 焦点 / 按下 / 勾选 每个状态切换都触发
+      一次局部重绘, 在 1.5x DPI 的屏幕上重绘区域的取整会"裁掉"指示器右/下边
+      一帧, 人眼就是边缘闪动(真机抓屏实测过悬停态只剩左/上边)。逐个关状态
+      (旧 _FormCheckBox: 关 hover、关焦点)修不干净 —— "按下→勾选切换"那两次
+      重绘仍在。这里换思路: 不走样式引擎, 每次 paint 把方框+勾+文字**全部**
+      重画一遍 —— 无论状态怎么变, 像素都是整块一致输出, 没有任何"部分边缘"可闪。
+      (用例列表的勾选不闪, 正是因为整行由 delegate 一次画完 —— 同理。)
+
+    · 仿原生观感: 未选=白底圆角方框, 选中=蓝底白勾(与工具主题色一致); 禁用置灰;
+    · 命中区 = 框 + 文字(见 hitButton): 旧教训 —— 只认指示器会"点不动",
+      整块可点又"点旁边空白也选中"; 控件保持自然大小, 框+文字就是全部内容;
+    · 点击 = 每次物理点击恰好切换一次(见 mouseDoubleClickEvent, 连续快击不丢击);
+    · NoFocus: 点击不抢焦点(勾选框无键盘需求)。
+
+    ⚠ 离屏平台不执行真实绘制, **测不出**这类裁切/悬停态问题, 必须真机抓屏。
     """
 
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.setMinimumHeight(_CHECK_MIN_H)
+    _BOX = 16                                   # 指示器边长(逻辑像素)
+    _PAD = 8                                    # 指示器与文字的间距
+
+    def __init__(self, text="", parent=None):
+        super().__init__(parent)
+        self.setCheckable(True)
         self.setCursor(Qt.PointingHandCursor)
-        self._no_hover()
+        self.setFocusPolicy(Qt.NoFocus)
+        if text:
+            self.setText(text)
 
-    def _no_hover(self):
-        self.setAttribute(Qt.WA_Hover, False)
+    def sizeHint(self):
+        fm = QFontMetrics(self.font())
+        w = self._BOX + self._PAD + fm.horizontalAdvance(self.text()) + 4
+        return QSize(w, max(self._BOX, fm.height()) + 6)
 
-    def event(self, ev):
-        # ⚠ 构造时关掉 WA_Hover 不够: QSS 在 polish 阶段会把它重新打开, 悬停态就
-        #   又画出来了(守护测试抓到)。所以在 polish / 样式变更之后再关一次。
-        res = super().event(ev)
-        if ev.type() in (QEvent.Polish, QEvent.StyleChange):
-            self._no_hover()
-        return res
+    def hitButton(self, pos):
+        """框 + 文字可点, 控件右侧空白不可点(旧教训: 点旁边空白也选中)。"""
+        if not self.rect().contains(pos):
+            return False
+        fm = QFontMetrics(self.font())
+        text_w = fm.horizontalAdvance(self.text())
+        return pos.x() <= self._BOX + self._PAD + text_w + 2
+
+    def mouseDoubleClickEvent(self, ev):
+        """连续快速点击: 第二击被 Qt 派发成双击(QAbstractButton 不处理双击,
+        会吞掉那一击) —— 就地补一次切换, 每次物理点击恰好切换一次。"""
+        if ev.button() == Qt.LeftButton:
+            self.setChecked(not self.isChecked())
+            ev.accept()
+            return
+        super().mouseDoubleClickEvent(ev)
+
+    def paintEvent(self, _ev):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        checked = self.isChecked()
+        enabled = self.isEnabled()
+        d = self._BOX
+        r = QRect(1, (self.height() - d) // 2, d, d)
+        # 方框: 选中=蓝底白勾, 未选=白底灰框; 禁用整体置灰(主题蓝 #2563eb)
+        if checked:
+            border, fill = "#2563eb", "#2563eb"
+            mark = QColor("#ffffff" if enabled else "#c7d7fe")
+        else:
+            border, fill = (("#c9d4e4", "#ffffff") if enabled
+                            else ("#d5dde8", "#f1f5f9"))
+            mark = None
+        p.setPen(QPen(QColor(border), 1.4))
+        p.setBrush(QColor(fill))
+        p.drawRoundedRect(r, 4, 4)
+        if mark is not None:
+            p.setPen(QPen(mark, 2.2, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
+            x0, y0, x1, y1 = r.left(), r.top(), r.right(), r.bottom()
+            p.drawPolyline([QPoint(x0 + 3, y0 + d // 2),
+                            QPoint(x0 + d * 5 // 12, y1 - 3),
+                            QPoint(x1 - 3, y0 + 3)])
+        # 文字: 指示器右侧, 垂直居中(原生观感); 禁用灰字
+        p.setPen(QColor("#94a3b8" if not enabled else "#1e293b"))
+        p.setFont(self.font())
+        p.drawText(QRect(d + self._PAD, 0, self.width() - d - self._PAD,
+                         self.height()),
+                   int(Qt.AlignVCenter | Qt.AlignLeft), self.text())
+
+
+class CompactSpin(QSpinBox):
+    """窄宽度数字框(如「测试次数」): 右侧按钮区的点击重定向到**文本末尾**。
+
+    ★ 问题(用户 2026-11-03): QSpinBox 右侧那条 20px 是上下按钮的预留区(全局 QSS
+      给按钮留位), 它不属于文本编辑区 —— 点那里光标不动, 看起来"点了没反应"。
+    ★ 修法: 任何点击都把光标放到数字末尾(数字很短, 末尾即自然位置), 整个框
+      点哪儿都有反应; 上下按钮的点击行为不受影响(在 super() 之后仅补光标)。
+    """
+
+    def mousePressEvent(self, ev):
+        super().mousePressEvent(ev)
+        le = self.lineEdit()
+        le.setCursorPosition(len(le.text()))
+        le.deselect()
+
+    def mouseDoubleClickEvent(self, ev):
+        """双击默认会全选 —— 数字框没有"全选替换"的场景, 保持与单击一致(光标到末尾)。"""
+        super().mouseDoubleClickEvent(ev)
+        le = self.lineEdit()
+        le.setCursorPosition(len(le.text()))
+        le.deselect()
 
 
 class _HistComboDelegate(QStyledItemDelegate):

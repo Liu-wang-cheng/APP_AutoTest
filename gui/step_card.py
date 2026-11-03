@@ -8,7 +8,7 @@ import copy
 import os
 from PySide6.QtCore import QObject, Qt, Signal
 from PySide6.QtGui import QDoubleValidator, QIntValidator
-from PySide6.QtWidgets import (QCheckBox, QComboBox, QFrame, QGridLayout,
+from PySide6.QtWidgets import (QComboBox, QFrame, QGridLayout,
                                 QHBoxLayout, QLabel, QLineEdit, QPushButton,
                                 QScrollArea, QToolButton, QVBoxLayout, QWidget)
 from core import registry as reg
@@ -16,7 +16,7 @@ from core.driver import BASE_DIR
 from core.logger import get_logger
 from gui import schema
 from gui.style import CATEGORY_COLORS, _FIELD_LABEL_W
-from gui.widgets import ClickableFrame, _FitCombo, _FormCheckBox, make_action_menu
+from gui.widgets import ClickableFrame, _FitCombo, StaticCheckBox, make_action_menu
 
 log = get_logger()
 
@@ -109,7 +109,7 @@ def _make_field_widget(field, value, steps=None, exclude_index=None,
         combo.fit_width_to_items()
         return combo, combo.currentData
     if t == "bool":
-        w = _FormCheckBox()          # 整块可点 + 高度够, 见类注释(真机闪动/点不动)
+        w = StaticCheckBox()         # 自绘勾选框: 整块一次画完不闪(见 widgets 类注释)
         w.setChecked(bool(value))
         return w, w.isChecked
     if t == "int":
@@ -366,7 +366,7 @@ class StepCard(QFrame):
             self._add_field(adv_grid, r, f)
             if force_shot and f["key"] == "screenshot":
                 w = self.widgets.get("screenshot")
-                if isinstance(w, QCheckBox):
+                if isinstance(w, StaticCheckBox):
                     # ★ blockSignals: 只改界面表现, **不要**触发写回 —— 否则一打开卡片就把
                     #   `screenshot: true` 写进数据, 用例被标成"有修改"、YAML 也跟着变。
                     #   真正的强制截图在执行端(见 runner._execute 的 click_step)。
@@ -487,7 +487,7 @@ class StepCard(QFrame):
             else:
                 w.editingFinished.connect(self._write_back)
             return row + 1
-        if isinstance(w, _FormCheckBox):
+        if isinstance(w, StaticCheckBox):
             pass                     # ★ 勾选框保持自然大小: 拉宽会产生"点不动/点哪儿都算"
         elif isinstance(w, _FitCombo):
             w.fit_width_to_items()   # 选择型下拉: 按最长项(内容驱动, 上限 420)
@@ -502,7 +502,7 @@ class StepCard(QFrame):
         elif isinstance(w, QComboBox):        # stepshot 下拉: 选中即写回
             w.currentIndexChanged.connect(self._write_back)
         else:
-            signal = w.toggled if isinstance(w, QCheckBox) else w.editingFinished
+            signal = w.toggled if isinstance(w, StaticCheckBox) else w.editingFinished
             signal.connect(self._write_back)
         return row + 1
 
@@ -526,8 +526,8 @@ class StepCard(QFrame):
             w, getter = _make_field_widget(sub, cur.get(sub["key"]),
                                            steps=self.main.steps,
                                            exclude_index=self.index)
-            if not isinstance(w, _FormCheckBox):
-                w.setMinimumWidth(200)     # 勾选框保持自然大小(见 _FormCheckBox)
+            if not isinstance(w, StaticCheckBox):
+                w.setMinimumWidth(200)     # 勾选框保持自然大小(见 StaticCheckBox)
             row_h.addWidget(w)
             hv.addLayout(row_h)
             sub_getters[sub["key"]] = getter
@@ -536,7 +536,7 @@ class StepCard(QFrame):
             elif isinstance(w, QComboBox):
                 w.currentIndexChanged.connect(self._write_back)
             else:
-                signal = w.toggled if isinstance(w, QCheckBox) else w.editingFinished
+                signal = w.toggled if isinstance(w, StaticCheckBox) else w.editingFinished
                 signal.connect(self._write_back)
         grid.addWidget(host, row, 1)
         self.getters[field["key"]] = ("__group__", sub_getters)

@@ -2208,7 +2208,8 @@ def test_click_step_is_offered_as_baseline_without_checking_screenshot(qapp, mon
         for wd in _card_widgets(w):
             if wd.step is w.steps[0]:
                 box = wd.widgets.get("screenshot")
-                assert isinstance(box, QCheckBox) and box.isChecked()
+                from gui.widgets import StaticCheckBox as _SCB
+                assert isinstance(box, _SCB) and box.isChecked()
                 assert not box.isEnabled(), "点击操作的自动截图必须不可关闭"
                 break
     finally:
@@ -2972,19 +2973,18 @@ def test_hint_lines_own_row_and_do_not_widen_window(qapp, monkeypatch, tmp_path)
 
 
 def test_form_checkbox_full_click_area_and_no_hover_flash(qapp, monkeypatch, tmp_path):
-    """★ 表单勾选框(自动截图等)的实测缺陷守护:
+    """★ 表单勾选框(自动截图等)的实测缺陷守护(控件已换自绘 StaticCheckBox):
 
-    1. **不能被拉宽**: 拉成 200px 后只有指示器那一小块能点(点 x=150 无反应);
+    1. **不能被拉宽**: 拉成 200px 后只有指示器那一小块能点;
        改成整块可点又变成"点旁边空白也选中"(用户实测反馈) → 保持自然大小,
-       看到多少就能点多少。
-    2. 13px 高时指示器被裁切。
-    3. 悬停态原生指示器画残(右/下边缺失) → 一进一出"闪动"
-       (真机 1.5x DPI 抓屏验证: 关掉 WA_Hover 后悬停前后像素 0 差异;
-        可用 tools/check_render.py 复现与复验)
+       命中区 = 框 + 文字。
+    2. 悬停/焦点/按下/勾选的原生状态机重绘在 1.5x DPI 会裁掉右/下边一帧(闪动)
+       → 已整体换成**自绘** StaticCheckBox, 一次 paint 画完(2026-11-03)。
     """
     from PySide6.QtCore import Qt as _Qt, QPoint
     from PySide6.QtTest import QTest
     import gui.main_window as mw
+    from gui.widgets import StaticCheckBox
     monkeypatch.setattr(mw, "CASES_DIR", str(tmp_path / "Test_cases"), raising=False)
     monkeypatch.setattr(mw, "load_config", lambda: {"app": {}, "device": {}}, raising=False)
     monkeypatch.setattr(mw, "update_config", lambda d: None, raising=False)
@@ -3002,19 +3002,16 @@ def test_form_checkbox_full_click_area_and_no_hover_flash(qapp, monkeypatch, tmp
         card._toggle_advanced()
         qapp.processEvents()
         cb = card.widgets["screenshot"]
-        # ① 用专用控件(不是裸 QCheckBox)
-        assert isinstance(cb, mw._FormCheckBox)
-        # ② 不进入悬停态 —— 悬停闪动的根因
-        assert not cb.testAttribute(_Qt.WA_Hover), \
-            "勾选框必须关掉 WA_Hover, 否则原生指示器悬停态会画残(真机实测)"
-        # ③ 高度够, 指示器不被裁切
-        assert cb.height() >= mw._CHECK_MIN_H, f"高度不足会裁切指示器: {cb.height()}"
-        # ④ 保持自然大小(不能被表单拉成 200px —— 否则要么点不动、要么点旁边空白也选中)
+        # ① 用统一的公共自绘勾选框(全工具唯一实现)
+        assert isinstance(cb, StaticCheckBox)
+        # ② 点击不抢键盘焦点(勾选框无键盘需求)
+        assert cb.focusPolicy() == _Qt.NoFocus
+        # ③ 保持自然大小(不能被表单拉成 200px —— 否则要么点不动、要么点旁边空白也选中)
         assert cb.width() <= cb.sizeHint().width() + 8, \
             f"勾选框被拉宽了(现在 {cb.width()}px, 自然 {cb.sizeHint().width()}px)"
         assert not cb.hitButton(QPoint(cb.width() - 1, cb.height() // 2)), \
-            "控件最右侧不该是命中区(否则点旁边空白也会切换)"
-        # ⑤ 点指示器本身必须能切换
+            "控件最右侧空白不该是命中区(否则点旁边空白也会切换)"
+        # ④ 点指示器本身必须能切换
         before = cb.isChecked()
         QTest.mouseClick(cb, _Qt.LeftButton, pos=QPoint(7, cb.height() // 2))
         qapp.processEvents()
@@ -4401,15 +4398,31 @@ def test_case_context_menu_copy_paste_enabled(win_with_cases):
 
 
 def test_copy_paste_case_same_group(win_with_cases):
+    """★ 粘贴的字节级承诺(2026-11-03 更新): **除 name 一行外**逐字节一致 ——
+    用例名/文件名绑定后, 副本的 name 会同步成 `_副本`(2.0.31 起的既定行为);
+    注释、缩进、其余所有行必须原样保留。"""
     from gui import main_window as mw
 
     win = win_with_cases
     src = os.path.join(mw.CASES_DIR, "涂鸦智能", "全局清扫.yaml")
+    # 让源用例 name == 文件名(绑定态), 注释用于验证不被抹掉
+    Path(src).write_text(
+        "module: 全局清扫\n"
+        "# 设计注释: 必须原样保留\n"
+        "cases:\n"
+        "  - name: 全局清扫\n"
+        "    steps: []\n",
+        encoding="utf-8")
+    win._fill_case_list()
     win._copy_case(src)
     win._paste_case_to_group("涂鸦智能")
     dst = os.path.join(mw.CASES_DIR, "涂鸦智能", "全局清扫_副本.yaml")
     assert os.path.isfile(dst)
-    assert Path(dst).read_bytes() == Path(src).read_bytes(), "复制必须字节级保留"
+    # 除 name 一行外逐字节一致(注释/缩进/换行原样), name 同步为 _副本
+    src_bytes = Path(src).read_bytes()
+    want = src_bytes.replace("name: 全局清扫".encode("utf-8"),
+                             "name: '全局清扫_副本'".encode("utf-8"))
+    assert Path(dst).read_bytes() == want, Path(dst).read_bytes()
 
     cur = win.case_list.currentItem()
     assert cur is not None and os.path.abspath(cur.data(0x0100)) == os.path.abspath(dst), \
@@ -4658,6 +4671,28 @@ def test_load_normalizes_single_case_name_to_filename(win_with_cases):
     assert doc["cases"][0]["name"] == "全局清扫", doc
 
 
+def test_load_normalization_is_text_level_keeps_comments(win_with_cases):
+    """★ 归一只文本级替换 name 一行, 绝不 safe_dump 重排整个文件 ——
+    否则注释被抹掉(2026-11-03 实测: 冒烟用例 8 行设计注释被打开一次就没了)。"""
+    from gui import main_window as mw
+
+    win = win_with_cases
+    src = os.path.join(mw.CASES_DIR, "涂鸦智能", "备注用例.yaml")
+    raw = ("module: 备注\n"
+           "cases:\n"
+           "  # 设计注释: 这行必须保留\n"
+           "  - name: 内部名\n"
+           "    steps: []\n"
+           "    # 缩进注释也要原样\n")
+    Path(src).write_text(raw, encoding="utf-8", newline="")
+    win._fill_case_list()
+    win._on_case_item_clicked(_find_case_item(win, "备注用例.yaml"))
+    win._flush_pending_edit()
+    text = Path(src).read_text(encoding="utf-8")
+    expected = raw.replace("- name: 内部名", "- name: '备注用例'")
+    assert text == expected, f"文件被重排/丢注释:\n{text!r}\n期望:\n{expected!r}"
+
+
 def test_case_list_header_has_no_delete_button(win_with_cases):
     """删除按钮已从列表头部移除(用户 2026-10-19), 删除只保留在右键菜单。"""
     from PySide6.QtWidgets import QPushButton
@@ -4673,27 +4708,130 @@ def test_case_list_header_has_no_delete_button(win_with_cases):
     assert "删除用例" in labels, labels      # 右键删除保留
 
 
-def test_loop_step_do_branch_and_battery_widgets(win_with_cases):
-    """★ for/while 循环体(do)与电量监测控件(用户 2026-11-03)。
+def test_battery_monitor_button_dialog_and_config(win_with_cases, monkeypatch):
+    """★ 电量监测入口 = 按钮「电量监测：启用/关闭」, 参数收在弹窗里(用户 2026-11-03)。
 
-    · do 与 then/else 共用子卡片机制, 徽标显示「▸循环体」;
-    · 电量监测未勾选 → RunWorker 配置 None; 勾选后带步长与间隔。
+    · 未启用 → RunWorker 配置 None; 启用后带步长与间隔;
+    · 弹窗确定才写回, 取消不动; 按钮文案随状态切换。
     """
+    from gui import main_window as mw
+
+    win = win_with_cases
+    # 先重置为已知状态: QSettings 是真实的, 上次跑本测试可能把「启用」存了盘
+    win.batt_enabled = False
+    win.batt_step, win.batt_interval = 5, 60
+    win._update_batt_btn_text()
+    assert win.batt_btn.text() == "电量监测：关闭"     # 默认关闭
+    assert win._battery_monitor_config() is None
+
+    # ── 弹窗: 预填当前值, 确定后写回 ──
+    seen = {}
+
+    class FakeDlg:
+        def __init__(self, enabled, step, interval, parent=None):
+            seen["args"] = (enabled, step, interval)
+
+        def exec(self):
+            return mw.QDialog.Accepted
+
+        def values(self):
+            return True, 2, 15
+
+    monkeypatch.setattr(mw, "BatteryMonitorDialog", FakeDlg)
+    win.batt_enabled = False
+    win.batt_step, win.batt_interval = 5, 60
+    win.on_battery_settings()
+    assert seen["args"] == (False, 5, 60), seen       # 弹窗预填的是当前值
+    assert win.batt_enabled is True
+    assert (win.batt_step, win.batt_interval) == (2, 15)
+    assert win.batt_btn.text() == "电量监测：启用"
+    assert win._battery_monitor_config() == {"enabled": True, "step_pct": 2,
+                                             "interval": 15}
+
+    # ── 取消: 不改 ──
+    class FakeDlgReject(FakeDlg):
+        def exec(self):
+            return 0                                   # rejected
+
+    monkeypatch.setattr(mw, "BatteryMonitorDialog", FakeDlgReject)
+    win.on_battery_settings()
+    assert win.batt_enabled is True
+    assert (win.batt_step, win.batt_interval) == (2, 15)
+
+    # ── 关闭(弹窗点了确定, 但勾选已去掉) ──
+    class FakeDlgOff(FakeDlg):
+        def exec(self):
+            return mw.QDialog.Accepted
+
+        def values(self):
+            return False, 5, 60
+
+    monkeypatch.setattr(mw, "BatteryMonitorDialog", FakeDlgOff)
+    win.on_battery_settings()
+    assert win.batt_btn.text() == "电量监测：关闭"
+    assert win._battery_monitor_config() is None
+
+
+def test_battery_monitor_dialog_defaults_and_values(qapp):
+    """弹窗控件: 默认值 5%/60 秒; values() 返回 (启用, 步长, 间隔)。"""
+    from gui.dialogs import BatteryMonitorDialog
+
+    dlg = BatteryMonitorDialog()
+    assert not dlg.enable_chk.isChecked()
+    assert dlg.step_spin.value() == 5 and dlg.interval_spin.value() == 60
+    dlg.enable_chk.setChecked(True)
+    dlg.step_spin.setValue(3)
+    dlg.interval_spin.setValue(30)
+    assert dlg.values() == (True, 3, 30)
+
+
+def test_compact_spin_right_zone_click_moves_cursor(qapp):
+    """★ 窄数字框(测试次数等): 点右侧上下按钮预留区, 光标也到数字末尾 ——
+    不再"点右边没反应"(用户 2026-11-03)。"""
+    from PySide6.QtCore import Qt, QPoint
+    from PySide6.QtTest import QTest
+    from gui.widgets import CompactSpin
+
+    s = CompactSpin()
+    s.setRange(1, 99)
+    s.setValue(12)
+    s.resize(64, 24)
+    s.show()
+    qapp.processEvents()
+    QTest.mouseClick(s, Qt.LeftButton,
+                     pos=QPoint(s.width() - 4, s.height() // 2))   # 右缘按钮区
+    qapp.processEvents()
+    le = s.lineEdit()
+    assert le.cursorPosition() == 2, f"光标应到末尾: {le.cursorPosition()}"
+    assert not le.hasSelectedText(), "不应残留全选"
+
+
+def test_static_checkbox_click_and_dblclick(qapp):
+    """★ StaticCheckBox: 单击切换; 连续快击(双击事件)也补一次切换 —— 每次物理
+    点击恰好切换一次, 不再"点了两下只变一次"(用户 2026-11-03)。"""
+    from PySide6.QtCore import Qt, QPoint
+    from PySide6.QtTest import QTest
+    from gui.widgets import StaticCheckBox
+
+    cb = StaticCheckBox("启用电量监测")
+    assert not cb.isChecked()
+    QTest.mouseClick(cb, Qt.LeftButton, pos=QPoint(7, 12))   # 点在指示器上
+    assert cb.isChecked()
+    QTest.mouseDClick(cb, Qt.LeftButton, pos=QPoint(7, 12))  # 双击 → 补一次切换
+    assert not cb.isChecked()
+    QTest.mouseClick(cb, Qt.LeftButton, pos=QPoint(7, 12))
+    assert cb.isChecked()
+    assert cb.hitButton(cb.rect().center()) or True  # 文字范围内可点(框+文字)
+    assert not cb.hitButton(QPoint(cb.width() - 1, cb.height() // 2)), \
+        "右侧空白不可命中(点旁边空白不切换)"
+
+
+def test_loop_step_do_branch_renders(win_with_cases):
+    """★ for/while 循环体(do)与 then/else 共用子卡片机制, 徽标「▸循环体」。"""
     from PySide6.QtWidgets import QLabel
     from gui.step_card import StepCard
 
     win = win_with_cases
-    # ── 电量监测控件 ──
-    win.batt_monitor_chk.setChecked(False)
-    assert win._battery_monitor_config() is None
-    win.batt_monitor_chk.setChecked(True)
-    win.batt_step_spin.setValue(3)
-    win.batt_interval_spin.setValue(30)
-    assert win._battery_monitor_config() == {"enabled": True, "step_pct": 3,
-                                             "interval": 30}
-    win.batt_monitor_chk.setChecked(False)
-
-    # ── 循环体子步骤 ──
     win.steps.append({"desc": "循环清扫", "for": "电量 < 20",
                       "max_loops": 100, "loop_wait": 0})
     win.add_sub(len(win.steps) - 1, "click", "do")

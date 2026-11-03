@@ -9,7 +9,7 @@ import os
 import numpy as np
 from PySide6.QtCore import QEvent, Qt
 from PySide6.QtGui import QAction, QPixmap
-from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QDialog, QFormLayout,
+from PySide6.QtWidgets import (QAbstractItemView, QComboBox, QDialog, QFormLayout,
                                 QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMenu,
                                 QMessageBox, QPlainTextEdit, QPushButton,
                                 QScrollArea, QSpinBox, QTableWidget,
@@ -18,7 +18,7 @@ from core import vision
 from core.logger import get_logger
 from gui.step_card import _StepsEditor
 from gui.style import STYLESHEET
-from gui.widgets import _FitCombo, mouse_xy
+from gui.widgets import _FitCombo, mouse_xy, CompactSpin, StaticCheckBox
 
 log = get_logger()
 
@@ -312,6 +312,11 @@ class PreconditionEditDialog(QDialog):
         self.type_combo.currentIndexChanged.connect(self._build_form)
         self._build_form()
 
+    def done(self, result):
+        # ★ 关闭方式留痕(同 PreconditionsDialog.done): 追"编辑窗自己关闭"的来源
+        get_logger().info(f"[前置条件编辑] 关闭(result={result})")
+        super().done(result)
+
     def _fit_dialog_size(self):
         """按内容调整对话框大小: 步骤编辑需要更大的编辑区(用户实测: 卡片被压)"""
         big = self.type_combo.currentData() == "steps"
@@ -351,10 +356,12 @@ class PreconditionEditDialog(QDialog):
                 #   否则一编辑保存就把"确认不了也继续"的老行为改成"卡住等人"了
                 cur = spec.get(f"{prm['key']}_default", prm.get("default"))
             if prm["type"] == "bool":
-                e = QCheckBox()
+                # ★ 不带文字: 行标签已由 QFormLayout 的 addRow 给出 ——
+                #   勾选框再带一遍文字会重复显示两遍(UI 自查 2026-11-03)
+                e = StaticCheckBox()               # 自绘: 不闪(见 widgets 类注释)
                 e.setChecked(bool(cur))
                 if prm.get("hint"):
-                    e.setToolTip(prm["hint"])
+                    e.setToolTip(prm.get("hint") or prm["label"])
                 self.form.addRow(prm["label"], e)
                 self._edits[prm["key"]] = (e, prm)
                 continue
@@ -455,6 +462,13 @@ class PreconditionsDialog(QDialog):
         row.addWidget(ok)
         v.addLayout(row)
         self._render()
+
+    def done(self, result):
+        # ★ 关闭方式留痕(用户 2026-11-03 反馈"取消勾选一项界面自动关闭"):
+        #   离屏复现不了真机现象, 先把每次关闭的 result 记进运行日志 ——
+        #   1=确定 0=取消; 若出现"没点按钮却关闭", 日志就能定位到关闭来源。
+        get_logger().info(f"[前置条件设置] 关闭(result={result})")
+        super().done(result)
 
     def _render(self):
         # ★ 第一列用「表格原生 checkState」而非 setCellWidget(QCheckBox):
@@ -598,6 +612,65 @@ class NewCaseDialog(QDialog):
     def values(self):
         return (self.name_edit.text().strip(),
                 self.group_combo.currentText().strip())
+
+
+class BatteryMonitorDialog(QDialog):
+    """电量监测参数弹窗(用户 2026-11-03: 参数不放主界面, 按钮只显示 启用/关闭)。
+
+    与工具样式同步(setStyleSheet(STYLESHEET), 对话框不会自动继承主窗口样式表)。
+    """
+
+    def __init__(self, enabled=False, step=5, interval=60, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("电量监测")
+        # ★ 对话框不会自动继承主窗口样式表 → 字体/字号不一致(与前置设置弹窗同因)
+        self.setStyleSheet(STYLESHEET)
+        self.setModal(True)
+        v = QVBoxLayout(self)
+
+        # ★ 用 StaticCheckBox 不用原生 QCheckBox: 原生走 Qt 状态机, 悬停/焦点/按下/
+        #   勾选每次状态切换都是局部重绘, 1.5x DPI 下右/下边会裁掉一帧(闪动),
+        #   _FormCheckBox 已修 hover/焦点仍剩"按下→勾选"两帧 —— 自绘一次画完整块,
+        #   从根上没有部分边缘可闪(见 gui.widgets.StaticCheckBox 类注释)
+        self.enable_chk = StaticCheckBox(
+            "启用电量监测(运行时后台采样, 报告新增「电量监测」页)")
+        self.enable_chk.setChecked(bool(enabled))
+        self.enable_chk.setToolTip(
+            "从本轮第一条用例开始采样, 整轮结束/停止时结束\n"
+            "报告页含汇总(每 N% 段平均用时等)与详细(每 1% 变化)")
+        v.addWidget(self.enable_chk)
+
+        form = QFormLayout()
+        # 窄数字框用 CompactSpin: 右侧按钮区点击不"没反应"(见 widgets 类注释)
+        self.step_spin = CompactSpin()
+        self.step_spin.setRange(1, 50)
+        self.step_spin.setValue(int(step))
+        # ★ 单位不放输入框里(用户 2026-11-03: "%和秒就不要放输入框里了") —— 标签写明
+        self.step_spin.setToolTip("电量监测步长: 每下降 N% 记一段用时")
+        form.addRow("电量监测步长(%)", self.step_spin)
+        self.interval_spin = CompactSpin()
+        self.interval_spin.setRange(5, 3600)
+        self.interval_spin.setValue(int(interval))
+        self.interval_spin.setToolTip("后台采样间隔(秒)")
+        form.addRow("采样间隔(秒)", self.interval_spin)
+        v.addLayout(form)
+
+        btns = QHBoxLayout()
+        cancel = QPushButton("取消")
+        ok = QPushButton("确定")
+        ok.setObjectName("runBtn")
+        cancel.clicked.connect(self.reject)
+        ok.clicked.connect(self.accept)
+        btns.addStretch(1)
+        btns.addWidget(cancel)
+        btns.addWidget(ok)
+        v.addLayout(btns)
+
+    def values(self):
+        """(是否启用, 里程碑步长 %, 采样间隔 秒)"""
+        return (self.enable_chk.isChecked(),
+                self.step_spin.value(),
+                self.interval_spin.value())
 
 
 # ── 裁剪模板(用户 2026-10-16) ──────────────────────────────────────────────
