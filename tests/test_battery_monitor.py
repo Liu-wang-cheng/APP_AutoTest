@@ -123,10 +123,23 @@ def test_monitor_thread_samples_and_stops():
     m.stop(timeout=1)
 
 
-def test_monitor_reader_failure_records_invalid():
-    m = BatteryMonitor(device=None, interval=0.05,
-                       reader=lambda _d: (_ for _ in ()).throw(RuntimeError("boom")))
-    m.start()
-    time.sleep(0.15)
-    m.stop(timeout=2)
-    assert m.samples and all(s.battery == -1 for s in m.samples)
+def test_monitor_waits_for_first_valid_battery_to_start_timing():
+    """★ 未进设备页前读不到电量 → 不开始计时; 第一个有效点才是 t=0 的起点
+    (用户 2026-11-04: 起始电量/总时长不能把前置导航算进去)。"""
+    seq = iter([-1, -1, 100, 99, 98])
+    m = BatteryMonitor(device=None, interval=1, reader=lambda _d: next(seq))
+    for _ in range(5):                 # 直接驱动采样(线程间隔被下限钳到 1s, 不适合测)
+        m._sample_once()
+        time.sleep(0.01)
+    assert [s.battery for s in m.samples] == [100, 99, 98]
+    assert m.samples[0].t < 0.05, "第一个有效点应为 t=0"
+    assert m.samples[1].t >= 0.005
+
+
+def test_monitor_reader_failure_records_invalid_after_arming():
+    """开始计时之后的读取失败要如实记 -1(计入"读取失败"); 开始之前的不记。"""
+    seq = iter([100, -1, 98])
+    m = BatteryMonitor(device=None, interval=1, reader=lambda _d: next(seq))
+    for _ in range(3):
+        m._sample_once()
+    assert [s.battery for s in m.samples] == [100, -1, 98]

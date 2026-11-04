@@ -152,9 +152,13 @@ def _default_reader(device):
 
 
 class BatteryMonitor(threading.Thread):
-    """后台采样线程: 启动立即采一次, 之后每 interval 秒一次。
+    """后台采样线程: **拿到第一个有效电量后才开始计时**, 之后每 interval 秒一次。
 
     ★ 共用执行线程的设备对象(用户确认): 不新建 uiautomator2 连接。
+    ★ 为什么要"武装延迟"(用户 2026-11-04): 运行一开始还没进设备页, 此时读到的
+      不是机器人电量(或读不到) —— 若从运行开始计时, 起始电量/总时长都会把
+      前置导航算进去。改为: 第一次读到有效电量(=进入设备页、电量可见)时才把
+      该点作为 t=0 的起点样本; 之前的无效读数直接丢弃, 不计入统计。
     ★ stop() 幂等且带 join 超时 —— 停止/异常路径都不能留下僵尸线程。
     """
 
@@ -166,22 +170,31 @@ class BatteryMonitor(threading.Thread):
         self._reader = reader or _default_reader
         self.samples = []
         self._stop_event = threading.Event()
-        self._t0 = None
+        self._t0 = None                 # None = 尚未拿到有效电量(未开始计时)
+        self._armed = False
         self._joined = False
 
     def _label(self):
         try:
-            return str(self._label_getter() or "")
+            label = str(self._label_getter() or "")
         except Exception:
-            return ""
+            label = ""
+        # 计时开始后、第一条用例开始前 = 前置准备阶段(起始电量就在这时读到)
+        return label or ("前置准备" if self._armed else "")
 
     def _sample_once(self):
         try:
             battery = int(self._reader(self.device))
         except Exception:
             battery = -1
+        now = time.monotonic()
+        if not self._armed:
+            if battery < 0:
+                return                  # 还没进设备页/读不到: 丢弃, 不开始计时
+            self._armed = True
+            self._t0 = now              # 第一个有效点 = 计时起点(t=0)
         self.samples.append(BatterySample(
-            t=max(0.0, time.monotonic() - self._t0) if self._t0 else 0.0,
+            t=max(0.0, now - self._t0),
             battery=battery, label=self._label(),
             wall=time.strftime("%H:%M:%S")))
 
@@ -191,7 +204,7 @@ class BatteryMonitor(threading.Thread):
             self._sample_once()
 
     def start(self):
-        self._t0 = time.monotonic()
+        # ★ 不在这里设 _t0: 计时起点由**第一个有效电量**决定(见 _sample_once)
         super().start()
 
     def stop(self, timeout=5.0):
