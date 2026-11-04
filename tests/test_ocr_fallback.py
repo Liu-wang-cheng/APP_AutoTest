@@ -303,6 +303,51 @@ def test_battery_ocr_fallback(monkeypatch):
     assert session.get_battery_level(_Runner(xml='<node text="扫地机器人0087"/>')) == 93
 
 
+def test_battery_ocr_fallback_excludes_phone_status_bar(monkeypatch):
+    """★ 2026-11-04 实测: 插件页刚打开时层级很稀 → system_ui_regions 为空 →
+      手机状态栏的「97%」被当成机器人电量(日志里 97→100, 30 秒涨 3% 不可能)。
+      修法: 层级里没有系统 UI 时按屏幕比例兜底排除顶部/底部整宽带。
+    """
+    from core import ocr, session
+
+    seen = {}
+
+    monkeypatch.setattr(ocr, "available", lambda: True)
+
+    def fake_texts(d, exclude=None):
+        seen["exclude"] = exclude
+        return [("电池 100%", (500, 800))]
+
+    monkeypatch.setattr(ocr, "screen_texts", fake_texts)
+    d = _Runner(xml='<node text="扫地机器人0087"/>')
+    d.window_size = lambda: (1080, 1920)
+    assert session.get_battery_level(d) == 100
+    ex = seen["exclude"]
+    assert ex, "层级无系统 UI 时必须兜底排除状态栏, 否则会读到手机电量"
+    assert ex[0][1] == 0 and ex[0][3] > 0        # 顶部整宽带
+    assert ex[1][3] == 1920                       # 底部整宽带
+
+
+def test_battery_ocr_uses_tree_regions_when_available(monkeypatch):
+    """层级里**有**系统 UI 节点时, 用它们的真实 bounds, 不套比例兜底。"""
+    from core import ocr, session
+
+    seen = {}
+    monkeypatch.setattr(ocr, "available", lambda: True)
+
+    def fake_texts(d, exclude=None):
+        seen["exclude"] = exclude
+        return [("电池 88%", (500, 800))]
+
+    monkeypatch.setattr(ocr, "screen_texts", fake_texts)
+    xml = ('<node package="com.android.systemui" text="97%" '
+           'bounds="[980,10][1030,60]"/><node text="扫地机器人"/>')
+    d = _Runner(xml=xml)
+    d.window_size = lambda: (1080, 1920)
+    assert session.get_battery_level(d) == 88
+    assert seen["exclude"] and seen["exclude"][0][1] <= 10, seen["exclude"]
+
+
 def test_wait_texts_uses_any_present_with_ocr(monkeypatch):
     """★ 进设备页的判定轮询(_wait_texts)也要能靠 OCR 命中"""
     from core import ocr, session

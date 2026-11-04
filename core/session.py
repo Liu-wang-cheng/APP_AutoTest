@@ -26,6 +26,23 @@ def get_device_id(cfg, device_option="auto"):
     return device_cfg["list"][0]["id"]
 
 
+def _status_bar_guess(d):
+    """层级里没有系统 UI 节点时的兜底排除区: 顶部状态栏 / 底部导航栏两条整宽带。
+
+    ★ 2026-11-04 实测(用户日志): 插件页刚打开时层级很稀(只有标题),
+      `system_ui_regions(xml)` 返回空 → OCR 什么都不排除 → **手机状态栏**的「97%」
+      被当成机器人电量(日志里先 97 后 100, 差 3% 只隔 30 秒, 物理上不可能)。
+      机器人的电量显示在页面主体, 不会落在贴顶/贴底那一小条里, 所以按屏幕比例
+      硬排除是安全的(状态栏/导航栏本来就是整宽窗口)。
+    """
+    try:
+        w, h = d.window_size()
+        return [(0, 0, int(w), int(h * 0.06)),
+                (0, int(h * 0.94), int(w), int(h))]
+    except Exception:
+        return []
+
+
 def get_battery_level(d):
     """提取**扫地机插件**的电量百分比(如 100), 读不到返回 -1。
 
@@ -56,8 +73,11 @@ def get_battery_level(d):
     if ocr.available():
         # ★ 识别前抹掉系统栏(同 2.0.25): 否则手机状态栏那个「93%」会被当机器人的电量
         from core.sentinel import system_ui_regions
-        ocr_texts = [t for t, _ in ocr.screen_texts(
-            d, exclude=system_ui_regions(xml))]
+        exclude = system_ui_regions(xml)
+        if not exclude:
+            # 层级里没有系统 UI 节点(插件页刚打开/极简层级) → 按比例兜底排除
+            exclude = _status_bar_guess(d)
+        ocr_texts = [t for t, _ in ocr.screen_texts(d, exclude=exclude)]
         for kw in ("电池", "电量"):
             hits = [int(m) for t in ocr_texts if kw in t
                     for m in re.findall(r'(\d+)\s*%', t)]
