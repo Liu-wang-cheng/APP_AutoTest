@@ -104,7 +104,11 @@ class RunWorker(QThread):
 
     # ── 电量监测(用户 2026-11-03) ────────────────────────────────────────
     def _start_battery_monitor(self, d):
-        """勾选了电量监测时启动后台采样线程(共用执行线程的设备对象)。"""
+        """启动后台采样线程(共用执行线程的设备对象)。
+
+        ★ 由 run() 在**第一条用例的步骤开始时**调用(用户 2026-11-04) ——
+          前置导航/检查不计入电量监测的运行时间。
+        """
         cfg = self.battery_cfg or {}
         if not cfg.get("enabled"):
             return
@@ -266,6 +270,7 @@ class RunWorker(QThread):
         self._run_tag = _timefmt.run_tag()
         report = None
         report_saved = False
+        monitor_started = False          # 电量监测: 第一条用例步骤开始时才启动
         try:
             cfg = load_config()
 
@@ -273,7 +278,6 @@ class RunWorker(QThread):
             import uiautomator2 as u2
             d = u2.connect(self.device_id)
             d.implicitly_wait(10)
-            self._start_battery_monitor(d)
             if self._stop_requested:
                 # ★ 统一消息(审查 2026-10-12): 界面按"消息 == 已手动停止"识别中性停止,
                 #   两种写法会让其中一种被渲染成红色"未通过"
@@ -444,6 +448,12 @@ class RunWorker(QThread):
                     runner.on_result = on_result
                     self.runner = runner
                     self._apply_pause()      # 前置阶段按下的暂停 → 本用例步骤间生效
+                    # ★ 电量监测从**第一条用例的步骤开始**才启动(用户 2026-11-04):
+                    #   前置(进设备页/结束烘干/充电/电量门槛)不算测试运行时间;
+                    #   之后各轮/各用例共用一个监测线程(报告是整轮一页)。
+                    if not monitor_started:
+                        self._start_battery_monitor(d)
+                        monitor_started = True
                     passed = runner.run_steps(steps)
                     self.runner = None
 

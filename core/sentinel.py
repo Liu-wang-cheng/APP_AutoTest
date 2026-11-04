@@ -125,6 +125,32 @@ def system_ui_regions(xml, top_ratio=0.15, bottom_ratio=0.85):
     return out
 
 
+def ocr_exclude_regions(d, xml, top_ratio=0.05):
+    """OCR 识别前要抹掉的区域 = 实测系统 UI 矩形 + **顶部状态栏兜底带**。
+
+    ★ 2026-11-04 实测(用户日志): 插件页刚打开时层级很稀, `system_ui_regions(xml)`
+      可能为空, 也可能**只有底部导航栏**; 两种情况都会让手机顶部状态栏的
+      「97%」「正在充电…」被 OCR 读进来, 顶替机器人电量/充电状态。
+      所以判据不是"列表是否为空", 而是"**顶部是否已被实测矩形覆盖**"。
+    ★ 兜底只补顶部(**不碰底部**): 底部导航栏没有文字, 而 APP 自己的底部按钮文字
+      可能贴底, 误杀代价更大。顶部带取屏高 5%(1920 上约 96px, 常见状态栏 72~96px;
+      APP 标题一般在其下方)。
+    """
+    rects = [tuple(r) for r in system_ui_regions(xml)]
+    try:
+        w, h = d.window_size()
+    except Exception:
+        return rects
+    if not w or not h:
+        return rects
+    top = max(1, int(h * top_ratio))
+    covered = any(r[1] <= top // 2 and r[3] >= top and (r[2] - r[0]) >= w * 0.9
+                  for r in rects)
+    if not covered:
+        rects.append((0, 0, int(w), top))
+    return rects
+
+
 def drop_system_ui_lines(lines, rects):
     """丢掉**整行都落在系统 UI 区域里**的 OCR 结果 —— 返回保留下来的行。
 
@@ -140,7 +166,11 @@ def drop_system_ui_lines(lines, rects):
         return list(lines)
     kept = []
     for txt, box in lines:
-        x1, y1, x2, y2 = box
+        try:
+            x1, y1, x2, y2 = box
+        except (TypeError, ValueError):
+            kept.append((txt, box))          # 拿不到完整矩形 → 无法判断, 保留
+            continue
         inside = any(x1 >= rx1 and y1 >= ry1 and x2 <= rx2 and y2 <= ry2
                      for rx1, ry1, rx2, ry2 in rects)
         if not inside:

@@ -89,7 +89,7 @@ def parse_xml(xml, package=""):
 def capture_page(d, package, no_ocr=False):
     """当前页面的文本快照: 无障碍树 + OCR（插件页树稀疏时 OCR 很关键）。"""
     from core import ocr
-    from core.sentinel import system_ui_regions
+    from core.sentinel import ocr_exclude_regions
     from core.session import warm_webview
 
     xml = warm_webview(d)
@@ -97,7 +97,7 @@ def capture_page(d, package, no_ocr=False):
     ocr_used = False
     if not no_ocr:
         try:
-            for t, _pos in ocr.screen_texts(d, exclude=system_ui_regions(xml)):
+            for t, _pos in ocr.screen_texts(d, exclude=ocr_exclude_regions(d, xml)):
                 if t:
                     texts.append(t.strip())
                     ocr_used = True

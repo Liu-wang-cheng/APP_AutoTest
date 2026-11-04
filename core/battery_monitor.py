@@ -47,12 +47,16 @@ def build_points(samples, step_pct=5):
       valid / invalid: 有效/无效采样数
       start_battery / end_battery: 首/末有效电量(没有有效样本时 None)
       raw:       [{"t","battery","label","delta","dt"}]  —— 每次电量实际变化一行
-      milestones:[{"t","battery","label","target","dt"}] —— 每降 N% 一行
+      milestones:[{"t","battery","label","target","dt","from_battery"}]
+                 —— 每降 N% 一行; from_battery = 该段起点电量
 
     ★ 里程碑锚点 = **相对监测起点的累计下降量**(起点 87%、N=5 → 82/77/…)，
       起点不是整十也不影响。
     ★ 一次采样跨过多个阈值时只记一行(实际电量 + 跨过的目标)，下一锚点从实际电量
       重算 —— 否则会出现好几条 dt=0 的噪声行。
+    ★ 电量回升(回充/充电)时**重新锚定**(代码审查 2026-11-04): 充电这一段时间不属于
+      任何一个下降段, 否则"最长/最短 N% 段"会把充电的几十分钟算进某一段, 结论完全失真。
+      所以回升时 next_thr / prev_t 一起重置, 后续从回升后的电量重新算。
     """
     step = max(1, int(step_pct or 1))
     vals = _valid(samples)
@@ -78,14 +82,22 @@ def build_points(samples, step_pct=5):
     start = vals[0]
     next_thr = start.battery - step
     prev_t = start.t
+    anchor_b = start.battery           # 当前下降段的起点电量
     for s in vals[1:]:
+        if s.battery > anchor_b:        # 回升 = 充电: 重置锚点, 不把充电时间算进任何一段
+            anchor_b = s.battery
+            prev_t = s.t
+            next_thr = s.battery - step
+            continue
         if s.battery <= next_thr:
             out["milestones"].append({
                 "t": s.t, "battery": s.battery, "label": s.label,
                 "wall": s.wall,
                 "target": next_thr, "dt": max(0.0, s.t - prev_t),
+                "from_battery": anchor_b,
             })
             prev_t = s.t
+            anchor_b = s.battery
             next_thr = s.battery - step
     return out
 
@@ -114,12 +126,10 @@ def build_summary(samples, step_pct=5):
     dts = [m["dt"] for m in pts["milestones"]]
     if dts:
         out["milestone_average"] = sum(dts) / len(dts)
-        # ★ 最长/最短段(用户 2026-11-04): 带分段区间, 一眼能定位是哪一档掉得慢/快
-        segs = []
-        prev_b = pts["start_battery"]
-        for m in pts["milestones"]:
-            segs.append({"from": prev_b, "to": m["battery"], "dt": m["dt"]})
-            prev_b = m["battery"]
+        # ★ 最长/最短段(用户 2026-11-04): 带分段区间, 一眼能定位是哪一档掉得慢/快。
+        #   区间起点用 milestone.from_battery —— 充电回升后段起点会重置(见 build_points)。
+        segs = [{"from": m.get("from_battery", 0), "to": m["battery"],
+                 "dt": m["dt"]} for m in pts["milestones"]]
         out["milestone_longest"] = max(segs, key=lambda s: s["dt"])
         out["milestone_shortest"] = min(segs, key=lambda s: s["dt"])
 

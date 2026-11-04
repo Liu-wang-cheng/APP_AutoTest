@@ -93,6 +93,24 @@ def test_build_summary_longest_shortest_segment():
     assert (sm["milestone_shortest"]["from"], sm["milestone_shortest"]["to"]) == (80, 75)
 
 
+def test_build_points_resets_segment_on_charge():
+    """★ 电量回升(回充/充电)后重新锚定: 充电时间不能算进任何一个 N% 段
+    (代码审查 2026-11-04: 否则最长段会被充电的几十分钟撑爆, 结论失真)。"""
+    # 50 →(100s) 45 → 充电到 60(t=1000) → 55(t=1100)
+    s = _samples((0, 50), (100, 45), (1000, 60), (1100, 55), (1300, 50))
+    pts = build_points(s, step_pct=5)
+    # 第一段: 50→45, 用时 100s
+    assert pts["milestones"][0]["from_battery"] == 50
+    assert pts["milestones"][0]["battery"] == 45
+    assert pts["milestones"][0]["dt"] == 100
+    # 充电后重新锚定 60: →55 用时 100s(而不是 1100s), →50 用时 200s
+    assert pts["milestones"][1]["from_battery"] == 60
+    assert pts["milestones"][1]["battery"] == 55
+    assert pts["milestones"][1]["dt"] == 100
+    assert pts["milestones"][2]["from_battery"] == 55
+    assert pts["milestones"][2]["dt"] == 200
+
+
 def test_build_summary_empty():
     sm = build_summary([], 5)
     assert sm["valid"] == 0 and sm["cases"] == []

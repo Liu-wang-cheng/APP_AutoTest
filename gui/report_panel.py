@@ -52,7 +52,7 @@ class ReportsPanel(QWidget):
         self.list.setObjectName("reportList")
         self.list.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self.list.setAlternatingRowColors(True)
-        self.list.itemDoubleClicked.connect(lambda _it: self.open_selected())
+        self.list.itemDoubleClicked.connect(self._open_item)
         v.addWidget(self.list)
         self.refresh()
 
@@ -65,9 +65,17 @@ class ReportsPanel(QWidget):
                      and not n.startswith("~$")]      # Excel 打开时的临时锁文件
         except OSError:
             return []
-        paths = [os.path.join(self.reports_dir, n) for n in names]
-        paths.sort(key=lambda p: os.path.getmtime(p), reverse=True)
-        return paths
+        # ★ 逐个 stat(代码审查 2026-11-04): 文件可能在列表与排序之间被删/被占用,
+        #   直接 getmtime 会抛异常把**整个列表**清空; 拿不到的那份跳过即可。
+        rows = []
+        for n in names:
+            p = os.path.join(self.reports_dir, n)
+            try:
+                rows.append((os.stat(p).st_mtime, p))
+            except OSError:
+                continue
+        rows.sort(reverse=True)
+        return [p for _mt, p in rows]
 
     def refresh(self):
         """重建列表; 尽量保持原选中(按路径)。"""
@@ -98,6 +106,12 @@ class ReportsPanel(QWidget):
                 if self.list.item(i).isSelected()]
 
     # ── 操作 ──
+    def _open_item(self, item):
+        """双击只打开**被双击的那一行**(多选状态下不要把别的也一起打开)。"""
+        p = item.data(0x0100) if item is not None else None
+        if p:
+            self.open_path(p)
+
     def open_selected(self):
         paths = self.selected_paths()
         if not paths:

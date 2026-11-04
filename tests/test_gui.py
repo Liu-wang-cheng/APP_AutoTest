@@ -4895,6 +4895,12 @@ def test_reports_panel_lists_opens_and_deletes(qapp, tmp_path, monkeypatch):
     # 双击同一行也打开
     panel.list.itemDoubleClicked.emit(panel.list.item(0))
     assert len(opened) == 2
+    # ★ 多选状态下双击只打开**被双击的那一行**(代码审查 2026-11-04)
+    opened.clear()
+    for i in range(panel.list.count()):
+        panel.list.item(i).setSelected(True)
+    panel.list.itemDoubleClicked.emit(panel.list.item(1))
+    assert opened == [str(a)], opened
 
     # 多选删除
     for i in range(panel.list.count()):

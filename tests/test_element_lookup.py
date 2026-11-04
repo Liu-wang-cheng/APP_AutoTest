@@ -587,7 +587,7 @@ def test_click_by_locator_falls_back_to_ocr_when_tree_empty(make_runner, monkeyp
     monkeypatch.setattr(r, "_poll_sleep", lambda n: None)
     monkeypatch.setattr(ocr, "available", lambda: True)
     monkeypatch.setattr(ocr, "screen_boxes",
-                        lambda d, **k: [("清扫中", (123, 456))])
+                        lambda d, **k: [("清扫中", (123, 456, 400, 500))])
     monkeypatch.setattr(r, "mark_click", lambda *a, **k: None)
     clicks = []
     monkeypatch.setattr(d, "click", lambda x, y: clicks.append((x, y)))
@@ -607,7 +607,7 @@ def test_assert_locator_falls_back_to_ocr(make_runner, monkeypatch):
     monkeypatch.setattr(ocr, "available", lambda: True)
     monkeypatch.setattr(ocr, "sparse", lambda xml, **kw: True)
     monkeypatch.setattr(ocr, "screen_boxes",
-                        lambda d, **k: [("屏幕上读到 正在吸尘", (1, 2))])
+                        lambda d, **k: [("屏幕上读到 正在吸尘", (100, 800, 400, 840))])
     r._assert_locator("正在吸尘", timeout=1)      # 不抛异常 = 兜底命中
 
 

@@ -26,23 +26,6 @@ def get_device_id(cfg, device_option="auto"):
     return device_cfg["list"][0]["id"]
 
 
-def _status_bar_guess(d):
-    """层级里没有系统 UI 节点时的兜底排除区: 顶部状态栏 / 底部导航栏两条整宽带。
-
-    ★ 2026-11-04 实测(用户日志): 插件页刚打开时层级很稀(只有标题),
-      `system_ui_regions(xml)` 返回空 → OCR 什么都不排除 → **手机状态栏**的「97%」
-      被当成机器人电量(日志里先 97 后 100, 差 3% 只隔 30 秒, 物理上不可能)。
-      机器人的电量显示在页面主体, 不会落在贴顶/贴底那一小条里, 所以按屏幕比例
-      硬排除是安全的(状态栏/导航栏本来就是整宽窗口)。
-    """
-    try:
-        w, h = d.window_size()
-        return [(0, 0, int(w), int(h * 0.06)),
-                (0, int(h * 0.94), int(w), int(h))]
-    except Exception:
-        return []
-
-
 def get_battery_level(d):
     """提取**扫地机插件**的电量百分比(如 100), 读不到返回 -1。
 
@@ -71,13 +54,12 @@ def get_battery_level(d):
         return max(hits)
     # ★ OCR 兜底: 插件页树稀疏时 text 里什么都没有, 但屏幕上电量的数字是可见的
     if ocr.available():
-        # ★ 识别前抹掉系统栏(同 2.0.25): 否则手机状态栏那个「93%」会被当机器人的电量
-        from core.sentinel import system_ui_regions
-        exclude = system_ui_regions(xml)
-        if not exclude:
-            # 层级里没有系统 UI 节点(插件页刚打开/极简层级) → 按比例兜底排除
-            exclude = _status_bar_guess(d)
-        ocr_texts = [t for t, _ in ocr.screen_texts(d, exclude=exclude)]
+        # ★ 识别前抹掉系统栏(同 2.0.25): 否则手机状态栏那个「93%」会被当机器人的电量。
+        #   ★ 2026-11-04: 改走 sentinel.ocr_exclude_regions —— 层级里**只有底部导航栏**
+        #   这类"非空但不含顶部"的情况也要补顶部状态栏带, 见该函数注释。
+        from core.sentinel import ocr_exclude_regions
+        ocr_texts = [t for t, _ in ocr.screen_texts(
+            d, exclude=ocr_exclude_regions(d, xml))]
         for kw in ("电池", "电量"):
             hits = [int(m) for t in ocr_texts if kw in t
                     for m in re.findall(r'(\d+)\s*%', t)]
@@ -161,9 +143,9 @@ def page_sample(d, xml=None, limit=10):
         if len(out) < 3:
             try:
                 from core import ocr
-                from core.sentinel import system_ui_regions
+                from core.sentinel import ocr_exclude_regions
                 for t, _pos in ocr.screen_texts(
-                        d, exclude=system_ui_regions(xml)):
+                        d, exclude=ocr_exclude_regions(d, xml)):
                     _add(t)
                     if len(out) >= limit:
                         break
@@ -682,8 +664,8 @@ def text_present_detail(d, texts, xml=None, round_no=None):
         #   像素、没有包名可依 —— 手机状态栏/通知栏上"看得见"的字(通知横幅、锁屏提示、
         #   电量文案)只能按坐标排。判据用**实测**的系统 UI 矩形(不是猜比例), 且只有整行
         #   落在矩形内才丢(压线的不动) —— 见 sentinel.system_ui_rects/drop_system_ui_lines。
-        from core.sentinel import drop_system_ui_lines, system_ui_regions
-        _regions = system_ui_regions(xml)
+        from core.sentinel import drop_system_ui_lines, ocr_exclude_regions
+        _regions = ocr_exclude_regions(d, xml)
         # ★ 识别**之前**就把系统栏抹黑(用户 2026-10-16: "应该把手机系统那一段排除掉识别
         #   才对") —— 事后过滤只是兜底: 抹黑后那一段压根不参与识别, 日志里也不会出现
         #   "系统栏的字命中了什么"

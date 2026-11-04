@@ -118,6 +118,34 @@ def test_battery_report_columns_autofit(tmp_path):
     assert ws.column_dimensions["C"].width >= 20, ws.column_dimensions["C"].width
 
 
+def test_battery_report_not_confused_by_case_named_battery(tmp_path):
+    """★ 代码审查 2026-11-04: 用例名恰好叫「电量监测」时, 旧实现按 sheet 名判重会
+    直接把用例页当电量页返回 → 报告里没有电量数据。幂等应看对象标记而非名字。"""
+    from core.battery_monitor import BatterySample
+
+    r = ExcelReport(path=tmp_path / "r.xlsx")
+    r.add_result("电量监测", True)               # 先建了一张同名的用例页
+    samples = [BatterySample(t=t, battery=b) for t, b in [(0, 80), (60, 79)]]
+    ws1 = r.add_battery_report(samples, step_pct=5)
+    ws2 = r.add_battery_report(samples, step_pct=5)   # 幂等: 再调不建第二页
+    assert ws1 is ws2
+    assert "电量监测" in r.wb.sheetnames                 # 用例页还在
+    assert ws1.title != "电量监测", "电量页自动改名, 不覆盖用例页"
+    titles = [c.value for row in ws1.iter_rows() for c in row if c.value]
+    assert any(v == "电量监测" for v in titles)          # 内容确实是电量页
+    assert len([n for n in r.wb.sheetnames if n.startswith("电量监测")]) == 2
+
+
+def test_battery_chart_downsamples_long_runs():
+    """★ 代码审查 2026-11-04: 长测(几秒一采、几小时)不把上万行写进隐藏列。"""
+    pts = [(i * 0.01, 90) for i in range(5000)]
+    out = ExcelReport._downsample_for_chart(pts)
+    assert len(out) == ExcelReport.CHART_MAX_POINTS
+    assert out[0] == pts[0] and out[-1] == pts[-1]      # 首末点必须保留
+    short = pts[:100]
+    assert ExcelReport._downsample_for_chart(short) == short
+
+
 def test_summary_sheet_has_pass_rate(tmp_path):
     p = tmp_path / "r.xlsx"
     r = ExcelReport(path=p)

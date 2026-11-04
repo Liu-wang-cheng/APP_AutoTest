@@ -54,6 +54,9 @@ class ExcelReport:
         self.summary_ws = self.wb.active
         self.summary_ws.title = "汇总"
         self._cases = {}
+        # ★ 电量监测页只建一次(代码审查 2026-11-04): 原来按 sheet 名判重, 用例名恰好叫
+        #   「电量监测」时会被误认为已建好 → 报告里根本没有电量数据。改用本对象的标记。
+        self._battery_sheet = None
         # 设备信息(会话开始时由 conftest 填入真实值)
         self._device_info = {"sn": "待获取", "app_version": "待获取",
                              "固件版本": "待获取", "基站版本": "待获取"}
@@ -184,9 +187,10 @@ class ExcelReport:
         """
         from core.battery_monitor import build_points, build_summary, format_mmss
 
-        if self.BATTERY_TITLE in self.wb.sheetnames:
-            return self.wb[self.BATTERY_TITLE]
+        if self._battery_sheet is not None:
+            return self._battery_sheet
         ws = self.wb.create_sheet(self._unique_sheet_title(self.BATTERY_TITLE))
+        self._battery_sheet = ws
         for col, w in zip("ABCDEFGH", [20, 12, 12, 10, 12, 14, 12, 14]):
             ws.column_dimensions[col].width = w
         summary = build_summary(samples, step_pct)
@@ -299,9 +303,9 @@ class ExcelReport:
                 r = section(r, f"每 {int(step_pct or 1)}% 分段用时")
                 r = header(r, ["分段", "起始电量", "结束电量", "用时(分:秒)",
                                "平均每 1%(分:秒)", "到达时刻(分:秒)"])
-                prev_batt = summary["start_battery"]
                 for m in milestones:
-                    seg_start = prev_batt
+                    # 段起点取 milestone 自带值: 充电回升后 build_points 会重新锚定
+                    seg_start = m.get("from_battery", summary["start_battery"])
                     seg_end = m["battery"]
                     seg_drop = max(1, seg_start - seg_end)
                     put(r, 1, f"{seg_start}% → {seg_end}%")
@@ -311,7 +315,6 @@ class ExcelReport:
                     put(r, 5, format_mmss(m["dt"] / seg_drop), align="center")
                     put(r, 6, format_mmss(m["t"]), align="center")
                     border_row(r)
-                    prev_batt = seg_end
                     r += 1
                 r += 1
 
@@ -339,19 +342,40 @@ class ExcelReport:
             r += 1
 
         # ── 右侧电量-时间曲线(用户 2026-11-04) ──
+        last_table_row = r - 1               # 曲线数据写在隐藏列, 列宽只看正文表
         self._add_battery_chart(ws, samples, points["milestones"])
         # ★ 列宽自适应内容(用户 2026-11-04: 避免显示不全) —— openpyxl 不会自动调,
         #   这里按最长的非合并单元格文本估算(中文按 2 个字符宽)。
-        self._autofit_columns(ws)
+        self._autofit_columns(ws, max_row=last_table_row)
         return ws
 
+    #: 曲线最多画这么多点(代码审查 2026-11-04): 长测(几小时/几秒一采)会写出上万行
+    #: 隐藏数据, 文件膨胀且 Excel 打开变慢; 曲线形状在 600 点上已经看不出区别。
+    CHART_MAX_POINTS = 600
+
+    @classmethod
+    def _downsample_for_chart(cls, pts, limit=None):
+        """均匀抽稀, 但**首末点必须保留**(曲线的起点/终点不能丢)。"""
+        limit = int(limit or cls.CHART_MAX_POINTS)
+        if len(pts) <= limit:
+            return list(pts)
+        step = (len(pts) - 1) / float(limit - 1)
+        return [pts[int(round(i * step))] for i in range(limit)]
+
     @staticmethod
-    def _autofit_columns(ws, letters="ABCDEFGH", min_w=8, max_w=50):
-        """按内容估算列宽; 跳过合并区(合并区文本横跨多列, 按它算会把列撑爆)。"""
+    def _autofit_columns(ws, letters="ABCDEFGH", min_w=8, max_w=50, max_row=None):
+        """按内容估算列宽; 跳过合并区(合并区文本横跨多列, 按它算会把列撑爆)。
+
+        max_row: 只看正文表的前 N 行 —— 图表数据写在隐藏列里会把 ws.max_row 撑大,
+        不设上限时 `ws[letter]` 会为空行**创建单元格**, 白白拖慢保存(代码审查 2026-11-04)。
+        """
+        from openpyxl.utils import column_index_from_string
         merged_tl = {(r.min_row, r.min_col) for r in ws.merged_cells.ranges}
+        limit = max_row or ws.max_row
         for letter in letters:
             best = 0
-            for cell in ws[letter]:
+            ci = column_index_from_string(letter)
+            for (cell,) in ws.iter_rows(min_col=ci, max_col=ci, max_row=limit):
                 if (cell.row, cell.column) in merged_tl or cell.value is None:
                     continue
                 text = str(cell.value)
@@ -382,6 +406,7 @@ class ExcelReport:
                if getattr(s, "battery", -1) >= 0]
         if len(pts) < 2:
             return
+        pts = ExcelReport._downsample_for_chart(pts)   # 长测抽稀, 首末点保留
         start = 4
 
         def write_col(col, letter, values, fmt=None):

@@ -554,8 +554,11 @@ class ActionRunner:
         if cached and _t.time() - cached[0] < ttl:
             return cached[1]
         try:
-            from core.sentinel import system_ui_regions
-            regions = system_ui_regions(self.d.dump_hierarchy())
+            # ★ 2026-11-04: 与判定侧同一份排除区(含"层级只有底部导航栏时补顶部
+            #   状态栏带"), 否则点"充电"可能点到手机状态栏/通知横幅上。
+            from core.sentinel import ocr_exclude_regions
+            xml = self.d.dump_hierarchy()
+            regions = ocr_exclude_regions(self.d, xml)
         except Exception:
             regions = []
         setattr(self, key, (_t.time(), regions))

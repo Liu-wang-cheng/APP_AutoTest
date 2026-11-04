@@ -306,7 +306,7 @@ def test_battery_ocr_fallback(monkeypatch):
 def test_battery_ocr_fallback_excludes_phone_status_bar(monkeypatch):
     """★ 2026-11-04 实测: 插件页刚打开时层级很稀 → system_ui_regions 为空 →
       手机状态栏的「97%」被当成机器人电量(日志里 97→100, 30 秒涨 3% 不可能)。
-      修法: 层级里没有系统 UI 时按屏幕比例兜底排除顶部/底部整宽带。
+      修法: 顶部没被实测矩形覆盖时, 按屏高 5% 补一条整宽状态栏带。
     """
     from core import ocr, session
 
@@ -324,8 +324,28 @@ def test_battery_ocr_fallback_excludes_phone_status_bar(monkeypatch):
     assert session.get_battery_level(d) == 100
     ex = seen["exclude"]
     assert ex, "层级无系统 UI 时必须兜底排除状态栏, 否则会读到手机电量"
-    assert ex[0][1] == 0 and ex[0][3] > 0        # 顶部整宽带
-    assert ex[1][3] == 1920                       # 底部整宽带
+    assert ex == [(0, 0, 1080, 96)], ex          # 只补顶部整宽带(不碰底部)
+
+
+def test_battery_ocr_top_band_added_when_tree_only_has_bottom_nav(monkeypatch):
+    """★ 层级里**只有底部导航栏**时也要补顶部带 —— 判据不是"列表为空",
+    而是"顶部没被实测矩形覆盖"(代码审查 2026-11-04 发现的漏洞)。"""
+    from core import ocr, session
+
+    seen = {}
+
+    monkeypatch.setattr(ocr, "available", lambda: True)
+    monkeypatch.setattr(ocr, "screen_texts",
+                        lambda d, exclude=None: seen.update(exclude=exclude)
+                        or [("电池 92%", (500, 800))])
+    xml = ('<node package="com.android.systemui" text="" bounds="[0,1776][1080,1920]"/>'
+           '<node text="扫地机器人"/>')
+    d = _Runner(xml=xml)
+    d.window_size = lambda: (1080, 1920)
+    assert session.get_battery_level(d) == 92
+    ex = seen["exclude"]
+    assert (0, 0, 1080, 96) in ex, f"底部导航栏不算覆盖顶部: {ex}"
+    assert (0, 1776, 1080, 1920) in ex
 
 
 def test_battery_ocr_uses_tree_regions_when_available(monkeypatch):
