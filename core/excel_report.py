@@ -205,26 +205,35 @@ class ExcelReport:
             cell.border = self.BORDER
             return cell
 
+        def border_row(row, c1=1, c2=8):
+            # ★ 合并单元格只有左上角带边框(用户 2026-11-04: "单元格边框加上") ——
+            #   合并区与整行都补一遍, 表看起来才是完整网格。
+            self._border_range(ws, row, c1, row, c2)
+
         def section(row, text):
             ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=8)
             put(row, 1, text, bold=True, font_color="1F4E79", size=12)
+            border_row(row)
             return row + 1
 
         def header(row, labels):
             for ci, text in enumerate(labels, 1):
                 put(row, ci, text, bold=True, fill="4472C4",
                     font_color="FFFFFF", align="center")
+            border_row(row)               # 列数不足 8 时右侧也补齐边框
             return row + 1
 
         # ── 标题 ──
         ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=8)
         put(1, 1, "电量监测", bold=True, font_color="1F4E79", align="center", size=16)
+        border_row(1)
         ws.row_dimensions[1].height = 34
         ws.merge_cells(start_row=2, start_column=1, end_row=2, end_column=8)
         sub = (f"步长 {int(step_pct or 1)}%    "
                f"采样间隔 {int(interval) if interval else '-'} 秒    "
                f"生成时间: {datetime.now().strftime(_tf.DATETIME)}")
         put(2, 1, sub, font_color="808080", align="center", size=9)
+        border_row(2)
 
         r = 4
         r = section(r, "一、汇总")
@@ -233,32 +242,45 @@ class ExcelReport:
             ws.merge_cells(start_row=row, start_column=2, end_row=row, end_column=8)
             put(row, 1, k, bold=True)
             put(row, 2, v)
+            border_row(row)
             return row + 1
 
         if not summary["valid"]:
             ws.merge_cells(start_row=r, start_column=1, end_row=r, end_column=8)
             put(r, 1, "未采集到有效电量数据 —— 页面始终未展示电量, 或设备中途断开。",
                 font_color="9C0006", align="center")
+            border_row(r)
             r += 2
         else:
-            r = kv(r, "总运行时长", format_mmss(summary["total_seconds"]))
+            r = kv(r, "总运行时长(分:秒)",
+                   format_mmss(summary["total_seconds"]))
             r = kv(r, "起始电量", f"{summary['start_battery']}%")
             r = kv(r, "结束电量", f"{summary['end_battery']}%")
             # ★ 充电时总耗电可能为负 —— 如实写「电量上升 N%」, 不硬凑成 0
             drop = summary["total_drop"]
             r = kv(r, "总耗电", f"{drop}%" if drop >= 0 else f"电量上升 {-drop}%")
-            r = kv(r, "平均每 1% 用时",
+            r = kv(r, "平均每 1% 用时(分:秒)",
                    format_mmss(summary["average_per_1pct"])
                    if summary["average_per_1pct"] is not None else "无法计算(未下降)")
-            r = kv(r, f"每 {int(step_pct or 1)}% 段平均用时",
+            r = kv(r, f"每 {int(step_pct or 1)}% 段平均用时(分:秒)",
                    format_mmss(summary["milestone_average"])
                    if summary["milestone_average"] is not None else "暂无完整里程碑")
+            # ★ 最长/最短段(用户 2026-11-04): 带区间, 便于定位哪一档掉电最快/最慢
+            longest = summary.get("milestone_longest")
+            shortest = summary.get("milestone_shortest")
+            if longest and shortest:
+                r = kv(r, f"每 {int(step_pct or 1)}% 段最长用时(分:秒)",
+                       f"{format_mmss(longest['dt'])}   "
+                       f"({longest['from']}% → {longest['to']}%)")
+                r = kv(r, f"每 {int(step_pct or 1)}% 段最短用时(分:秒)",
+                       f"{format_mmss(shortest['dt'])}   "
+                       f"({shortest['from']}% → {shortest['to']}%)")
             r = kv(r, "有效采样 / 读取失败",
                    f"{summary['valid']} / {summary['invalid']}")
             r += 1
             r = section(r, "按用例分段")
-            r = header(r, ["用例/轮次", "起始电量", "结束电量", "耗电", "用时",
-                           "平均每 1%"])
+            r = header(r, ["用例/轮次", "起始电量", "结束电量", "耗电",
+                           "用时(分:秒)", "平均每 1%(分:秒)"])
             for c in summary["cases"]:
                 put(r, 1, c["label"] or "(未标注)")
                 put(r, 2, f"{c['start_battery']}%", align="center")
@@ -267,34 +289,180 @@ class ExcelReport:
                 put(r, 5, format_mmss(c["seconds"]), align="center")
                 put(r, 6, format_mmss(c["average_per_1pct"])
                     if c["average_per_1pct"] is not None else "-", align="center")
+                border_row(r)
                 r += 1
             r += 1
+            # ★ 每 N% 分段明细放**汇总**里(用户 2026-11-04: 目标电量不要单独占一行,
+            #   体现在汇总记录就行) —— 详细表只保留每次 1% 的实际变化。
+            milestones = points["milestones"]
+            if milestones:
+                r = section(r, f"每 {int(step_pct or 1)}% 分段用时")
+                r = header(r, ["分段", "起始电量", "结束电量", "用时(分:秒)",
+                               "平均每 1%(分:秒)", "到达时刻(分:秒)"])
+                prev_batt = summary["start_battery"]
+                for m in milestones:
+                    seg_start = prev_batt
+                    seg_end = m["battery"]
+                    seg_drop = max(1, seg_start - seg_end)
+                    put(r, 1, f"{seg_start}% → {seg_end}%")
+                    put(r, 2, f"{seg_start}%", align="center")
+                    put(r, 3, f"{seg_end}%", align="center")
+                    put(r, 4, format_mmss(m["dt"]), align="center")
+                    put(r, 5, format_mmss(m["dt"] / seg_drop), align="center")
+                    put(r, 6, format_mmss(m["t"]), align="center")
+                    border_row(r)
+                    prev_batt = seg_end
+                    r += 1
+                r += 1
 
         r = section(r, "二、详细数据")
-        r = header(r, ["序号", "相对时间", "用例/轮次", "电量", "变化",
-                       "距上次变化", "累计用时", "类型"])
-        # 原始变化点与里程碑按时间合并; 同一时刻先写原始点再写里程碑
-        merged = ([dict(p, kind="raw") for p in points["raw"]] +
-                  [dict(p, kind="milestone") for p in points["milestones"]])
-        merged.sort(key=lambda p: (p["t"], 0 if p["kind"] == "raw" else 1))
-        if not merged:
+        r = header(r, ["序号", "电量的当前时间", "用例/轮次", "电量", "变化",
+                       "距上次变化(分:秒)", "累计用时(分:秒)"])
+        # ★ 只列**每次 1% 的实际变化**(用户 2026-11-04): 里程碑不在这里单独占行,
+        #   它的分段用时在「汇总」的每 N% 分段表里。
+        raw = points["raw"]
+        if not raw:
             ws.merge_cells(start_row=r, start_column=1, end_row=r, end_column=8)
             put(r, 1, "无电量变化记录。", align="center", font_color="666666")
-        for i, p in enumerate(merged, 1):
+            border_row(r)
+        for i, p in enumerate(raw, 1):
             put(r, 1, i, align="center")
-            put(r, 2, format_mmss(p["t"]), align="center")
+            # ★ 「电量的当前时间」= 采样时的本地(北京时间)时刻, 不是用时
+            #   (用户 2026-11-04); 老数据没有 wall 时退回相对时间。
+            put(r, 2, p.get("wall") or format_mmss(p["t"]), align="center")
             put(r, 3, p.get("label") or "")
             put(r, 4, f"{p['battery']}%", align="center")
-            if p["kind"] == "raw":
-                put(r, 5, f"{p['delta']:+d}%", align="center")
-                put(r, 8, "1% 原始", align="center")
-            else:
-                put(r, 5, f"目标 {p['target']}%", align="center")
-                put(r, 8, f"{int(step_pct or 1)}% 里程碑", align="center")
+            put(r, 5, f"{p['delta']:+d}%", align="center")
             put(r, 6, format_mmss(p.get("dt")), align="center")
             put(r, 7, format_mmss(p["t"]), align="center")
+            border_row(r)
             r += 1
+
+        # ── 右侧电量-时间曲线(用户 2026-11-04) ──
+        self._add_battery_chart(ws, samples, points["milestones"])
+        # ★ 列宽自适应内容(用户 2026-11-04: 避免显示不全) —— openpyxl 不会自动调,
+        #   这里按最长的非合并单元格文本估算(中文按 2 个字符宽)。
+        self._autofit_columns(ws)
         return ws
+
+    @staticmethod
+    def _autofit_columns(ws, letters="ABCDEFGH", min_w=8, max_w=50):
+        """按内容估算列宽; 跳过合并区(合并区文本横跨多列, 按它算会把列撑爆)。"""
+        merged_tl = {(r.min_row, r.min_col) for r in ws.merged_cells.ranges}
+        for letter in letters:
+            best = 0
+            for cell in ws[letter]:
+                if (cell.row, cell.column) in merged_tl or cell.value is None:
+                    continue
+                text = str(cell.value)
+                width = sum(2 if ord(ch) > 127 else 1 for ch in text)
+                best = max(best, width)
+            ws.column_dimensions[letter].width = max(min_w, min(max_w, best + 3))
+
+    @staticmethod
+    def _add_battery_chart(ws, samples, milestones=()):
+        """在右侧(J 列起)画「电量-时间」曲线, 并标注目标电量点(时间 + 电量)。
+
+        ★ 数据放隐藏列 M/N/P/Q(时间分钟 / 电量), 图表锚在 J4 —— 不占用正文表格区域。
+        ★ 用 ScatterChart 而不是 LineChart: 采样间隔可能不均(补采/漏采), 折线图会把
+          时间轴当等距类别, 曲线形状会失真。
+        ★ 目标点(每 N% 里程碑)单独一条系列 + 数据标签(X 值 / Y 值), 让看图的人
+          直接读到"几分钟时到了多少电", 不必回头翻表。
+        """
+        from openpyxl.chart import Reference, ScatterChart, Series
+        from openpyxl.chart.label import DataLabelList
+        from openpyxl.chart.marker import Marker
+        from openpyxl.chart.shapes import GraphicalProperties
+        from openpyxl.chart.text import RichText
+        from openpyxl.drawing.line import LineProperties
+        from openpyxl.drawing.text import (CharacterProperties, Paragraph,
+                                           ParagraphProperties)
+
+        pts = [(s.t / 60.0, s.battery) for s in samples
+               if getattr(s, "battery", -1) >= 0]
+        if len(pts) < 2:
+            return
+        start = 4
+
+        def write_col(col, letter, values, fmt=None):
+            """写一列数值到隐藏列, 返回 Reference。fmt 决定**数据标签**的显示格式。"""
+            for i, v in enumerate(values, start):
+                cell = ws.cell(row=i, column=col, value=v)
+                if fmt:
+                    cell.number_format = fmt
+            ws.column_dimensions[letter].hidden = True
+            return Reference(ws, min_col=col, min_row=start,
+                             max_row=start + len(values) - 1)
+
+        # M/N = 全量采样(时间分钟 / 电量); 目标点用 P/R 与 T/V 两组(见下)
+        # ★ 数字格式给数据标签用: 时间显示 "12.5分", 电量显示 "85%"
+        xs = write_col(13, "M", [round(m, 2) for m, _b in pts], '0.0"分"')
+        ys = write_col(14, "N", [b for _m, b in pts], '0"%"')
+
+        # ── 主线: 电量随时间 ──
+        series = Series(ys, xs, title="电量")
+        series.marker = Marker(symbol="circle", size=5)
+        series.marker.graphicalProperties = GraphicalProperties(solidFill="FFFFFF")
+        series.marker.graphicalProperties.line = LineProperties(solidFill="2563EB")
+        series.graphicalProperties.line = LineProperties(solidFill="2563EB")
+        series.graphicalProperties.line.width = 22000      # EMU ≈ 1.7pt, 线更清晰
+        series.smooth = False
+
+        chart = ScatterChart()
+        # ★ 单位放坐标轴标题(用户 2026-11-04: 应该标在 X/Y 轴那里) ——
+        #   必须先关掉标题的 overlay, 否则 openpyxl 生成的轴标题会压在刻度文字上
+        #   (导出图表图片实测过)。
+        chart.title = "电量变化曲线（◆ 目标电量点）"
+        chart.style = 2
+        chart.x_axis.title = "时间(分钟)"
+        chart.y_axis.title = "电量(%)"
+        chart.x_axis.title.overlay = False
+        chart.y_axis.title.overlay = False
+        chart.x_axis.delete = False          # 不隐藏坐标轴(默认会藏)
+        chart.y_axis.delete = False
+        chart.x_axis.majorUnit = 10
+        chart.y_axis.majorUnit = 10
+        # ★ 去掉网格线(用户 2026-11-04: 方格影响看数据)
+        chart.x_axis.majorGridlines = None
+        chart.y_axis.majorGridlines = None
+        chart.y_axis.scaling.min = 0
+        chart.y_axis.scaling.max = 100
+        chart.legend = None                  # 单条主线, 图例占地方
+        # ★ 数据放在**隐藏列**里; Excel 默认不绘制隐藏单元格(visible_cells_only/
+        #   plotVisOnly=True) → 曲线图整片空白(2026-11-04 实测)。必须显式关掉。
+        chart.visible_cells_only = False
+        chart.height = 12
+        chart.width = 22
+        chart.series.append(series)
+
+        # ── 目标点: 菱形 + 数据标签(X 值=分钟, Y 值=电量) ──
+        # ★ 标签防遮挡(用户 2026-11-04 多轮反馈): 曲线整体下降, 标签**统一放点下方**
+        #   最干净 —— 放在上方/左右都会压到相邻的曲线与点; 再加引导线 + 7pt 小字号。
+        ms = list(milestones)
+        if ms:
+            xs_m = write_col(16, "P", [round(m["t"] / 60.0, 2) for m in ms], '0.0"分"')
+            ys_m = write_col(18, "R", [m["battery"] for m in ms], '0"%"')
+            mser = Series(ys_m, xs_m, title="目标电量点")
+            mser.marker = Marker(symbol="diamond", size=7)
+            mser.marker.graphicalProperties = GraphicalProperties(solidFill="F59E0B")
+            mser.marker.graphicalProperties.line = LineProperties(solidFill="B45309")
+            mser.graphicalProperties.line = LineProperties(noFill=True)
+            mser.smooth = False
+            labels = DataLabelList()
+            labels.showVal = True        # Y: 电量 %
+            labels.showCatName = True    # 散点图里 catName = X 值(分钟)
+            labels.showSerName = False
+            labels.showLegendKey = False
+            labels.separator = "\n"      # 两行: 时间 / 电量, 横向更窄
+            labels.showLeaderLines = True
+            labels.position = "b"
+            labels.txPr = RichText(p=[Paragraph(
+                pPr=ParagraphProperties(defRPr=CharacterProperties(sz=700)),
+                endParaRPr=CharacterProperties(sz=700))])
+            mser.dLbls = labels
+            chart.series.append(mser)
+
+        ws.add_chart(chart, "J4")
 
     def save(self):
         ws = self.summary_ws

@@ -288,7 +288,7 @@ def test_window_built(win):
     assert win.device_combo is not None
     assert win.result_table is not None
     assert win.step_count_label.text().startswith("共")
-    assert win.tabs.count() == 3
+    assert win.tabs.count() == 4          # 执行结果 / YAML 源码 / 运行日志 / 测试报告
 
 
 def test_new_resets(win):
@@ -4863,6 +4863,58 @@ def test_runworker_finish_battery_adds_report_page(tmp_path, qapp):
     assert "电量监测" in report.wb.sheetnames
     w._finish_battery(report)          # 异常路径再调一次: 幂等, 不建第二页
     assert report.wb.sheetnames.count("电量监测") == 1
+
+
+def test_reports_panel_lists_opens_and_deletes(qapp, tmp_path, monkeypatch):
+    """★ 底部「测试报告」页签(用户 2026-11-04): 列出全部报告(最新在前),
+    双击/按钮打开, 多选删除。"""
+    from PySide6.QtWidgets import QMessageBox
+    from gui.report_panel import ReportsPanel
+
+    rdir = tmp_path / "reports"
+    rdir.mkdir()
+    a = rdir / "test_report_20261103_100000.xlsx"
+    b = rdir / "test_report_20261104_090000.xlsx"
+    a.write_bytes(b"PK")
+    b.write_bytes(b"PK")
+    (rdir / "crash.log").write_text("x", encoding="utf-8")     # 非报告不算
+    os.utime(a, (1000, 1000))
+    os.utime(b, (2000, 2000))                                   # b 更新
+
+    panel = ReportsPanel(str(rdir))
+    texts = [panel.list.item(i).text() for i in range(panel.list.count())]
+    assert texts and texts[0].startswith("test_report_20261104"), texts
+    assert len(texts) == 2 and "共 2 份报告" in panel.count_label.text()
+
+    # 打开: 走系统关联程序(离屏不真开, 用桩确认路径)
+    opened = []
+    monkeypatch.setattr(panel, "open_path", staticmethod(lambda p: opened.append(p)))
+    panel.list.item(0).setSelected(True)
+    panel.open_selected()
+    assert opened == [str(b)], opened
+    # 双击同一行也打开
+    panel.list.itemDoubleClicked.emit(panel.list.item(0))
+    assert len(opened) == 2
+
+    # 多选删除
+    for i in range(panel.list.count()):
+        panel.list.item(i).setSelected(True)
+    monkeypatch.setattr(QMessageBox, "question",
+                        staticmethod(lambda *a, **k: QMessageBox.Yes))
+    panel.delete_selected()
+    assert not a.exists() and not b.exists()
+    assert panel.list.count() == 0 and "暂无报告" in panel.count_label.text()
+
+
+def test_reports_tab_exists_next_to_log(win_with_cases):
+    """运行日志旁新增「测试报告」页签, 切过去时自动刷新。"""
+    win = win_with_cases
+    titles = [win.tabs.tabText(i) for i in range(win.tabs.count())]
+    assert "运行日志" in titles and "测试报告" in titles, titles
+    idx = titles.index("测试报告")
+    win.report_panel.refresh = lambda: setattr(win, "_refreshed", True)
+    win.tabs.setCurrentIndex(idx)
+    assert getattr(win, "_refreshed", False), "切到报告页应刷新列表"
 
 
 def test_paste_and_rename_refuse_during_run(win_with_cases):

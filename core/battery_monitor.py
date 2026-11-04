@@ -21,6 +21,7 @@ class BatterySample:
     t: float                       # 相对监测开始的时间(秒)
     battery: int                   # 机器人电量百分比; -1 = 读不到
     label: str = ""                # 当时的「用例名(第N次)」
+    wall: str = ""                 # 采样时刻的本地时间 "HH:MM:SS"(用户 2026-11-04)
 
 
 def format_mmss(seconds):
@@ -69,6 +70,7 @@ def build_points(samples, step_pct=5):
         if s.battery != prev.battery:
             out["raw"].append({
                 "t": s.t, "battery": s.battery, "label": s.label,
+                "wall": s.wall,
                 "delta": s.battery - prev.battery, "dt": max(0.0, s.t - prev.t),
             })
             prev = s
@@ -80,6 +82,7 @@ def build_points(samples, step_pct=5):
         if s.battery <= next_thr:
             out["milestones"].append({
                 "t": s.t, "battery": s.battery, "label": s.label,
+                "wall": s.wall,
                 "target": next_thr, "dt": max(0.0, s.t - prev_t),
             })
             prev_t = s.t
@@ -99,6 +102,7 @@ def build_summary(samples, step_pct=5):
         "start_battery": pts["start_battery"], "end_battery": pts["end_battery"],
         "total_seconds": 0.0, "total_drop": 0,
         "average_per_1pct": None, "milestone_average": None,
+        "milestone_longest": None, "milestone_shortest": None,
         "cases": [],
     }
     if not vals:
@@ -110,6 +114,14 @@ def build_summary(samples, step_pct=5):
     dts = [m["dt"] for m in pts["milestones"]]
     if dts:
         out["milestone_average"] = sum(dts) / len(dts)
+        # ★ 最长/最短段(用户 2026-11-04): 带分段区间, 一眼能定位是哪一档掉得慢/快
+        segs = []
+        prev_b = pts["start_battery"]
+        for m in pts["milestones"]:
+            segs.append({"from": prev_b, "to": m["battery"], "dt": m["dt"]})
+            prev_b = m["battery"]
+        out["milestone_longest"] = max(segs, key=lambda s: s["dt"])
+        out["milestone_shortest"] = min(segs, key=lambda s: s["dt"])
 
     # 按 label 的连续出现分组(同一标签即一次执行; 重复轮次标签带"第N次", 天然唯一)
     groups = []
@@ -170,7 +182,8 @@ class BatteryMonitor(threading.Thread):
             battery = -1
         self.samples.append(BatterySample(
             t=max(0.0, time.monotonic() - self._t0) if self._t0 else 0.0,
-            battery=battery, label=self._label()))
+            battery=battery, label=self._label(),
+            wall=time.strftime("%H:%M:%S")))
 
     def run(self):
         self._sample_once()

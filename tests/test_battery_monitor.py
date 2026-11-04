@@ -82,6 +82,17 @@ def test_build_summary_charging_gives_no_per_pct():
     assert sm["milestone_average"] is None
 
 
+def test_build_summary_longest_shortest_segment():
+    """★ 汇总要有每 N% 段的最长/最短用时(用户 2026-11-04), 并带分段区间。"""
+    # 起点 90: 85 用 100s, 80 用 300s, 75 用 50s
+    s = _samples((0, 90), (100, 85), (400, 80), (450, 75))
+    sm = build_summary(s, step_pct=5)
+    assert sm["milestone_longest"]["dt"] == 300
+    assert (sm["milestone_longest"]["from"], sm["milestone_longest"]["to"]) == (85, 80)
+    assert sm["milestone_shortest"]["dt"] == 50
+    assert (sm["milestone_shortest"]["from"], sm["milestone_shortest"]["to"]) == (80, 75)
+
+
 def test_build_summary_empty():
     sm = build_summary([], 5)
     assert sm["valid"] == 0 and sm["cases"] == []

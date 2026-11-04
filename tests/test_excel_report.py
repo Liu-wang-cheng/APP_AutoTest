@@ -29,7 +29,11 @@ def test_two_phase_desc_and_stats(tmp_path):
 
 
 def test_battery_report_page_summary_and_details(tmp_path):
-    """「电量监测」页: 上汇总 + 下详细; 幂等(只建一页); 空样本给原因。"""
+    """「电量监测」页: 上汇总 + 下详细; 幂等(只建一页); 空样本给原因。
+
+    ★ 2026-11-04: 里程碑不占详细行(改到汇总的「每 N% 分段」表); 表头标注 (分:秒);
+      右侧有电量-时间曲线图。
+    """
     from core.battery_monitor import BatterySample
 
     p = tmp_path / "r.xlsx"
@@ -46,13 +50,44 @@ def test_battery_report_page_summary_and_details(tmp_path):
     ws = wb["电量监测"]
     texts = [str(c.value) for row in ws.iter_rows() for c in row if c.value]
     assert "一、汇总" in texts and "二、详细数据" in texts
-    assert "总运行时长" in texts
+    assert "总运行时长(分:秒)" in texts
     assert any("02:00" == t for t in texts), texts          # 总时长 120s
     assert any(t == "5%" for t in texts), texts             # 总耗电 5%
-    assert any("每 5% 段平均用时" in t for t in texts), texts
-    # 详细区: 原始变化 79/78/75 各一行 + 里程碑(75)一行 = 4 行数据
-    kinds = [t for t in texts if t in ("1% 原始", "5% 里程碑")]
-    assert kinds.count("1% 原始") == 3 and kinds.count("5% 里程碑") == 1, kinds
+    assert any("每 5% 段平均用时(分:秒)" in t for t in texts), texts
+    # 里程碑进汇总表, 不再出现在详细里
+    assert any("每 5% 分段用时" in t for t in texts), texts
+    assert not any(t == "5% 里程碑" for t in texts), texts
+    # 详细区只剩每次 1% 的实际变化(79/78/75 各一行)
+    assert not any(t == "1% 原始" for t in texts), "类型列已移除"
+    assert texts.count("79%") >= 1 and texts.count("78%") >= 1 and texts.count("75%") >= 1
+    # 表头带单位说明
+    assert "距上次变化(分:秒)" in texts and "累计用时(分:秒)" in texts
+    # 右侧曲线图存在, 数据列(M/N)隐藏
+    assert ws._charts, "电量-时间曲线图没生成"
+    assert ws.column_dimensions["M"].hidden and ws.column_dimensions["N"].hidden
+    # ★ 关键: 数据在隐藏列里, 图表必须允许绘制隐藏单元格 —— 否则 Excel 里一片空白
+    #   (2026-11-04 实测踩过)
+    assert ws._charts[0].visible_cells_only is False
+
+
+def test_battery_report_cells_have_borders(tmp_path):
+    """★ 单元格边框: 合并区也要整行补边框(用户 2026-11-04)。"""
+    from core.battery_monitor import BatterySample
+
+    p = tmp_path / "r.xlsx"
+    r = ExcelReport(path=p)
+    samples = [BatterySample(t=t, battery=b, label="A")
+               for t, b in [(0, 80), (60, 79)]]
+    r.add_battery_report(samples, step_pct=5)
+    r.save()
+    ws = load_workbook(p)["电量监测"]
+    # 合并区在保存后只有**外缘**保留边框: 左列看 left、右列看 right, 上下都要有
+    for coord, side in (("A1", "left"), ("H1", "right"), ("A2", "left"),
+                        ("H2", "right"), ("A4", "left"), ("H4", "right")):
+        b = ws[coord].border
+        assert getattr(b, side).style is not None, f"{coord} 缺少 {side} 边框"
+        assert b.top.style is not None and b.bottom.style is not None, \
+            f"{coord} 缺少上下边框"
 
 
 def test_battery_report_page_empty_samples(tmp_path):
@@ -65,6 +100,22 @@ def test_battery_report_page_empty_samples(tmp_path):
     ws = load_workbook(p)["电量监测"]
     texts = [str(c.value) for row in ws.iter_rows() for c in row if c.value]
     assert any("未采集到有效电量数据" in t for t in texts), texts
+
+
+def test_battery_report_columns_autofit(tmp_path):
+    """★ 列宽按内容自适应(用户 2026-11-04: 避免显示不全)。"""
+    from core.battery_monitor import BatterySample
+
+    p = tmp_path / "r.xlsx"
+    r = ExcelReport(path=p)
+    samples = [BatterySample(t=t, battery=b, label="一个比较长的用例名(第1次)")
+               for t, b in [(0, 80), (60, 79)]]
+    r.add_battery_report(samples, step_pct=5)
+    r.save()
+    ws = load_workbook(p)["电量监测"]
+    # 标签列(A) 与用例列(C) 都要被撑开; 过窄会导致"每 5% 段最长用时(分:秒)"被截断
+    assert ws.column_dimensions["A"].width >= 20, ws.column_dimensions["A"].width
+    assert ws.column_dimensions["C"].width >= 20, ws.column_dimensions["C"].width
 
 
 def test_summary_sheet_has_pass_rate(tmp_path):

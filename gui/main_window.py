@@ -30,6 +30,7 @@ from core.version import __version__ as APP_VERSION   # 版本号单一真源: c
 log = get_logger()
 from gui import schema
 from gui.case_files import CaseFileMixin
+from gui.report_panel import ReportsPanel
 from gui.runner_thread import RunWorker
 
 
@@ -494,9 +495,8 @@ class MainWindow(CaseFileMixin, QMainWindow):
         self.repeat_spin.setValue(1)
         self.repeat_spin.setFixedWidth(64)
         self.repeat_spin.setAlignment(Qt.AlignCenter)
-        # ★ 全局 QSpinBox 的左右内距是 8/22px(给上下按钮留位), 64px 宽会被吃掉
-        #   大半 → 数字显示不下(用户实测"文本都看不到"); 这里单独收紧内距。
-        #   右侧按钮区的点击由 CompactSpin 重定向到数字末尾(点哪儿都有反应)。
+        # 全局 QSpinBox 内距 8/22px 会吃掉 64px 框的文字区 → 单独收紧; 右侧点击
+        # 由 CompactSpin 重定向到数字末尾
         self.repeat_spin.setStyleSheet("QSpinBox { padding: 4px 20px 4px 4px; }")
         self.repeat_spin.setToolTip("勾选用例队列重复的轮数")
         lay.addWidget(self.repeat_spin)
@@ -2395,9 +2395,19 @@ class MainWindow(CaseFileMixin, QMainWindow):
         self.log_view.setMaximumBlockCount(5000)   # 限制条数, 防止长时间运行涨爆内存
         self.tabs.addTab(self.log_view, "运行日志")
 
+        # 测试报告(用户 2026-11-04): 列全部报告, 双击打开, 多选删除
+        self.report_panel = ReportsPanel(os.path.join(BASE_DIR, "reports"))
+        self.tabs.addTab(self.report_panel, "测试报告")
+        self.tabs.currentChanged.connect(self._on_bottom_tab_changed)
+
         splitter.addWidget(self.tabs)
         splitter.setSizes([300])
         return splitter
+
+    def _on_bottom_tab_changed(self, index):
+        """切到「测试报告」时刷新列表 —— 跑完一轮回来就能看到新报告。"""
+        if self.tabs.widget(index) is getattr(self, "report_panel", None):
+            self.report_panel.refresh()
 
     # ── 文件操作 ──
     def on_new(self):
@@ -2911,6 +2921,11 @@ class MainWindow(CaseFileMixin, QMainWindow):
             self.pause_btn.setEnabled(False)
             self.pause_btn.setText("⏸ 暂停")
             self._set_locked(False)
+            # ★ 跑完刷新报告列表(用户 2026-11-04): 切到「测试报告」就能看到这一轮
+            try:
+                self.report_panel.refresh()
+            except Exception:
+                pass
             # ★ parent 所有权下(见 on_run)这里丢的只是 Python 包装, 线程还活着也安全;
             #   C++ 对象由 finished→deleteLater 在 run() 返回后销毁
             self.worker = None
@@ -2981,4 +2996,5 @@ __all__ = [
     "_make_field_widget", "_int_of", "_float_of", "_int4_of", "StepCard",
     "_StepsHost", "_StepsEditor", "StaticCheckBox", "CompactSpin",
     "DeviceScanThread", "UpdateCheckThread", "UpdateDownloadThread",
+    "ReportsPanel",
 ]

@@ -21,7 +21,8 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 #: 拆分出来的兄弟模块(新增请同步这里)
-SPLIT_MODULES = ("style", "widgets", "dialogs", "step_card", "threads", "case_files")
+SPLIT_MODULES = ("style", "widgets", "dialogs", "step_card", "threads",
+                 "case_files", "report_panel")
 
 #: main_window.py 的行数上限 —— 只想让它装 MainWindow 与 re-export
 MAIN_WINDOW_MAX_LINES = 3000
