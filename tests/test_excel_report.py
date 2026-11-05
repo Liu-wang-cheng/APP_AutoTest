@@ -176,8 +176,8 @@ def test_screenshot_embedded(tmp_path):
 
 def test_screenshot_fills_cell(tmp_path):
     """★ 2026-11-05 用户反馈: 截图只占单元格左上角一小块。
-    现在按单元格大小缩放并居中: 图片宽度撑到 260px 附近、行高按磅换算(像素×0.75),
-    不再出现"图小而格大"的空档。"""
+    现在**不改表格布局**(D 列仍 20 字符、行高仍 ≈214 磅), 只把图片等比放大到格子大小
+    并居中。竖屏 1080x2400 截图 ≈126x281px, 正好填满旧单元格。"""
     from PIL import Image
     img = tmp_path / "shot_tall.png"
     Image.new("RGB", (540, 1200), "red").save(img)      # 竖屏手机比例
@@ -190,12 +190,12 @@ def test_screenshot_fills_cell(tmp_path):
     ws = load_workbook(p)["用例A"]
     shot = ws._images[0]
     # 保存后 Image 对象回到原始像素, 实际显示尺寸在锚点 ext(EMU) 里
-    assert round(shot.anchor.ext.cx / 9525) == 234, shot.anchor.ext.cx / 9525
-    assert round(shot.anchor.ext.cy / 9525) == 520, shot.anchor.ext.cy / 9525
-    # 行高(磅)= (520+4)/1.333 ≈ 393, 图片正好填满单元格高度
-    assert 385 <= ws.row_dimensions[2].height <= 400, ws.row_dimensions[2].height
-    # D 列至少能装下图片宽度(37 字符 ≈ 264px)
-    assert ws.column_dimensions["D"].width >= 37
+    assert round(shot.anchor.ext.cx / 9525) == 126, shot.anchor.ext.cx / 9525
+    assert round(shot.anchor.ext.cy / 9525) == 281, shot.anchor.ext.cy / 9525
+    # 行高(磅)= (281+4)/1.333 ≈ 213.8 —— 与旧版一致, 表格没有变高
+    assert 205 <= ws.row_dimensions[2].height <= 220, ws.row_dimensions[2].height
+    # D 列宽保持旧值 20 字符, 没有被改宽
+    assert ws.column_dimensions["D"].width == 20
     # 图片锚在 D2 单元格内、水平居中
     assert shot.anchor._from.col == 3 and shot.anchor._from.row == 1
     assert shot.anchor._from.colOff > 0

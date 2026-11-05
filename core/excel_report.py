@@ -41,14 +41,12 @@ class ExcelReport:
     FAIL_FILL = PatternFill(start_color="FFC7CE", end_color="FFC7CE", fill_type="solid")
     BORDER = Border(*[Side(style="thin", color="B0B0B0")] * 4)
 
-    #: 步骤截图的最大显示尺寸(像素)与 D 列宽度(字符)。
-    #: ★ 2026-11-05 用户反馈: 截图原来被压到 120x210, 而 D 列宽 20 字符(≈145px)、
-    #:   行高又按**像素当磅**设(1 磅=1.33px) → 图片只占单元格左上角一小块。
-    #:   现在按列宽撑满: 宽最多 260px、高最多 520px(≈392 磅, 低于 Excel 行高上限 409 磅),
-    #:   行高按 像素×0.75 换算成磅, 图片正好填满单元格。
-    SHOT_MAX_W = 260
-    SHOT_MAX_H = 520
-    SHOT_COL_WIDTH = 37          # D 列 ≈ 264px(Calibri 11 约 7px/字符)
+    #: 截图单元格的行高预算(磅)与 D 列默认宽度(字符) —— 与旧版报告保持一致,
+    #: **不改表格布局**, 只把图片按这个格子的大小放大。
+    #: ★ 2026-11-05 用户反馈: 截图只占单元格左上角一小块。旧版把图片固定压到
+    #:   120x210px, 而 D 列宽 20 字符(≈145px)、行高 214 磅(≈285px) → 图和格子都留空。
+    #:   现在按单元格实际尺寸(像素)等比放大, 行高按 像素×0.75 换算(原来误把像素当磅)。
+    SHOT_ROW_HEIGHT_PT = 214
     PX_PER_CHAR = 7.0
     PX_PER_POINT = 4.0 / 3.0     # 1 磅 = 4/3 px
 
@@ -133,13 +131,13 @@ class ExcelReport:
         case["row"] += 1
 
     def _add_screenshot(self, ws, row, path):
-        """把截图按单元格大小缩放并**居中放进 D 列单元格**。
+        """把截图等比放大到**单元格大小**并居中放进 D 列(不改列宽/表格布局)。
 
         ★ openpyxl 只能写浮动图片(Excel 365 的「置于单元格内」是富值格式, 库不支持),
           但用 OneCellAnchor + 显式尺寸可以做到视觉上"装在格子里":
-          - 列宽按图片宽度撑开, 行高按 像素×0.75 换算成磅(原来误把像素当磅, 行高多出 33%);
-          - 水平偏移让图片在单元格内居中, 垂直留 2px 内边距。
-          图片随行移动(OneCellAnchor), 不会在筛选/插入行后错位。
+          - 按 D 列当前宽度和行高预算(214 磅)算出单元格像素尺寸, 图片等比缩放到刚好放下;
+          - 行高按 像素×0.75 换算成磅(旧版误把像素当磅, 行高多出 33%, 图显得更小);
+          - 水平居中 + 垂直 2px 内边距; 图片随行移动, 筛选/插行后不错位。
         """
         try:
             from PIL import Image as PImage
@@ -150,27 +148,23 @@ class ExcelReport:
 
             img = XLImage(path)
             pi = PImage.open(path)
-            ratio = min(self.SHOT_MAX_W / float(pi.width),
-                        self.SHOT_MAX_H / float(pi.height))
+            # 单元格可用尺寸(px): 列宽(字符)→像素 ≈ 7×字符+5; 行高(磅)→像素 ×4/3
+            col_w = ws.column_dimensions["D"].width or 20
+            cell_w = int(self.PX_PER_CHAR * col_w + 5)
+            cell_h = int(self.SHOT_ROW_HEIGHT_PT * self.PX_PER_POINT)
+            ratio = min((cell_w - 4) / float(pi.width),
+                        (cell_h - 4) / float(pi.height))
             iw = max(1, int(pi.width * ratio))
             ih = max(1, int(pi.height * ratio))
             img.width, img.height = iw, ih
 
-            # D 列至少装得下图片宽度: Excel 列宽(字符)≈ (像素-5)/7
-            need = max(1.0, (iw - 1) / self.PX_PER_CHAR)
-            cur = ws.column_dimensions["D"].width or 0
-            if cur < need:
-                ws.column_dimensions["D"].width = round(need, 1)
-            cell_px = int(self.PX_PER_CHAR * (ws.column_dimensions["D"].width or need) + 5)
-            off_x = max(0, (cell_px - iw) // 2)
-
-            # 行高是**磅**: 1 磅 = 4/3 px。上下各留 2px。
+            # 行高(磅): 图片高度 + 上下各 2px; 横屏截图会自动变矮, 不留大片空白
             ws.row_dimensions[row].height = max(
                 30.0, round((ih + 4) / self.PX_PER_POINT, 1))
 
             anchor = OneCellAnchor()
             anchor._from = AnchorMarker(
-                col=3, colOff=pixels_to_EMU(off_x),          # D 列
+                col=3, colOff=pixels_to_EMU(max(0, (cell_w - iw) // 2)),  # D 列
                 row=row - 1, rowOff=pixels_to_EMU(2))
             anchor.ext = XDRPositiveSize2D(pixels_to_EMU(iw),
                                            pixels_to_EMU(ih))
@@ -210,7 +204,7 @@ class ExcelReport:
         #   组名(module)是 GUI 里可自由编辑的文本, 很容易踩到。
         title = self._unique_sheet_title(case_name)
         ws = self.wb.create_sheet(title=title)
-        for c, w in zip("ABCD", [28, 8, 28, self.SHOT_COL_WIDTH]):
+        for c, w in zip("ABCD", [28, 8, 28, 20]):
             ws.column_dimensions[c].width = w
 
         for ci, h in enumerate(["步骤", "结果", "错误信息", "截图"], 1):
