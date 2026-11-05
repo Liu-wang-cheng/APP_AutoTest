@@ -176,8 +176,9 @@ def test_screenshot_embedded(tmp_path):
 
 def test_screenshot_fills_cell(tmp_path):
     """★ 2026-11-05 用户反馈: 截图只占单元格左上角一小块。
-    现在**不改表格布局**(D 列仍 20 字符、行高仍 ≈214 磅), 只把图片等比放大到格子大小
-    并居中。竖屏 1080x2400 截图 ≈126x281px, 正好填满旧单元格。"""
+    现在**不改表格布局**(D 列仍 20 字符、行高仍 ≈214 磅), 只把图片等比放大到格子内,
+    上下留白一致。用 TwoCellAnchor 跨到下一行: 打印时图片跟着表格一起缩放,
+    上下留白不会一宽一窄。竖屏 1080x2400 截图 ≈117x261px(四周 12px)。"""
     from PIL import Image
     img = tmp_path / "shot_tall.png"
     Image.new("RGB", (540, 1200), "red").save(img)      # 竖屏手机比例
@@ -189,20 +190,22 @@ def test_screenshot_fills_cell(tmp_path):
     from openpyxl import load_workbook
     ws = load_workbook(p)["用例A"]
     shot = ws._images[0]
-    # 保存后 Image 对象回到原始像素, 实际显示尺寸在锚点 ext(EMU) 里
-    assert round(shot.anchor.ext.cx / 9525) == 126, shot.anchor.ext.cx / 9525
-    assert round(shot.anchor.ext.cy / 9525) == 281, shot.anchor.ext.cy / 9525
-    # 行高(磅)= (281+4)/1.333 ≈ 213.8 —— 与旧版一致, 表格没有变高
+    a = shot.anchor
+    assert type(a).__name__ == "TwoCellAnchor"
+    # 行高(磅)= (261+24)/1.333 ≈ 213.8 —— 与旧版一致, 表格没有变高
     assert 205 <= ws.row_dimensions[2].height <= 220, ws.row_dimensions[2].height
     # D 列宽保持旧值 20 字符, 没有被改宽
     assert ws.column_dimensions["D"].width == 20
-    # 图片锚在 D2 单元格内、水平居中
-    assert shot.anchor._from.col == 3 and shot.anchor._from.row == 1
-    assert shot.anchor._from.colOff > 0
-    # 图片上下都不越出本行(否则相邻步骤的截图会互相遮挡)
-    cell_px = ws.row_dimensions[2].height * 4 / 3
-    top = shot.anchor._from.rowOff / 9525
-    assert top + shot.anchor.ext.cy / 9525 <= cell_px
+    # 左上角在 D2 内、距上边 12px; 右下角落在下一行行首往上 12px(上下留白一致)
+    assert a._from.col == 3 and a._from.row == 1
+    assert round(a._from.rowOff / 9525) == 12
+    assert a.to.row == 2 and round(a.to.rowOff / 9525) == -12
+    box_w = (a.to.colOff - a._from.colOff) / 9525
+    assert 116 <= box_w <= 118, box_w
+    # 图片盒子完全在本行内: 上下各 12px, 盒子高 ≈261px
+    row_px = ws.row_dimensions[2].height * 4 / 3
+    box_h = row_px - (a._from.rowOff - a.to.rowOff) / 9525
+    assert 260 <= box_h <= 262, box_h
 
 
 def test_screenshots_do_not_overlap_adjacent_rows(tmp_path):
@@ -223,11 +226,13 @@ def test_screenshots_do_not_overlap_adjacent_rows(tmp_path):
     for im in ws._images:
         a = im.anchor
         row = a._from.row + 1
+        # 跨行锚点: 右下角正好落在下一行行首上方(负 rowOff), 图片只属于本行
+        assert a.to.row == a._from.row + 1, (a._from.row, a.to.row)
+        assert a._from.rowOff >= 0 and a.to.rowOff <= 0
         cell_px = ws.row_dimensions[row].height * 4 / 3
-        top = a._from.rowOff / 9525
-        bottom = top + a.ext.cy / 9525
-        assert bottom <= cell_px + 0.5, (
-            f"第{row}行图片越界: bottom={bottom:.1f} > 行高 {cell_px:.1f}")
+        box_h = (cell_px - (a._from.rowOff - a.to.rowOff) / 9525)
+        assert box_h <= cell_px, (
+            f"第{row}行图片越界: 图片高 {box_h:.1f} > 行高 {cell_px:.1f}")
 
 
 def test_device_info_filled(tmp_path):

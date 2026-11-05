@@ -47,6 +47,10 @@ class ExcelReport:
     #:   120x210px, 而 D 列宽 20 字符(≈145px)、行高 214 磅(≈285px) → 图和格子都留空。
     #:   现在按单元格实际尺寸(像素)等比放大, 行高按 像素×0.75 换算(原来误把像素当磅)。
     SHOT_ROW_HEIGHT_PT = 214
+    #: 图片四周留的内边距(px) —— 图片在 Excel 里画在单元格边框**之上**, 贴边会把
+    #: 下边框/左右边框盖住(用户 2026-11-05 实测反馈)。12px 即使导出/打印时表格被
+    #: 缩放到 96%, 图片仍不会压到边框(图片尺寸不随打印缩放, 行高会)。
+    SHOT_PAD_PX = 12
     PX_PER_CHAR = 7.0
     PX_PER_POINT = 4.0 / 3.0     # 1 磅 = 4/3 px
 
@@ -131,19 +135,19 @@ class ExcelReport:
         case["row"] += 1
 
     def _add_screenshot(self, ws, row, path):
-        """把截图等比放大到**单元格大小**并居中放进 D 列(不改列宽/表格布局)。
+        """把截图等比缩放到**单元格内**并四周留统一内边距(不改列宽/表格布局)。
 
-        ★ openpyxl 只能写浮动图片(Excel 365 的「置于单元格内」是富值格式, 库不支持),
-          但用 OneCellAnchor + 显式尺寸可以做到视觉上"装在格子里":
-          - 按 D 列当前宽度和行高预算(214 磅)算出单元格像素尺寸, 图片等比缩放到刚好放下;
-          - 行高按 像素×0.75 换算成磅(旧版误把像素当磅, 行高多出 33%, 图显得更小);
-          - 水平居中 + 垂直 2px 内边距; 图片随行移动, 筛选/插行后不错位。
+        ★ 用 TwoCellAnchor(从本行跨到下一行)而不是 OneCellAnchor:
+          Excel 打印/导出时会缩放表格, 但**不缩放** OneCellAnchor 的图片 —— 行高缩了、
+          图片没缩, 上下留白就不一致, 甚至压住下边框(2026-11-05 实测)。TwoCellAnchor
+          的矩形由单元格坐标推导, 会跟着一起缩放, 所以屏幕和打印里上下留白都一致。
+        ★ 锚点盒子按图片原始比例计算, 图片不会被拉伸变形。
+        ★ 行高按 像素×0.75 换算成磅(旧版误把像素当磅, 行高多出 33%, 图显得更小)。
         """
         try:
             from PIL import Image as PImage
             from openpyxl.drawing.spreadsheet_drawing import (
-                AnchorMarker, OneCellAnchor)
-            from openpyxl.drawing.xdr import XDRPositiveSize2D
+                AnchorMarker, TwoCellAnchor)
             from openpyxl.utils.units import pixels_to_EMU
 
             img = XLImage(path)
@@ -152,22 +156,28 @@ class ExcelReport:
             col_w = ws.column_dimensions["D"].width or 20
             cell_w = int(self.PX_PER_CHAR * col_w + 5)
             cell_h = int(self.SHOT_ROW_HEIGHT_PT * self.PX_PER_POINT)
-            ratio = min((cell_w - 4) / float(pi.width),
-                        (cell_h - 4) / float(pi.height))
-            iw = max(1, int(pi.width * ratio))
-            ih = max(1, int(pi.height * ratio))
-            img.width, img.height = iw, ih
+            pad = self.SHOT_PAD_PX
+            ratio = min((cell_w - 2 * pad) / float(pi.width),
+                        (cell_h - 2 * pad) / float(pi.height))
+            box_w = max(1.0, pi.width * ratio)
+            box_h = max(1.0, pi.height * ratio)
+            pad_x = max(0.0, (cell_w - box_w) / 2.0)      # 居中的左右留白
+            pad_y = float(pad)                            # 上 = 下 = 12px
+            img.width, img.height = int(box_w), int(box_h)
 
-            # 行高(磅): 图片高度 + 上下各 2px; 横屏截图会自动变矮, 不留大片空白
+            # 行高(磅): 图片高度 + 上下留白; 横屏截图行会自动变矮, 不留大片空白
             ws.row_dimensions[row].height = max(
-                30.0, round((ih + 4) / self.PX_PER_POINT, 1))
+                30.0, round((box_h + 2 * pad_y) / self.PX_PER_POINT, 1))
 
-            anchor = OneCellAnchor()
+            anchor = TwoCellAnchor(editAs="twoCell")
+            # 左上角: D 列 + 本行
             anchor._from = AnchorMarker(
-                col=3, colOff=pixels_to_EMU(max(0, (cell_w - iw) // 2)),  # D 列
-                row=row - 1, rowOff=pixels_to_EMU(2))
-            anchor.ext = XDRPositiveSize2D(pixels_to_EMU(iw),
-                                           pixels_to_EMU(ih))
+                col=3, colOff=pixels_to_EMU(pad_x), row=row - 1,
+                rowOff=pixels_to_EMU(pad_y))
+            # 右下角: 同一列, 底边落在下一行行首往上 pad_y 处(负偏移 = 行首上方)
+            anchor.to = AnchorMarker(
+                col=3, colOff=pixels_to_EMU(pad_x + box_w), row=row,
+                rowOff=pixels_to_EMU(-pad_y))
             ws.add_image(img, anchor)
         except Exception:
             pass
