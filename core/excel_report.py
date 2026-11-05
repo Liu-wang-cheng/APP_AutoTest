@@ -41,6 +41,17 @@ class ExcelReport:
     FAIL_FILL = PatternFill(start_color="FFC7CE", end_color="FFC7CE", fill_type="solid")
     BORDER = Border(*[Side(style="thin", color="B0B0B0")] * 4)
 
+    #: 步骤截图的最大显示尺寸(像素)与 D 列宽度(字符)。
+    #: ★ 2026-11-05 用户反馈: 截图原来被压到 120x210, 而 D 列宽 20 字符(≈145px)、
+    #:   行高又按**像素当磅**设(1 磅=1.33px) → 图片只占单元格左上角一小块。
+    #:   现在按列宽撑满: 宽最多 260px、高最多 520px(≈392 磅, 低于 Excel 行高上限 409 磅),
+    #:   行高按 像素×0.75 换算成磅, 图片正好填满单元格。
+    SHOT_MAX_W = 260
+    SHOT_MAX_H = 520
+    SHOT_COL_WIDTH = 37          # D 列 ≈ 264px(Calibri 11 约 7px/字符)
+    PX_PER_CHAR = 7.0
+    PX_PER_POINT = 4.0 / 3.0     # 1 磅 = 4/3 px
+
     def __init__(self, path=None):
         # 默认按时间戳命名,历史报告不互相覆盖(不建子目录)
         if path is None:
@@ -114,21 +125,58 @@ class ExcelReport:
         ws.cell(row=r, column=4).border = self.BORDER
         ws.cell(row=r, column=2).alignment = Alignment(horizontal="center", vertical="center")
 
-        # 嵌入截图
+        # 嵌入截图(用户 2026-11-05: 要放进单元格里、别缩成左上角一小块)
         ws.row_dimensions[r].height = 30
         if screenshot and os.path.exists(screenshot):
-            try:
-                from PIL import Image as PImage
-                img = XLImage(screenshot)
-                pi = PImage.open(screenshot)
-                ratio = min(120 / pi.width, 210 / pi.height)
-                img.width, img.height = int(pi.width * ratio), int(pi.height * ratio)
-                ws.row_dimensions[r].height = max(30, img.height + 4)
-                ws.add_image(img, f"D{r}")
-            except Exception:
-                pass
+            self._add_screenshot(ws, r, screenshot)
 
         case["row"] += 1
+
+    def _add_screenshot(self, ws, row, path):
+        """把截图按单元格大小缩放并**居中放进 D 列单元格**。
+
+        ★ openpyxl 只能写浮动图片(Excel 365 的「置于单元格内」是富值格式, 库不支持),
+          但用 OneCellAnchor + 显式尺寸可以做到视觉上"装在格子里":
+          - 列宽按图片宽度撑开, 行高按 像素×0.75 换算成磅(原来误把像素当磅, 行高多出 33%);
+          - 水平偏移让图片在单元格内居中, 垂直留 2px 内边距。
+          图片随行移动(OneCellAnchor), 不会在筛选/插入行后错位。
+        """
+        try:
+            from PIL import Image as PImage
+            from openpyxl.drawing.spreadsheet_drawing import (
+                AnchorMarker, OneCellAnchor)
+            from openpyxl.drawing.xdr import XDRPositiveSize2D
+            from openpyxl.utils.units import pixels_to_EMU
+
+            img = XLImage(path)
+            pi = PImage.open(path)
+            ratio = min(self.SHOT_MAX_W / float(pi.width),
+                        self.SHOT_MAX_H / float(pi.height))
+            iw = max(1, int(pi.width * ratio))
+            ih = max(1, int(pi.height * ratio))
+            img.width, img.height = iw, ih
+
+            # D 列至少装得下图片宽度: Excel 列宽(字符)≈ (像素-5)/7
+            need = max(1.0, (iw - 1) / self.PX_PER_CHAR)
+            cur = ws.column_dimensions["D"].width or 0
+            if cur < need:
+                ws.column_dimensions["D"].width = round(need, 1)
+            cell_px = int(self.PX_PER_CHAR * (ws.column_dimensions["D"].width or need) + 5)
+            off_x = max(0, (cell_px - iw) // 2)
+
+            # 行高是**磅**: 1 磅 = 4/3 px。上下各留 2px。
+            ws.row_dimensions[row].height = max(
+                30.0, round((ih + 4) / self.PX_PER_POINT, 1))
+
+            anchor = OneCellAnchor()
+            anchor._from = AnchorMarker(
+                col=3, colOff=pixels_to_EMU(off_x),          # D 列
+                row=row - 1, rowOff=pixels_to_EMU(2))
+            anchor.ext = XDRPositiveSize2D(pixels_to_EMU(iw),
+                                           pixels_to_EMU(ih))
+            ws.add_image(img, anchor)
+        except Exception:
+            pass
 
     def set_step_desc(self, case_name, desc):
         """两段式设计: 只把描述存到该用例的 _last_desc,不写单元格;
@@ -162,7 +210,7 @@ class ExcelReport:
         #   组名(module)是 GUI 里可自由编辑的文本, 很容易踩到。
         title = self._unique_sheet_title(case_name)
         ws = self.wb.create_sheet(title=title)
-        for c, w in zip("ABCD", [28, 8, 28, 20]):
+        for c, w in zip("ABCD", [28, 8, 28, self.SHOT_COL_WIDTH]):
             ws.column_dimensions[c].width = w
 
         for ci, h in enumerate(["步骤", "结果", "错误信息", "截图"], 1):
