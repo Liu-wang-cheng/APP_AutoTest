@@ -199,6 +199,35 @@ def test_screenshot_fills_cell(tmp_path):
     # 图片锚在 D2 单元格内、水平居中
     assert shot.anchor._from.col == 3 and shot.anchor._from.row == 1
     assert shot.anchor._from.colOff > 0
+    # 图片上下都不越出本行(否则相邻步骤的截图会互相遮挡)
+    cell_px = ws.row_dimensions[2].height * 4 / 3
+    top = shot.anchor._from.rowOff / 9525
+    assert top + shot.anchor.ext.cy / 9525 <= cell_px
+
+
+def test_screenshots_do_not_overlap_adjacent_rows(tmp_path):
+    """★ 用户 2026-11-05: 确认每个步骤的截图不会上下互相遮挡(竖屏/横屏/方图混合)。"""
+    from PIL import Image
+    from openpyxl import load_workbook
+    sizes = [(540, 1200), (1200, 540), (600, 600), (540, 1200)]
+    rep = tmp_path / "rows.xlsx"
+    r = ExcelReport(path=rep)
+    for i, size in enumerate(sizes, 1):
+        p = tmp_path / f"shot{i}.png"
+        Image.new("RGB", size, "white").save(p)
+        r.set_step_desc("用例A", f"步骤{i}")
+        r.add_result("用例A", True, screenshot=str(p))
+    r.save()
+    ws = load_workbook(rep)["用例A"]
+    assert len(ws._images) == 4
+    for im in ws._images:
+        a = im.anchor
+        row = a._from.row + 1
+        cell_px = ws.row_dimensions[row].height * 4 / 3
+        top = a._from.rowOff / 9525
+        bottom = top + a.ext.cy / 9525
+        assert bottom <= cell_px + 0.5, (
+            f"第{row}行图片越界: bottom={bottom:.1f} > 行高 {cell_px:.1f}")
 
 
 def test_device_info_filled(tmp_path):
