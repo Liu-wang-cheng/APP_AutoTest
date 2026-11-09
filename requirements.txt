@@ -13,3 +13,10 @@ pytest==9.1.1
 
 # 文本兜底: 插件页(WebView)整块内容不在无障碍树里时, 截图识别文字
 rapidocr-onnxruntime==1.2.3
+
+# 设备参数曲线(实时缩放/平移)
+pyqtgraph==0.13.7
+cryptography==46.0.7
+
+# 设备参数: 机器人 7809 调试流(MCU 反馈/组件挡位)走 ZeroMQ
+pyzmq==27.3.0

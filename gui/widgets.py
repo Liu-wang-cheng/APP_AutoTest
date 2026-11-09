@@ -8,9 +8,10 @@ from PySide6.QtCore import QEvent, QPoint, QRect, QSize, QTimer, Qt, Signal
 from PySide6.QtGui import (QAction, QColor, QFontMetrics, QKeySequence,
                            QPainter, QPen)
 from PySide6.QtWidgets import (QAbstractButton, QAbstractItemView, QComboBox,
-                                QFrame, QLabel, QLayout, QListView, QListWidget,
-                                QMenu, QSpinBox, QStyle, QStyleOptionViewItem,
-                                QStyledItemDelegate)
+                                QFrame, QHBoxLayout, QLabel, QLayout, QListView,
+                                QListWidget, QMenu, QSizePolicy, QSpacerItem,
+                                QSpinBox, QStyle, QStyleOptionViewItem,
+                                QStyledItemDelegate, QWidget)
 from core.logger import get_logger
 from gui import schema
 from gui.style import _ARROW_W
@@ -62,6 +63,15 @@ class FlowLayout(QLayout):
     def addItem(self, item):
         self._items.append(item)
 
+    def addStretch(self, stretch=1):
+        """插入可伸缩间隔: 其后的控件靠右对齐; 窗口窄了会整体换行(不会撑宽窗口)。"""
+        self.addItem(QSpacerItem(0, 0, QSizePolicy.Expanding, QSizePolicy.Minimum))
+
+    @staticmethod
+    def _is_stretch(item):
+        return (item.spacerItem() is not None
+                and bool(item.expandingDirections() & Qt.Horizontal))
+
     def count(self):
         return len(self._items)
 
@@ -87,18 +97,30 @@ class FlowLayout(QLayout):
     def sizeHint(self):
         return self.minimumSize()
 
+    @staticmethod
+    def _skipped(item):
+        """显式 hide() 的控件不占位。
+
+        ★ 这里必须用 isHidden(), 不能用 isVisible():
+          父页面被 QStackedWidget 隐藏时, 子控件的 isVisible() 全是 False,
+          用 isVisible() 会让整条流式布局在隐藏期间塌成 0 高(实测: 在「设备
+          参数」页滚动后切回「自动化测试」, APP设备那一行整行消失), 而且切回
+          来不一定会重新布局。isHidden() 只反映"自己有没有被 hide()"。
+        """
+        wid = item.widget()
+        return wid is not None and wid.isHidden()
+
     def minimumSize(self):
         size = QSize()
         for item in self._items:
-            wid = item.widget()
-            if wid is not None and not wid.isVisible():
-                continue  # 隐藏控件不占位
+            if self._skipped(item):
+                continue  # 显式隐藏的控件不占位
             size = size.expandedTo(item.minimumSize())
         m = self.contentsMargins()
         return size + QSize(m.left() + m.right(), m.top() + m.bottom())
 
     def _do_layout(self, rect, test_only):
-        """两遍扫描: 先分行并记录行高,再把行内控件按垂直居中放置(跳过隐藏控件)"""
+        """两遍扫描: 先分行并记录行高,再把行内控件按垂直居中放置(跳过显式隐藏控件)"""
         m = self.contentsMargins()
         left = rect.x() + m.left()
         max_right = rect.right() - m.right()
@@ -107,24 +129,35 @@ class FlowLayout(QLayout):
         # 第一遍: 分行
         lines, cur, cur_h, row_x = [], [], 0, left
         for item in self._items:
-            wid = item.widget()
-            if wid is not None and not wid.isVisible():
+            if self._skipped(item):
+                continue
+            if self._is_stretch(item):
+                cur.append((item, 0, 0, True))   # 伸缩间隔不占固定宽度
                 continue
             w, h = item.sizeHint().width(), item.sizeHint().height()
             if cur and row_x + w > max_right:  # 放不下 → 换行
                 lines.append((cur, cur_h))
                 cur, cur_h, row_x = [], 0, left
-            cur.append((item, w, h))
+            cur.append((item, w, h, False))
             cur_h = max(cur_h, h)
             row_x += w + spacing
         if cur:
             lines.append((cur, cur_h))
 
-        # 第二遍: 行内垂直居中
+        # 第二遍: 行内垂直居中; 有伸缩间隔时把剩余宽度给它(其后的控件靠右)
         y = rect.y() + m.top()
+        available = max_right - left + 1
         for row, row_h in lines:
+            fixed = sum(w for (_i, w, _h, sp) in row if not sp)
+            count = sum(1 for (_i, _w, _h, sp) in row if not sp)
+            has_stretch = any(sp for (_i, _w, _h, sp) in row)
+            gaps = spacing * max(0, count - 1)
+            spacer_w = max(0, available - fixed - gaps) if has_stretch else 0
             x = left
-            for item, w, h in row:
+            for item, w, h, is_stretch in row:
+                if is_stretch:
+                    x += spacer_w
+                    continue
                 if not test_only:
                     item.setGeometry(QRect(QPoint(x, y + (row_h - h) // 2), QSize(w, h)))
                 x += w + spacing
@@ -571,3 +604,37 @@ class CaseItemDelegate(QStyledItemDelegate):
             return None, 0
         mid = rect.right() - _ARROW_W // 2
         return row, (-1 if pos.x() < mid else +1)
+
+
+def make_hint_label(text, color, align=Qt.AlignLeft):
+    """工具栏下方提示行里的一段文字。
+
+    ★ 水平策略 Ignored + 自动换行: 长文本(报告路径/配置长值)只在行内换行,
+      不参与窗口宽度决策, 不会把窗口撑大(用户两次反馈过)。
+    """
+    lbl = QLabel(text)
+    lbl.setStyleSheet(f"color:{color};")
+    lbl.setWordWrap(True)
+    lbl.setMinimumWidth(0)
+    lbl.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+    lbl.setAlignment(align | Qt.AlignVCenter)
+    return lbl
+
+
+def build_hint_row(file_text="未选中用例", status_text="就绪"):
+    """一行提示: 用例状态(左) | 运行状态(中) | 环境提示(右)。
+
+    返回 (bar, file_label, status_label, env_status)。三条提示合并成一行是
+    用户 2026-11-06 的要求(原来是三行, 中间留白太多)。
+    """
+    bar = QWidget()
+    lay = QHBoxLayout(bar)
+    lay.setContentsMargins(0, 0, 0, 0)
+    lay.setSpacing(16)
+    file_label = make_hint_label(file_text, "#94a3b8")
+    status_label = make_hint_label(status_text, "#64748b", Qt.AlignHCenter)
+    env_status = make_hint_label("", "#94a3b8", Qt.AlignRight)
+    lay.addWidget(file_label, 2)
+    lay.addWidget(status_label, 3)
+    lay.addWidget(env_status, 2)
+    return bar, file_label, status_label, env_status

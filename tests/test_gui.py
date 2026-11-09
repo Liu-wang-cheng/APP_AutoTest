@@ -291,6 +291,71 @@ def test_window_built(win):
     assert win.tabs.count() == 4          # 执行结果 / YAML 源码 / 运行日志 / 测试报告
 
 
+def test_window_geometry_saved_on_close(qapp, monkeypatch, tmp_path):
+    """关窗时把窗口几何写进设置（用户 2026-11-06 要求下次沿用）。"""
+    import gui.main_window as mw
+    import gui.window_state as ws
+    monkeypatch.setattr(mw, "CASES_DIR", str(tmp_path / "Test_cases"), raising=False)
+    store = {}
+
+    class FakeSettings:
+        def __init__(self, *a, **k):
+            pass
+
+        def value(self, key, default=None):
+            return store.get(key, default)
+
+        def setValue(self, key, val):
+            store[key] = val
+
+    monkeypatch.setattr(ws, "QSettings", FakeSettings)
+    monkeypatch.setattr(ws, "_is_pytest", lambda: False)
+
+    w = mw.MainWindow()
+    w.resize(1150, 700)
+    w.show()
+    qapp.processEvents()
+    w.close()
+    assert store.get("ui/window_geometry"), "关窗应保存窗口几何"
+
+
+def test_window_state_roundtrip(monkeypatch):
+    """save/restore 用同一个键，并且能原样交回 QByteArray。"""
+    import gui.window_state as ws
+    store = {}
+
+    class FakeSettings:
+        def __init__(self, *a, **k):
+            pass
+
+        def value(self, key, default=None):
+            return store.get(key, default)
+
+        def setValue(self, key, val):
+            store[key] = val
+
+    monkeypatch.setattr(ws, "QSettings", FakeSettings)
+    monkeypatch.setattr(ws, "_is_pytest", lambda: False)
+
+    class Stub:
+        def __init__(self):
+            self.got = None
+
+        def saveGeometry(self):
+            return b"GEO123"
+
+        def restoreGeometry(self, geo):
+            self.got = geo
+            return True
+
+    ws.save_geometry(Stub())
+    assert store.get("ui/window_geometry") == b"GEO123"
+    other = Stub()
+    assert ws.restore_geometry(other) is True
+    assert other.got == b"GEO123"
+    assert ws.restore_geometry(object()) is False    # 没有 restoreGeometry → 安全失败
+
+
 def test_new_resets(win):
     win.create_case("测试组", group="测试组")
     assert len(win.steps) == 0
@@ -2925,10 +2990,12 @@ def test_name_save_not_duplicated_by_two_signals(qapp, monkeypatch, tmp_path, fa
 
 
 def test_hint_lines_own_row_and_do_not_widen_window(qapp, monkeypatch, tmp_path):
-    """★ 两个提示行都必须**独占一行、位于组件下方**, 不能挂在组件右边:
-      · status_label —— 「报告已生成(部分执行): ...」(原来在工具栏最右端)
-      · env_status   —— 「配置已保存: ...」(原来在环境条流式布局末尾)
-    挂在组件旁边时长文本会把那一行撑宽 → 窗口跟着变大(用户两次反馈)。
+    """★ 三条提示合并成**独立的一行**(位于工具栏下方, 不挂在组件右边):
+
+      · file_label(未选中用例) / status_label(就绪) / env_status(配置提示)
+        用户 2026-11-06 要求合并成一行, 省两行高度;
+      · 但不能和工具栏/环境条里的组件同行 —— 长文本会把那一行撑宽、窗口跟着变大
+        (用户两次反馈)。
     """
     from PySide6.QtCore import Qt as _Qt
     import gui.main_window as mw
@@ -2962,12 +3029,14 @@ def test_hint_lines_own_row_and_do_not_widen_window(qapp, monkeypatch, tmp_path)
             qapp.processEvents()
             assert w.minimumSizeHint().width() <= base + 2, \
                 f"长提示把窗口撑宽了({msg[:12]}...): {base} → {w.minimumSizeHint().width()}"
-        # ④ 运行状态行居中(用户要求); 且标签必须铺满整行, 否则居中看不出来
-        assert w.status_label.alignment() & _Qt.AlignHCenter, "「就绪」那行要居中显示"
-        assert w.status_label.width() >= w.status_label.parent().width() - 2, \
-            "状态标签要铺满整行, 居中才有意义"
-        assert not (w.env_status.alignment() & _Qt.AlignHCenter), \
-            "配置提示行保持左对齐(用户只要求运行状态行居中)"
+        # ④ 三条提示合并到同一行(用户 2026-11-06): 用例状态 | 运行状态 | 环境提示
+        assert (w.file_label.parent() is w.status_label.parent()
+                is w.env_status.parent()), "三条提示应在同一行"
+        for lbl in (w.file_label, w.status_label, w.env_status):
+            assert lbl.wordWrap() and lbl.sizePolicy().horizontalPolicy() == mw.QSizePolicy.Ignored
+        assert w.status_label.alignment() & _Qt.AlignHCenter, "运行状态在整行居中"
+        assert not (w.file_label.alignment() & _Qt.AlignHCenter), "用例状态左对齐"
+        assert w.env_status.alignment() & _Qt.AlignRight, "环境提示靠右"
     finally:
         w.close()
 

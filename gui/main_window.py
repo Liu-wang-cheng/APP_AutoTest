@@ -32,6 +32,9 @@ from gui import schema
 from gui.case_files import CaseFileMixin
 from gui.report_panel import ReportsPanel
 from gui.runner_thread import RunWorker
+from gui.app_pages import install_pages
+from gui.update_ui import update_message
+from gui.window_state import restore_geometry, save_geometry
 
 
 CASES_DIR = os.path.join(BASE_DIR, "Test_cases")
@@ -61,9 +64,9 @@ class MainWindow(CaseFileMixin, QMainWindow):
         v.setContentsMargins(8, 6, 8, 6)
         v.setSpacing(5)
         v.addWidget(self._build_toolbar())
-        v.addWidget(self._build_status_line())      # ★ 运行状态独立一行(用户要求)
+        # ★ 三条提示合并成一行(用户 2026-11-06): 用例状态 | 运行状态 | 环境提示
+        v.addWidget(self._build_hint_row())
         v.addWidget(self._build_env_strip())
-        v.addWidget(self._build_env_status_line())  # ★ 配置提示独立一行(用户要求)
         # ★ 用例列表(左,固定宽 200) | 右列 = 组/用例信息条(上)+ 步骤详情(下)
         #   同一垂直列 —— 步骤详情与组信息同列,不横跨在列表/信息条下方
         #   (2026-09-21 二次调整;列表仍在左侧,右侧是「组信息+步骤详情」)
@@ -83,20 +86,22 @@ class MainWindow(CaseFileMixin, QMainWindow):
         v.addWidget(mid, 3)
         v.addWidget(self._make_bottom(), 2)
 
-        self.setCentralWidget(page)
+        self.setCentralWidget(install_pages(self, page))
         self.setStyleSheet(STYLESHEET)
 
         # 快捷键: Ctrl+S 保存
         from PySide6.QtGui import QKeySequence, QShortcut
         QShortcut(QKeySequence("Ctrl+S"), self, self.on_save)
 
-        # 默认窗口大小:固定屏幕可用区域的 80%,居中显示。
-        # 不保存/恢复上次窗口几何 —— 保证每次启动尺寸一致(用户要求)
-        avail = QApplication.primaryScreen().availableGeometry()
-        w, h = int(avail.width() * 0.8), int(avail.height() * 0.8)
-        self.resize(w, h)
-        self.move(avail.x() + (avail.width() - w) // 2,
-                  avail.y() + (avail.height() - h) // 2)
+        # ★ 窗口几何(用户 2026-11-06 要求): 记住上次的大小/位置/最大化状态,
+        #   下次启动沿用; 只有首次启动(或设置丢失)才用「屏幕可用区域 80%」居中。
+        #   之前是故意不保存的(保证每次一致), 用户现在改成沿用上次。
+        if not (restore_geometry(self)):
+            avail = QApplication.primaryScreen().availableGeometry()
+            w, h = int(avail.width() * 0.8), int(avail.height() * 0.8)
+            self.resize(w, h)
+            self.move(avail.x() + (avail.width() - w) // 2,
+                      avail.y() + (avail.height() - h) // 2)
 
         self._load_case_into_ui()
         self.render_cards()
@@ -109,55 +114,7 @@ class MainWindow(CaseFileMixin, QMainWindow):
 
     def _update_message(self, heading, body="", kind="info", buttons=None,
                         default=0):
-        """与界面主题一致的更新弹窗。
-
-        ★ 裸 QMessageBox 是系统默认的灰色小盒子, 与蓝色主题的界面很违和; 这里统一
-          套一套配色/圆角/中文按钮, 主按钮用主题蓝。
-        kind: info / warn / error —— 只影响图标, 不改布局。
-        返回被点击按钮的文本。
-        """
-        box = QMessageBox(self)
-        box.setWindowTitle("检查更新")
-        box.setIcon({"info": QMessageBox.Information, "warn": QMessageBox.Warning,
-                     "error": QMessageBox.Critical}.get(kind, QMessageBox.Information))
-        box.setText(f"<div style='font-size:14px;font-weight:bold;color:#1f2937'>{heading}</div>")
-        if body:
-            box.setInformativeText(body)
-        box.setStyleSheet("""
-            QMessageBox { background: #ffffff; }
-            QMessageBox QLabel { color: #475569; font-family: "Microsoft YaHei UI";
-                                 font-size: 12px; line-height: 160%; }
-            QMessageBox QPushButton {
-                background: #ffffff; border: 1px solid #d9dee6; border-radius: 6px;
-                padding: 6px 20px; color: #333; min-width: 80px;
-            }
-            QMessageBox QPushButton:hover { border-color: #2563eb; color: #2563eb; }
-            QMessageBox QPushButton#primaryBtn {
-                background: #2563eb; color: white; border: none; font-weight: bold;
-            }
-            QMessageBox QPushButton#primaryBtn:hover { background: #1d4fd7; }
-        """)
-        texts = list(buttons or ["知道了"])
-        made = []
-        for i, t in enumerate(texts):
-            b = box.addButton(t, QMessageBox.AcceptRole if i == default
-                              else QMessageBox.RejectRole)
-            if i == default:
-                b.setObjectName("primaryBtn")     # 主按钮走主题蓝
-            made.append(b)
-        box.setDefaultButton(made[default])
-        # ★ 抢前台(用户 2026-10-15: "弹窗优先显示"): 自动检查更新的弹窗多在用户
-        #   切到别的应用时出现 —— 不主动 raise 会被压在别的窗口后面, 用户根本看不到
-        self.raise_()
-        self.activateWindow()
-        box.raise_()
-        box.activateWindow()
-        box.exec()
-        clicked = box.clickedButton()
-        for b, t in zip(made, texts):
-            if b is clicked:
-                return t
-        return ""
+        return update_message(self, heading, body, kind, buttons, default)
 
     def _setup_update_check(self):
         """启动后延迟检查一次, 之后每 N 小时自动检测(用户要求)。
@@ -447,9 +404,10 @@ class MainWindow(CaseFileMixin, QMainWindow):
 
     def _build_toolbar(self):
         bar = QWidget()
-        lay = QHBoxLayout(bar)
-        lay.setContentsMargins(0, 0, 0, 0)
-        lay.setSpacing(8)
+        # ★ 流式布局(2026-11-06): 原来是一整行 QHBoxLayout, 十几个按钮的最小宽度
+        #   之和超过 1280 宽屏 → 窗口右侧被顶出屏幕(电量/运行等按钮看不到, 顶部
+        #   设备状态也被挤出可视区)。改成 FlowLayout 后窗口窄了自动换行。
+        lay = FlowLayout(bar, margin=0, spacing=8)
 
         for text, fn, attr in [("新建", self.on_new, "new_btn"),
                                ("打开", self.on_open, "open_btn"),
@@ -459,9 +417,7 @@ class MainWindow(CaseFileMixin, QMainWindow):
             setattr(self, attr, b)
             lay.addWidget(b)
         self.save_btn.setEnabled(False)   # 初始无修改,保存置灰(有修改才亮起)
-        self.file_label = QLabel("未打开文件")
-        self.file_label.setStyleSheet("color:#94a3b8;")
-        lay.addWidget(self.file_label)
+        # ★ 新建/打开/保存靠左, 其余按钮靠右(用户 2026-11-06)
         lay.addStretch()
         # ★ 「故障检测」按钮(用户 2026-10-13): 在线改故障/空闲词表 —— 运行时即时生效
         #   不重启(写 config.yaml 并同步到 core.session 的全局词表), 加在前置条件左边。
@@ -541,34 +497,18 @@ class MainWindow(CaseFileMixin, QMainWindow):
 
         return bar
 
-    def _hint_line(self, attr, text, color, align=Qt.AlignLeft):
-        """提示行: 独占一整行(**组件下方**, 不挂在组件右边)。
+    # ── 提示行 ──
 
-        ★ 用户两次反馈: 「报告已生成(部分执行): ...」「配置已保存: ...」这类长文本
-        挂在工具栏/环境条右侧时, 会把那一行整体撑宽 → 窗口跟着变大。所以所有提示都
-        做成整行显示, 并且**不让它参与宽度决策**(水平策略 Ignored + 自动换行):
-        文本再长也只在自己这行里排布(与截图预览 `preview.setSizePolicy` 同一套路)。
-        align: 文本在整行内的对齐(运行状态行居中, 配置提示行左对齐)。
+    def _build_hint_row(self):
+        """工具栏下方的一行提示: 用例状态 | 运行状态 | 环境提示。
+
+        ★ 2026-11-06 用户要求: 原来「未选中用例」(工具栏内)、「就绪」、「扫地机
+          已连接」各占一行, 界面显得空。合并成一行: 左=用例, 中=运行状态(居中,
+          沿用旧行为), 右=环境/配置提示。控件构造见 gui.widgets.build_hint_row。
         """
-        bar = QWidget()
-        lay = QHBoxLayout(bar)
-        lay.setContentsMargins(0, 0, 0, 0)
-        lbl = QLabel(text)
-        lbl.setStyleSheet(f"color:{color};")
-        lbl.setWordWrap(True)
-        lbl.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
-        lbl.setAlignment(align)
-        lay.addWidget(lbl)
-        setattr(self, attr, lbl)
-        return bar
-
-    def _build_status_line(self):
-        """运行状态行(工具栏下方): 执行中/报告已生成 等。★ 文本居中(用户要求)"""
-        return self._hint_line("status_label", "就绪", "#64748b", Qt.AlignCenter)
-
-    def _build_env_status_line(self):
-        """环境配置提示行(环境条下方): 配置已保存/已删除历史记录/检测结果 等"""
-        return self._hint_line("env_status", "", "#94a3b8")
+        (self.hint_row, self.file_label, self.status_label,
+         self.env_status) = build_hint_row()
+        return self.hint_row
 
     # ── 名称输入(自适应 + 历史下拉 + ×清除) ──
 
@@ -745,8 +685,8 @@ class MainWindow(CaseFileMixin, QMainWindow):
         self.env_strip = strip
         self.env_strip_lay = lay
 
-        # ── 设备(最前) ──
-        lay.addWidget(QLabel("设备"))
+        # ── APP 设备(最前) ──
+        lay.addWidget(QLabel("APP设备"))
         self.device_combo = QComboBox()
         # 按最长项自适应宽度:设备标签「MuMu模拟器 (127.0.0.1:7555)」较长,
         # 默认策略会截断显示不全
@@ -783,7 +723,7 @@ class MainWindow(CaseFileMixin, QMainWindow):
             "APP 内的扫地机设备名称(如 SE3L),前置阶段自动点击进入该设备页",
             "target_device", "hist/device_name")
         lay.addWidget(self.device_name_edit)
-        # ★ env_status 不放在这条流式布局里(会被长文本撑宽) —— 见 _build_env_status_line
+        # ★ env_status 不放在这条流式布局里(会被长文本撑宽) —— 见 _build_hint_row
         return strip
 
     def _fill_env_from_config(self):
@@ -1583,7 +1523,9 @@ class MainWindow(CaseFileMixin, QMainWindow):
         self.detect_btn.setEnabled(False)
         self.detect_btn.setText("检测中…")
         try:
-            packages = app_detect.list_packages(device_id)
+            # ★ adb 查询放后台线程(嵌套事件循环): 设备慢时窗口不会"未响应"
+            packages = run_in_background(
+                lambda: app_detect.list_packages(device_id), 30000)
             matched = app_detect.match_packages(app_name, packages)
             if matched and (len(matched) == 1 or matched[0][1] > matched[1][1]):
                 package = matched[0][0]
@@ -1602,7 +1544,9 @@ class MainWindow(CaseFileMixin, QMainWindow):
                 self.env_status.setText("")
                 self._purge_name_history("hist/app_name", app_name)   # 未检测到 → 不记历史
                 return
-            activity = app_detect.detect_main_activity(device_id, package) or ""
+            activity = run_in_background(
+                lambda: app_detect.detect_main_activity(device_id, package) or "",
+                30000)
             update_config({"app.package": package, "app.main_activity": activity})
             # ★ 检测成功才记历史(用户要求), 并刷新下拉
             self._push_name_history("hist/app_name", app_name)
@@ -1752,8 +1696,9 @@ class MainWindow(CaseFileMixin, QMainWindow):
         try:
             import uiautomator2 as u2
             dev_id = self.device_combo.currentData()
-            d = u2.connect(dev_id)
-            frame = d.screenshot(format="opencv")
+            # ★ 截图/连接放后台线程: u2 在设备卡顿时要好几秒, 不能冻住界面
+            frame = run_in_background(
+                lambda: u2.connect(dev_id).screenshot(format="opencv"), 30000)
         except Exception as e:
             QMessageBox.warning(self, "裁剪模板",
                                 f"连接设备失败: {type(e).__name__}: {e}\n"
@@ -1788,8 +1733,9 @@ class MainWindow(CaseFileMixin, QMainWindow):
                 region_text = ""
             import uiautomator2 as u2
             dev_id = self.device_combo.currentData()
-            d = u2.connect(dev_id)
-            frame = d.screenshot(format="opencv")
+            # ★ 截图放后台线程: 设备慢时不让界面"未响应"
+            frame = run_in_background(
+                lambda: u2.connect(dev_id).screenshot(format="opencv"), 30000)
             path, desc = preview_region(frame, region_text)
         except ValueError as e:
             QMessageBox.warning(self, "对比范围有误", str(e))
@@ -2594,14 +2540,34 @@ class MainWindow(CaseFileMixin, QMainWindow):
         self._refresh_case_selector()
 
     # ── 执行 ──
+    def _check_battery_device(self):
+        """开跑前选择/切换本轮对应的扫地机：参数电量优先，APP 电量兜底。"""
+        self._battery_use_param = True
+        if not self.batt_enabled:
+            return True
+        if os.environ.get("AUTOTEST_SKIP_IP_PROMPT") or os.environ.get("PYTEST_CURRENT_TEST"):
+            return True
+        from gui.robot_connect_dialog import RobotConnectDialog
+        dlg = RobotConnectDialog(self.device_page, self)
+        if dlg.exec() != QDialog.Accepted:
+            return False
+        self._battery_use_param = bool(dlg.use_param)
+        if self._battery_use_param:
+            self._set_status(f"电量监测：使用 {self.device_page.connected_ip} 的参数")
+        else:
+            self._set_status("电量监测：使用 APP 电量兜底")
+        return True
+
     def on_run(self):
         if self.worker:
             return
-        self.on_save()
         case_files = self._checked_case_paths()
         if not case_files:
             QMessageBox.warning(self, "提示", "请先在左侧勾选要执行的用例")
             return
+        if not self._check_battery_device():
+            return
+        self.on_save()
         device_id = self.device_combo.currentData()
         pre_items = self._selected_preconditions()   # 当前组的前置(兜底用)
         pre_by_group = self._pre_items_by_group(case_files)   # ★ 每个 APP 组各自的前置
@@ -2617,7 +2583,12 @@ class MainWindow(CaseFileMixin, QMainWindow):
         #   活着就被析构"的 qFatal 闪退从根上不再可能(退休机制因此整体删除)。
         self.worker = RunWorker(device_id, case_files, pre_items, repeat,
                                 parent=self, pre_by_group=pre_by_group,
-                                battery_cfg=self._battery_monitor_config())
+                                battery_cfg=self._battery_monitor_config(),
+                                param_reader=(self.device_page.battery_reader
+                                              if getattr(self, "_battery_use_param", True)
+                                              else None),
+                                snapshot_provider=self.device_page.snapshot_provider,
+                                robot_info_reader=self.device_page.robot_info)
         self._save_battery_monitor_settings()   # 记住这次的勾选与参数
         self.worker.finished.connect(self.worker.deleteLater)
         self.worker.step_done.connect(self.on_step_done)
@@ -2645,6 +2616,7 @@ class MainWindow(CaseFileMixin, QMainWindow):
         # ★ 点运行的瞬间全部勾选用例灯变黄(含上次跑过的,重新执行先重置)
         self._reset_case_lamps_to_running(case_files)
         self.worker.start()
+        self.page_nav.set_running(True)
         self._set_locked(True)  # 执行期间锁定编排区
         self.run_btn.setEnabled(False)
         self.stop_btn.setEnabled(True)
@@ -2818,6 +2790,8 @@ class MainWindow(CaseFileMixin, QMainWindow):
                 item.setForeground(color)
             if col in (3, 4):        # ★ 结果 / 耗时 居中显示(用户要求 2026-10-12)
                 item.setTextAlignment(Qt.AlignCenter)
+            if col in (2, 5):        # 步骤/错误信息允许自动换行, 长报错也显示全
+                item.setTextAlignment(Qt.AlignLeft | Qt.AlignTop | Qt.TextWordWrap)
             item.setData(Qt.UserRole, result.get("screenshot", ""))
             if val:
                 item.setToolTip(val)  # 长文本(步骤/错误信息)悬停看全文
@@ -2884,10 +2858,13 @@ class MainWindow(CaseFileMixin, QMainWindow):
             it.setBackground(QColor(bg))
             if col in (0, 3, 4):        # 序号/结果/耗时居中(与数据行对齐)
                 it.setTextAlignment(Qt.AlignCenter)
+            elif col == 2:              # 总结/异常消息允许换行, 不截断
+                it.setTextAlignment(Qt.AlignLeft | Qt.AlignTop | Qt.TextWordWrap)
             self.result_table.setItem(row, col, it)
         self._running_row = None        # 分隔/总结行之后不该再往旧行里写
         self._pause_row = None           # 步骤间暂停时追加的中性行(2026-10-15)
         self._pause_prev = None          # 暂停时被改写的「执行中」行原文, 恢复时还原
+        self.result_table.resizeRowsToContents()
         self.result_table.scrollToBottom()
         self.tabs.setCurrentIndex(0)
 
@@ -2921,6 +2898,7 @@ class MainWindow(CaseFileMixin, QMainWindow):
             self.pause_btn.setEnabled(False)
             self.pause_btn.setText("⏸ 暂停")
             self._set_locked(False)
+            self.page_nav.set_running(False)
             # ★ 跑完刷新报告列表(用户 2026-11-04): 切到「测试报告」就能看到这一轮
             try:
                 self.report_panel.refresh()
@@ -2936,8 +2914,10 @@ class MainWindow(CaseFileMixin, QMainWindow):
         log.info("[退出] 收到关窗请求")
         # ★ 防抖中的编辑必须先落盘: 用户改完名字/步骤立刻关窗, 不能丢
         self._flush_pending_edit()
+        save_geometry(self)               # 下次打开沿用这次的大小/位置(用户要求)
         self._save_expanded_groups()      # 关窗前记住组展开状态(下次打开还原)
         self._cleanup_update_backups()    # 正常关窗 = 本次更新确实可用, 可以扔掉旧版本
+        self.device_page.shutdown()
         if self.worker:
             if QMessageBox.question(self, "正在执行", "用例正在执行,停止并退出?") == QMessageBox.Yes:
                 try:
@@ -2963,7 +2943,8 @@ from gui.style import (
 from gui.widgets import (
     ClickableLabel, ClickableFrame, FlowLayout, make_action_menu,
     _HistComboDelegate, _FitCombo, _FitListView, _HistCombo, CaseListWidget,
-    CaseItemDelegate, mouse_xy, StaticCheckBox, CompactSpin,
+    CaseItemDelegate, mouse_xy, StaticCheckBox, CompactSpin, build_hint_row,
+    make_hint_label,
 )
 from gui.dialogs import (
     ImageViewDialog, StatusWordsDialog, PreconditionEditDialog,
@@ -2976,6 +2957,7 @@ from gui.step_card import (
 )
 from gui.threads import (
     DeviceScanThread, UpdateCheckThread, UpdateDownloadThread,
+    run_in_background, CallThread,
 )
 
 # ★ 上面这批**转出去**的名字要"被用一次": pyflakes 只看"导入了却没用", 不认 noqa
@@ -2996,5 +2978,6 @@ __all__ = [
     "_make_field_widget", "_int_of", "_float_of", "_int4_of", "StepCard",
     "_StepsHost", "_StepsEditor", "StaticCheckBox", "CompactSpin",
     "DeviceScanThread", "UpdateCheckThread", "UpdateDownloadThread",
-    "ReportsPanel",
+    "ReportsPanel", "build_hint_row", "make_hint_label", "run_in_background",
+    "CallThread",
 ]

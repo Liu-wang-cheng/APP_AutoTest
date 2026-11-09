@@ -51,6 +51,7 @@ USER_DATA_PATHS = (
     "Test_img",
     "reports",
     "backups",
+    "apos",          # AutopackDebugger SDK 副本(用户 2026-11-05): 更新时保留
 )
 
 _ENCRYPTED_HEADER = b"%TSD-Header"

@@ -82,8 +82,8 @@ def test_battery_report_cells_have_borders(tmp_path):
     r.save()
     ws = load_workbook(p)["电量监测"]
     # 合并区在保存后只有**外缘**保留边框: 左列看 left、右列看 right, 上下都要有
-    for coord, side in (("A1", "left"), ("H1", "right"), ("A2", "left"),
-                        ("H2", "right"), ("A4", "left"), ("H4", "right")):
+    for coord, side in (("A1", "left"), ("I1", "right"), ("A2", "left"),
+                        ("I2", "right"), ("A4", "left"), ("I4", "right")):
         b = ws[coord].border
         assert getattr(b, side).style is not None, f"{coord} 缺少 {side} 边框"
         assert b.top.style is not None and b.bottom.style is not None, \
@@ -245,6 +245,36 @@ def test_device_info_filled(tmp_path):
     wb = load_workbook(p)
     texts = [str(c.value) for row in wb["汇总"].iter_rows() for c in row if c.value]
     assert any("SN12345" in t for t in texts)
+
+
+def test_device_info_fills_firmware_and_base_station(tmp_path):
+    """报告头要补全固件版本/基站版本(用户 2026-11-06)。"""
+    p = tmp_path / "r4.xlsx"
+    r = ExcelReport(path=p)
+    r.set_device_info(sn="SN1", firmware_version="2.1.26",
+                      base_station_version="8.2.1.1")
+    r.add_result("用例A", True)
+    r.save()
+    from openpyxl import load_workbook
+    wb = load_workbook(p)
+    text = next(str(c.value) for row in wb["汇总"].iter_rows()
+                for c in row if c.value and "设备SN" in str(c.value))
+    assert "2.1.26" in text and "8.2.1.1" in text
+    assert "固件版本: 待获取" not in text
+    assert "基站版本: 待获取" not in text
+
+
+def test_device_info_keeps_placeholder_when_missing(tmp_path):
+    p = tmp_path / "r5.xlsx"
+    r = ExcelReport(path=p)
+    r.set_device_info(firmware_version="")
+    r.add_result("用例A", True)
+    r.save()
+    from openpyxl import load_workbook
+    wb = load_workbook(p)
+    text = next(str(c.value) for row in wb["汇总"].iter_rows()
+                for c in row if c.value and "设备SN" in str(c.value))
+    assert "固件版本: 待获取" in text and "基站版本: 待获取" in text
 
 
 def test_case_name_sanitized(tmp_path):
@@ -420,3 +450,19 @@ def test_case_priority_written_to_summary(tmp_path):
             for r in range(6, ws.max_row + 1) if ws.cell(row=r, column=2).value}
     assert rows.get("冒烟") == "P0", rows
     assert rows.get("别的用例") in ("", None), rows
+
+
+def test_device_snapshot_page(tmp_path):
+    """失败自动快照写进「设备参数」页，且幂等(用户 2026-11-05)。"""
+    import time
+    p = tmp_path / "dev.xlsx"
+    r = ExcelReport(path=p)
+    snap = {"ok": {"/BatteryBattery/BatteryLevel": 80,
+                   "/System/CustomSN": "SN1"}, "failed": {}, "ts": time.time()}
+    r.add_device_snapshot(snap)
+    r.add_device_snapshot(snap)                  # 幂等
+    r.save()
+    ws = load_workbook(p)["设备参数"]
+    assert ws.max_row > 3
+    texts = [str(c.value) for row in ws.iter_rows() for c in row if c.value is not None]
+    assert "80" in texts and "SN1" in texts

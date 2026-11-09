@@ -122,3 +122,51 @@ class UpdateDownloadThread(QThread):
             self.done.emit(bat, "")
         except Exception as e:
             self.done.emit("", f"下载/准备更新失败: {e}")
+
+
+class CallThread(QThread):
+    """在后台线程执行一个可调用对象，结果/异常通过 done 发回 UI 线程。"""
+
+    done = Signal(object, object)     # (result, exception)
+
+    def __init__(self, fn, parent=None):
+        super().__init__(parent)
+        self._fn = fn
+
+    def run(self):
+        try:
+            self.done.emit(self._fn(), None)
+        except Exception as e:        # noqa: BLE001 - 原样交回 UI 线程处理
+            self.done.emit(None, e)
+
+
+def run_in_background(fn, timeout_ms=30000):
+    """后台执行 fn，并**保持界面可响应**地等它结束（嵌套事件循环）。
+
+    用于必须拿到结果才能继续的交互（检测 APP 包名/截图裁剪等）：原来的
+    adb/uiautomator2 调用跑在 GUI 线程上，设备反应慢时整个窗口会"未响应"。
+    这里事件循环继续跑，窗口仍可重绘/响应，但逻辑上仍是"等结果"。
+
+    超时抛 TimeoutError；fn 的异常原样抛回调用方（UI 线程）。
+    """
+    from PySide6.QtCore import QEventLoop, QTimer
+    loop = QEventLoop()
+    box = {}
+    thread = CallThread(fn)
+    thread.done.connect(lambda result, err: (box.update(result=result, error=err),
+                                             loop.quit()))
+    thread.finished.connect(thread.deleteLater)
+    timer = QTimer()
+    timer.setSingleShot(True)
+    timer.timeout.connect(loop.quit)
+    timer.start(max(1000, int(timeout_ms)))
+    thread.start()
+    try:
+        loop.exec()
+    finally:
+        timer.stop()
+    if "error" not in box:               # 超时(线程可能还卡在 adb 上)
+        raise TimeoutError("操作超时")
+    if box.get("error") is not None:
+        raise box["error"]
+    return box.get("result")

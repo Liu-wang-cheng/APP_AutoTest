@@ -41,6 +41,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 BASE_DIR_MODULES = (
     "core.actions.asserts",
     "core.actions.map_ops",
+    "core.apos.sdk",
     "core.excel_report",
     "core.paths",
     "core.runner",

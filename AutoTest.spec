@@ -123,6 +123,9 @@ a = Analysis(
         #   而且 import/构造都不报错, 只在识别那一刻才炸(2026-10-11 用户日志实测)。
         "pyclipper", "six", "shapely",
         "yaml", "openpyxl", "cv2", "PIL",
+        # ★ 7809 MCU 调试流是运行期按需 `import zmq`(mcu.py)，静态分析看不到，
+        #   漏了会导致打包版设备参数页没有挡位/充电/地检触发等 MCU 数据。
+        "zmq",
     ],
     hookspath=[],
     runtime_hooks=[],

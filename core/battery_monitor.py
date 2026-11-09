@@ -22,6 +22,9 @@ class BatterySample:
     battery: int                   # 机器人电量百分比; -1 = 读不到
     label: str = ""                # 当时的「用例名(第N次)」
     wall: str = ""                 # 采样时刻的本地时间 "HH:MM:SS"(用户 2026-11-04)
+    voltage_v: float | None = None  # 电池电压(V); None = 本轮未取到
+    temp_c: float | None = None     # 电池温度(℃); None = 本轮未取到
+    source: str = ""                # "param"=扫地机参数, "app"=APP 兜底
 
 
 def format_mmss(seconds):
@@ -68,6 +71,16 @@ def build_points(samples, step_pct=5):
 
     out["start_battery"] = vals[0].battery
     out["end_battery"] = vals[-1].battery
+    out["start_voltage"] = next(
+        (s.voltage_v for s in vals if getattr(s, "voltage_v", None) is not None), None)
+    out["end_voltage"] = next(
+        (s.voltage_v for s in reversed(vals)
+         if getattr(s, "voltage_v", None) is not None), None)
+    out["start_temp"] = next(
+        (s.temp_c for s in vals if getattr(s, "temp_c", None) is not None), None)
+    out["end_temp"] = next(
+        (s.temp_c for s in reversed(vals)
+         if getattr(s, "temp_c", None) is not None), None)
 
     prev = vals[0]
     for s in vals[1:]:
@@ -75,6 +88,8 @@ def build_points(samples, step_pct=5):
             out["raw"].append({
                 "t": s.t, "battery": s.battery, "label": s.label,
                 "wall": s.wall,
+                "voltage_v": getattr(s, "voltage_v", None),
+                "temp_c": getattr(s, "temp_c", None),
                 "delta": s.battery - prev.battery, "dt": max(0.0, s.t - prev.t),
             })
             prev = s
@@ -112,6 +127,8 @@ def build_summary(samples, step_pct=5):
     out = {
         "valid": pts["valid"], "invalid": pts["invalid"],
         "start_battery": pts["start_battery"], "end_battery": pts["end_battery"],
+        "start_voltage": None, "end_voltage": None,
+        "start_temp": None, "end_temp": None,
         "total_seconds": 0.0, "total_drop": 0,
         "average_per_1pct": None, "milestone_average": None,
         "milestone_longest": None, "milestone_shortest": None,
@@ -121,6 +138,10 @@ def build_summary(samples, step_pct=5):
         return out
     out["total_seconds"] = max(0.0, vals[-1].t - vals[0].t)
     out["total_drop"] = (pts["start_battery"] or 0) - (pts["end_battery"] or 0)
+    out["start_voltage"] = pts.get("start_voltage")
+    out["end_voltage"] = pts.get("end_voltage")
+    out["start_temp"] = pts.get("start_temp")
+    out["end_temp"] = pts.get("end_temp")
     if out["total_drop"] > 0:
         out["average_per_1pct"] = out["total_seconds"] / out["total_drop"]
     dts = [m["dt"] for m in pts["milestones"]]
@@ -194,9 +215,25 @@ class BatteryMonitor(threading.Thread):
 
     def _sample_once(self):
         try:
-            battery = int(self._reader(self.device))
+            raw = self._reader(self.device)
         except Exception:
-            battery = -1
+            raw = -1
+        voltage_v = None
+        temp_c = None
+        source = "app"
+        if isinstance(raw, dict):
+            try:
+                battery = int(raw.get("battery", -1))
+            except (TypeError, ValueError):
+                battery = -1
+            voltage_v = raw.get("voltage_v")
+            temp_c = raw.get("temp_c")
+            source = str(raw.get("source") or "param")
+        else:
+            try:
+                battery = int(raw)
+            except (TypeError, ValueError):
+                battery = -1
         now = time.monotonic()
         if not self._armed:
             if battery < 0:
@@ -206,7 +243,10 @@ class BatteryMonitor(threading.Thread):
         self.samples.append(BatterySample(
             t=max(0.0, now - self._t0),
             battery=battery, label=self._label(),
-            wall=time.strftime("%H:%M:%S")))
+            wall=time.strftime("%H:%M:%S"),
+            voltage_v=float(voltage_v) if voltage_v is not None else None,
+            temp_c=float(temp_c) if temp_c is not None else None,
+            source=source))
 
     def run(self):
         self._sample_once()

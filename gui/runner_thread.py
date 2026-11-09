@@ -13,6 +13,7 @@ from core import session
 from core import timefmt as _timefmt
 from core.runner import ActionRunner, UserStopped
 from core.driver import load_config
+from core.error_messages import friendly_error
 from core.excel_report import ExcelReport, case_sheet_name
 from core.logger import get_logger
 
@@ -69,12 +70,19 @@ class RunWorker(QThread):
     step_paused = Signal(bool)         # 步骤暂停/恢复(True=暂停中) → 结果表标「⏸ 暂停中」
 
     def __init__(self, device_id, case_files, preconditions, repeat=1, parent=None,
-                 pre_by_group=None, device_name="", battery_cfg=None):
+                 pre_by_group=None, device_name="", battery_cfg=None,
+                 param_reader=None, snapshot_provider=None,
+                 robot_info_reader=None):
         super().__init__(parent)
         self.device_id = device_id
         self.case_files = case_files       # list: yaml 路径
         # 电量监测配置(用户 2026-11-03): {"enabled","step_pct","interval"} 或 None
         self.battery_cfg = battery_cfg or None
+        self.param_reader = param_reader          # 设备参数优先于 OCR 读电量
+        self.snapshot_provider = snapshot_provider  # 失败时抓参数快照
+        self.robot_info_reader = robot_info_reader  # 报告: SN/固件/基站版本
+        self.param_snapshot = None
+        self._device_snapshot_written = False
         self.batt_monitor = None           # BatteryMonitor(运行期间)
         # 前置项列表 [{type, enabled, ...参数}](旧版传 dict 时自动转换, 兼容)
         if isinstance(preconditions, dict):
@@ -116,13 +124,33 @@ class RunWorker(QThread):
             from core.battery_monitor import BatteryMonitor
             self.batt_monitor = BatteryMonitor(
                 d, interval=cfg.get("interval", 60),
-                label_getter=lambda: self._exec_label)
+                label_getter=lambda: self._exec_label,
+                reader=self._battery_reader)
             self.batt_monitor.start()
             self.status.emit(f"[电量监测] 已启动(步长 {cfg.get('step_pct', 5)}%, "
                              f"间隔 {cfg.get('interval', 60)} 秒)")
         except Exception as e:
             log.warning(f"[电量监测] 启动失败(不影响执行): {type(e).__name__}: {e}")
             self.batt_monitor = None
+
+    def _battery_reader(self, d):
+        """电量优先读扫地机参数（同时带电压/温度），失败回退 OCR。"""
+        if self.param_reader is not None:
+            try:
+                v = self.param_reader()
+                if isinstance(v, dict):
+                    try:
+                        level = int(v.get("battery", -1))
+                    except (TypeError, ValueError):
+                        level = -1
+                    if level >= 0:
+                        return v
+                elif isinstance(v, int) and v >= 0:
+                    return v
+            except Exception:
+                pass
+        from core.session import get_battery_level
+        return get_battery_level(d)
 
     def _finish_battery(self, report):
         """停止采样线程并尽力把「电量监测」页写进报告(失败不影响主流程)。"""
@@ -143,6 +171,16 @@ class RunWorker(QThread):
         except Exception as e:
             log.warning(f"[电量监测] 报告页写入失败(不影响执行): "
                         f"{type(e).__name__}: {e}")
+
+    def _write_device_snapshot(self, report):
+        """失败参数快照写进报告（只写一次）。"""
+        if report is None or self._device_snapshot_written or not self.param_snapshot:
+            return
+        self._device_snapshot_written = True
+        try:
+            report.add_device_snapshot(self.param_snapshot)
+        except Exception as e:
+            log.warning(f"[设备参数] 快照写入失败(忽略): {type(e).__name__}: {e}")
 
     # ── 暂停/继续(用户 2026-10-13) ──
     def request_pause(self):
@@ -252,6 +290,37 @@ class RunWorker(QThread):
             log.warning(f"[前置] 截图失败(忽略): {type(e).__name__}: {e}")
             return ""
 
+    def _fill_device_info(self, report, device, cfg):
+        """报告头的设备信息：SN / App 版本 / 固件版本 / 基站版本。
+
+        机器人参数优先（设备参数页已连接时），APP 侧信息兜底；任何一项取不到就
+        保持报告里的「待获取」，不影响执行。
+        """
+        info = {}
+        if self.robot_info_reader is not None:
+            try:
+                info = self.robot_info_reader() or {}
+            except Exception:
+                info = {}
+        sn = str(info.get("sn") or "").strip()
+        if not sn:
+            try:
+                sn = str(getattr(device, "serial", "") or "").strip()
+            except Exception:
+                sn = ""
+        app_version = ""
+        try:
+            app_version = str(device.app_version(cfg["app"]["package"]) or "")
+        except Exception:
+            app_version = ""
+        try:
+            report.set_device_info(
+                sn=sn, app_version=app_version,
+                firmware_version=str(info.get("firmware_version") or ""),
+                base_station_version=str(info.get("base_station_version") or ""))
+        except Exception:
+            log.debug("[报告] 设备信息写入失败", exc_info=True)
+
     # ── 线程主体 ──
     def run(self):
         # ★ 不再自己挂日志 handler —— MainWindow 已有全局转发(_attach_log_handler),
@@ -304,6 +373,7 @@ class RunWorker(QThread):
                 c.get("name", "未命名用例") for _m, c, _f in tasks).items() if c > 1}
 
             report = ExcelReport()
+            self._fill_device_info(report, d, cfg)
             all_passed = True
             total_rounds = self.repeat
             for rnd in range(total_rounds):
@@ -469,6 +539,11 @@ class RunWorker(QThread):
 
                     if not passed:
                         all_passed = False
+                        if self.param_snapshot is None and self.snapshot_provider is not None:
+                            try:
+                                self.param_snapshot = self.snapshot_provider()
+                            except Exception:
+                                self.param_snapshot = None
                         if not self._stop_requested:
                             # ★ 失败截图由引擎在失败那一刻留好(用户 2026-10-15: "失败截图
                             #   统一存用例失败时的那一张, 并且和测试步骤截图放同一个目录")
@@ -498,6 +573,7 @@ class RunWorker(QThread):
                         pass
 
             self._finish_battery(report)      # 电量监测页(在正常 save 之前)
+            self._write_device_snapshot(report)
             report.save()
             report_saved = True
             self.status.emit(f"报告已生成: {report.path}")
@@ -511,13 +587,14 @@ class RunWorker(QThread):
             self.finished_run.emit(False, "已手动停止")
         except Exception as e:
             self.log_line.emit(f"[异常] {type(e).__name__}: {e}")
-            self.finished_run.emit(False, f"执行异常: {e}")
+            self.finished_run.emit(False, f"执行异常: {friendly_error(e)}")
         finally:
             # 电量监测: 哪条路径退出都要停线程 + 尽力写页(正常路径已写过, 幂等)
             self._finish_battery(report)
             # 中途异常也保住已执行部分的报告
             if report is not None and not report_saved:
                 try:
+                    self._write_device_snapshot(report)
                     report.save()
                     self.status.emit(f"报告已生成(部分执行): {report.path}")
                 except Exception:

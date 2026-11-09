@@ -161,3 +161,17 @@ def test_monitor_reader_failure_records_invalid_after_arming():
     for _ in range(3):
         m._sample_once()
     assert [s.battery for s in m.samples] == [100, -1, 98]
+
+
+def test_monitor_accepts_param_dict_with_voltage_and_temp():
+    """扫地机参数读取返回 dict 时，电量/电压(V)/温度一起入样本。"""
+    m = BatteryMonitor(
+        device=None, interval=1,
+        reader=lambda _d: {"battery": 80, "voltage_v": 15.8,
+                           "temp_c": 31.5, "source": "param"})
+    m._sample_once()
+    s = m.samples[0]
+    assert (s.battery, s.voltage_v, s.temp_c, s.source) == (80, 15.8, 31.5, "param")
+    sm = build_summary(m.samples, 5)
+    assert sm["start_voltage"] == 15.8
+    assert sm["start_temp"] == 31.5

@@ -30,3 +30,11 @@ backups/
 
 # 临时示例/预览产物(用户 2026-11-05: 统一生成在这里, 清理时整个目录删掉即可)
 .scratch/
+
+# AutopackDebugger SDK 副本(DLL + license, 本机生成, 不入库)
+# ★ 只忽略根目录的 apos/, 不能写成 `apos/` —— 那会把 core/apos/ 源码包
+#   (设备参数监控) 一起忽略, 发版包就会缺整个模块。
+/apos/
+
+# 厂商 TestCase 样本(自带独立 .git, 不是本仓库代码)
+/TestCase/

@@ -95,9 +95,20 @@ def test_no_star_imports_anywhere():
     代价是 `import *` 拿到的将不是"该模块的全部公开名"。本项目本来就一处都没用,
     这里把这条钉住: 谁想用 `import *`, 先把 `__all__` 补全。
     """
+    def _nested_repo(p):
+        """跳过嵌在本仓库里的其它 git 仓库(例如厂商样本 TestCase/)，它们不是我们的代码。"""
+        for parent in p.parents:
+            if parent == ROOT:
+                break
+            if (parent / ".git").exists():
+                return True
+        return False
+
     bad = []
     for p in ROOT.rglob("*.py"):
         if ".venv" in p.parts or "dist" in p.parts or "build" in p.parts:
+            continue
+        if _nested_repo(p):
             continue
         for i, line in enumerate(p.read_text(encoding="utf-8",
                                             errors="ignore").splitlines(), 1):

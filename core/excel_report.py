@@ -70,16 +70,20 @@ class ExcelReport:
         # ★ 电量监测页只建一次(代码审查 2026-11-04): 原来按 sheet 名判重, 用例名恰好叫
         #   「电量监测」时会被误认为已建好 → 报告里根本没有电量数据。改用本对象的标记。
         self._battery_sheet = None
+        # 设备参数快照页(失败时写一次)
+        self._device_sheet = None
         # 设备信息(会话开始时由 conftest 填入真实值)
         self._device_info = {"sn": "待获取", "app_version": "待获取",
                              "固件版本": "待获取", "基站版本": "待获取"}
 
-    def set_device_info(self, sn="", app_version=""):
+    def set_device_info(self, sn="", app_version="", firmware_version="",
+                        base_station_version=""):
         """填入真实设备信息,失败时保留占位符"""
-        if sn:
-            self._device_info["sn"] = sn
-        if app_version:
-            self._device_info["app_version"] = app_version
+        for key, value in (("sn", sn), ("app_version", app_version),
+                           ("固件版本", firmware_version),
+                           ("基站版本", base_station_version)):
+            if value:
+                self._device_info[key] = str(value)
 
     def set_case_priority(self, case_name, priority):
         """记录用例优先级(汇总页"优先级"列, 用户 2026-10-15: 界面设置的优先级
@@ -231,6 +235,63 @@ class ExcelReport:
     # ── 电量监测(用户 2026-11-03) ─────────────────────────────────────────
     BATTERY_TITLE = "电量监测"
 
+    # ── 设备参数快照（失败时写一页） ─────────────────────────────────────
+    def add_device_snapshot(self, snapshot):
+        """把一次设备参数快照写进「设备参数」页；幂等。"""
+        if self._device_sheet is not None:
+            return self._device_sheet
+        if not snapshot or not (snapshot.get("ok") or snapshot.get("failed")):
+            return None
+        from core.apos import catalog
+        ws = self.wb.create_sheet(self._unique_sheet_title("设备参数"))
+        self._device_sheet = ws
+        for col, w in zip("ABCDE", [22, 42, 18, 10, 14]):
+            ws.column_dimensions[col].width = w
+        ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=5)
+        ws.cell(row=1, column=1, value="设备参数快照").font = Font(
+            name="Microsoft YaHei", size=14, bold=True, color="1F4E79")
+        ws.cell(row=1, column=1).alignment = Alignment(horizontal="center")
+        ws.row_dimensions[1].height = 28
+        ts = snapshot.get("ts") or 0
+        sub = datetime.fromtimestamp(ts).strftime(_tf.DATETIME) if ts else "-"
+        ws.merge_cells(start_row=2, start_column=1, end_row=2, end_column=5)
+        c = ws.cell(row=2, column=1, value=f"采样时间: {sub}（失败时自动记录）")
+        c.font = Font(name="Microsoft YaHei", size=9, color="808080")
+        c.alignment = Alignment(horizontal="center")
+        r = 3
+        for ci, h in enumerate(["参数名", "属性路径", "值", "单位", "时间"], 1):
+            cell = ws.cell(row=r, column=ci, value=h)
+            cell.font = self.HEADER_FONT
+            cell.fill = self.HEADER_FILL
+            cell.alignment = Alignment(horizontal="center")
+            cell.border = self.BORDER
+        r += 1
+        failed = snapshot.get("failed") or {}
+        for group in catalog.PARAM_GROUPS:
+            ws.cell(row=r, column=1, value=group["name"]).font = Font(
+                name="Microsoft YaHei", size=10, bold=True, color="475569")
+            ws.cell(row=r, column=1).fill = PatternFill(
+                start_color="F8FAFC", end_color="F8FAFC", fill_type="solid")
+            for ci in range(1, 6):
+                ws.cell(row=r, column=ci).border = self.BORDER
+            r += 1
+            for item in group["items"]:
+                text = catalog.display_value(item, snapshot)
+                if item["path"] in failed and not text:
+                    text = "读取失败"
+                vals = [catalog.item_label(item), item["path"], text or "—",
+                        item.get("unit", ""), ""]
+                for ci, val in enumerate(vals, 1):
+                    cell = ws.cell(row=r, column=ci, value=val)
+                    cell.font = Font(name="Microsoft YaHei", size=10,
+                                     color="9C0006" if text == "读取失败" else "000000")
+                    cell.border = self.BORDER
+                    cell.alignment = Alignment(vertical="center",
+                                               wrap_text=(ci == 2))
+                r += 1
+        self._autofit_columns(ws, letters="ABCDE", max_row=r - 1)
+        return ws
+
     def add_battery_report(self, samples, step_pct=5, interval=None):
         """新增一页「电量监测」: 上半汇总、下半详细。
 
@@ -243,7 +304,7 @@ class ExcelReport:
             return self._battery_sheet
         ws = self.wb.create_sheet(self._unique_sheet_title(self.BATTERY_TITLE))
         self._battery_sheet = ws
-        for col, w in zip("ABCDEFGH", [20, 12, 12, 10, 12, 14, 12, 14]):
+        for col, w in zip("ABCDEFGHI", [20, 12, 12, 10, 12, 14, 12, 10, 12]):
             ws.column_dimensions[col].width = w
         summary = build_summary(samples, step_pct)
         points = build_points(samples, step_pct)
@@ -261,13 +322,13 @@ class ExcelReport:
             cell.border = self.BORDER
             return cell
 
-        def border_row(row, c1=1, c2=8):
+        def border_row(row, c1=1, c2=9):
             # ★ 合并单元格只有左上角带边框(用户 2026-11-04: "单元格边框加上") ——
             #   合并区与整行都补一遍, 表看起来才是完整网格。
             self._border_range(ws, row, c1, row, c2)
 
         def section(row, text):
-            ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=8)
+            ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=9)
             put(row, 1, text, bold=True, font_color="1F4E79", size=12)
             border_row(row)
             return row + 1
@@ -280,11 +341,11 @@ class ExcelReport:
             return row + 1
 
         # ── 标题 ──
-        ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=8)
+        ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=9)
         put(1, 1, "电量监测", bold=True, font_color="1F4E79", align="center", size=16)
         border_row(1)
         ws.row_dimensions[1].height = 34
-        ws.merge_cells(start_row=2, start_column=1, end_row=2, end_column=8)
+        ws.merge_cells(start_row=2, start_column=1, end_row=2, end_column=9)
         sub = (f"步长 {int(step_pct or 1)}%    "
                f"采样间隔 {int(interval) if interval else '-'} 秒    "
                f"生成时间: {datetime.now().strftime(_tf.DATETIME)}")
@@ -295,14 +356,14 @@ class ExcelReport:
         r = section(r, "一、汇总")
 
         def kv(row, k, v):
-            ws.merge_cells(start_row=row, start_column=2, end_row=row, end_column=8)
+            ws.merge_cells(start_row=row, start_column=2, end_row=row, end_column=9)
             put(row, 1, k, bold=True)
             put(row, 2, v)
             border_row(row)
             return row + 1
 
         if not summary["valid"]:
-            ws.merge_cells(start_row=r, start_column=1, end_row=r, end_column=8)
+            ws.merge_cells(start_row=r, start_column=1, end_row=r, end_column=9)
             put(r, 1, "未采集到有效电量数据 —— 页面始终未展示电量, 或设备中途断开。",
                 font_color="9C0006", align="center")
             border_row(r)
@@ -312,6 +373,12 @@ class ExcelReport:
                    format_mmss(summary["total_seconds"]))
             r = kv(r, "起始电量", f"{summary['start_battery']}%")
             r = kv(r, "结束电量", f"{summary['end_battery']}%")
+            sv, ev = summary.get("start_voltage"), summary.get("end_voltage")
+            st, et = summary.get("start_temp"), summary.get("end_temp")
+            r = kv(r, "起始电压(V)", f"{sv:.2f}" if sv is not None else "—")
+            r = kv(r, "结束电压(V)", f"{ev:.2f}" if ev is not None else "—")
+            r = kv(r, "起始电池温度(℃)", f"{st:.1f}" if st is not None else "—")
+            r = kv(r, "结束电池温度(℃)", f"{et:.1f}" if et is not None else "—")
             # ★ 充电时总耗电可能为负 —— 如实写「电量上升 N%」, 不硬凑成 0
             drop = summary["total_drop"]
             r = kv(r, "总耗电", f"{drop}%" if drop >= 0 else f"电量上升 {-drop}%")
@@ -372,12 +439,13 @@ class ExcelReport:
 
         r = section(r, "二、详细数据")
         r = header(r, ["序号", "电量的当前时间", "用例/轮次", "电量", "变化",
-                       "距上次变化(分:秒)", "累计用时(分:秒)"])
+                       "距上次变化(分:秒)", "累计用时(分:秒)", "电压(V)",
+                       "电池温度(℃)"])
         # ★ 只列**每次 1% 的实际变化**(用户 2026-11-04): 里程碑不在这里单独占行,
         #   它的分段用时在「汇总」的每 N% 分段表里。
         raw = points["raw"]
         if not raw:
-            ws.merge_cells(start_row=r, start_column=1, end_row=r, end_column=8)
+            ws.merge_cells(start_row=r, start_column=1, end_row=r, end_column=9)
             put(r, 1, "无电量变化记录。", align="center", font_color="666666")
             border_row(r)
         for i, p in enumerate(raw, 1):
@@ -390,6 +458,10 @@ class ExcelReport:
             put(r, 5, f"{p['delta']:+d}%", align="center")
             put(r, 6, format_mmss(p.get("dt")), align="center")
             put(r, 7, format_mmss(p["t"]), align="center")
+            v = p.get("voltage_v")
+            tem = p.get("temp_c")
+            put(r, 8, f"{v:.2f}" if v is not None else "—", align="center")
+            put(r, 9, f"{tem:.1f}" if tem is not None else "—", align="center")
             border_row(r)
             r += 1
 
@@ -398,7 +470,7 @@ class ExcelReport:
         self._add_battery_chart(ws, samples, points["milestones"])
         # ★ 列宽自适应内容(用户 2026-11-04: 避免显示不全) —— openpyxl 不会自动调,
         #   这里按最长的非合并单元格文本估算(中文按 2 个字符宽)。
-        self._autofit_columns(ws, max_row=last_table_row)
+        self._autofit_columns(ws, letters="ABCDEFGHI", max_row=last_table_row)
         return ws
 
     #: 曲线最多画这么多点(代码审查 2026-11-04): 长测(几小时/几秒一采)会写出上万行
