@@ -344,7 +344,90 @@ def test_binpack_path_falls_back_to_manifest_source(tmp_path):
     assert found == vendor / "BinpackCLR.dll"
 
 
-# ── 新机型只支持 libapos（librpc 的 CppAposSdkInit 失败） ──
+# ── 连接顺序：libapos 优先，失败才退回 librpc 轮询 ──
+def test_connect_prefers_libapos_and_skips_librpc():
+    class FakeClient:
+        connected = False
+
+        def __init__(self):
+            self.calls = 0
+
+        def connect(self, ip, retries=1, **kwargs):
+            self.calls += 1
+            self.connected = True
+            return True
+
+        def read(self, paths):
+            return {p: 7 for p in paths}
+
+        def disconnect(self):
+            self.connected = False
+
+    class FakeStream:
+        running = False
+
+        def start(self, ip, paths, preserve=False):
+            self.running = True
+            return True
+
+        def stop(self, clear=True):
+            self.running = False
+
+        def read(self, paths, timeout_ms=3000):
+            return {"/System/FirmwareInfo": '{"Model": "CLA_HS4"}'}
+
+        def values(self):
+            return {"/BatteryBattery/BatteryLevel": 90}
+
+        def last_event(self):
+            return time.time()
+
+    fc = FakeClient()
+    svc = ParamService(fc, ["/A"], stream=FakeStream(), stream_paths=["/A"])
+    try:
+        assert svc.connect("10.0.0.6") is True
+        assert svc._stream_only is True
+        assert fc.calls == 0                 # 流连上了就不再建 librpc 会话
+        assert svc._model == "CLA_HS4"
+    finally:
+        svc.stop(timeout=1.0)
+
+
+def test_connect_falls_back_to_librpc_when_stream_unavailable():
+    class FakeClient:
+        connected = False
+
+        def __init__(self):
+            self.calls = 0
+
+        def connect(self, ip, retries=1, **kwargs):
+            self.calls += 1
+            self.connected = True
+            return True
+
+        def read(self, paths):
+            return {p: 7 for p in paths}
+
+        def disconnect(self):
+            self.connected = False
+
+    class FakeStream:
+        running = False
+
+        def start(self, ip, paths, preserve=False):
+            return False
+
+        def stop(self, clear=True):
+            pass
+
+    fc = FakeClient()
+    svc = ParamService(fc, ["/A"], stream=FakeStream(), stream_paths=["/A"])
+    assert svc.connect("10.0.0.7") is True
+    assert fc.calls >= 1
+    assert svc._stream_only is False
+    svc.stop(timeout=1.0)
+
+
 def test_connect_falls_back_to_libapos_stream_only():
     class FakeClient:
         connected = False

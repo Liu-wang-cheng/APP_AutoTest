@@ -3,6 +3,7 @@
 
 纯 Python（不 import PySide6）—— GUI 用 QTimer 读 `latest()` 快照，core 可直接单测。
 """
+import json
 import threading
 import time
 
@@ -17,6 +18,10 @@ log = get_logger()
 #:   拿它当数据源会让整页参数显示成 0。
 READ_ONLY_PATHS = ("/System/CustomSN", "/System/BoardSN",
                    "/System/FirmwareInfo")
+
+#: 这些机型的 CustomSN/BoardSN 在 binpack 上读不到(还会触发二分重试拖慢连接),
+#: SN 用 UDP 扫描结果。实测 CLA_ZY2L; 新机型确认后往这里加。
+NO_SN_MODELS = frozenset({"CLA_ZY2L"})
 
 #: 默认参数（电量监测也依赖它）
 DEFAULT_PATHS = (
@@ -52,9 +57,11 @@ class ParamService:
         self._thread = None
         self._ip = ""
         self._connected = False
-        #: 新机型(如 CLA_ZY2L)的 librpc_base `CppAposSdkInit` 会失败, 只能走
-        #  libapos_client 的上传流句柄(厂商工具也是这样连的)。
+        #: 上传流优先: 连接成功时没有 librpc 会话, 数据/系统信息都走 libapos
+        #  句柄; 上传流不可用时才会退回 librpc 轮询。
         self._stream_only = False
+        #: 当前机型(从 FirmwareInfo 解析), 用于判断 SN 是否能在流句柄上读
+        self._model = ""
 
     # ── 生命周期 ──
     def connect(self, ip):
@@ -72,24 +79,29 @@ class ParamService:
                 self.mcu.stop()
             except Exception:
                 pass
-        # ★ 只试一次: 不支持 librpc 的新机型会稳定失败, 重试只会把连接拖到
-        #   5 秒; 失败后马上走 libapos 兜底(下面)。
-        ok = bool(self.client.connect(ip, retries=1))
+        # ★ libapos 优先: 它既是数据通道(AposSdkInit ~0.3s), 也能读 SN/固件/
+        #   基站文件; 旧 librpc 的 CppAposSdkInit 对新机型(CLA_ZY2L)还会失败,
+        #   先去连一遍只会白等。所以先开上传流, 成功就不再建 librpc 会话。
         self._ip = str(ip)
-        self._stream_only = False
-        if not ok and self.stream is not None:
-            # ★ 新机型(实测 CLA_ZY2L)只认 libapos_client: 旧 librpc 的
-            #   CppAposSdkInit 返回失败, 但 AposSdkInit 能连上, 推送/MCU/
-            #   固件信息都正常 —— 这时直接用上传流句柄, 不再要求 librpc 连接。
-            try:
-                start = self.stream.start(self._ip,
-                                          list(self._stream_paths or self._paths))
-            except Exception:
-                start = False
-            if start:
-                ok = True
-                self._stream_only = True
-                log.info(f"[参数] {self._ip} 仅支持 libapos, 改用上传流句柄")
+        stream_ok = False
+        if self.stream is not None:
+            for _ in range(2):         # 机器人忙时偶发一次失败, 再试一次
+                try:
+                    stream_ok = bool(self.stream.start(
+                        self._ip, list(self._stream_paths or self._paths)))
+                except Exception:
+                    stream_ok = False
+                if stream_ok:
+                    break
+                time.sleep(0.3)
+        # ★ 上传流不可用(BinpackCLR 缺失/固件拒绝订阅)时退回 librpc 轮询,
+        #   否则这些机器会"连上了但一直没有数据"。
+        ok = bool(self.client.connect(self._ip, retries=1)) if not stream_ok else True
+        self._stream_only = bool(ok and stream_ok)
+        if stream_ok:
+            log.info(f"[参数] {self._ip} 使用 libapos 上传流连接")
+        elif ok:
+            log.info(f"[参数] {self._ip} 上传流不可用, 退回 librpc 轮询")
         self._connected = ok
         if ok:
             # ★ 换设备后旧快照不能带过去（否则界面会先显示上一台机器的值）
@@ -154,12 +166,25 @@ class ParamService:
     def _prime_system(self):
         paths = ["/System/CustomSN", "/System/BoardSN", "/System/FirmwareInfo"]
         stream = self.stream
+        self._model = ""
         try:
             if stream is not None and getattr(stream, "running", False):
-                # 仅 libapos 的机型没有 librpc 连接, 只能在这个句柄上读。
-                # ★ 只读复合属性(几十毫秒); SN/BoardSN 走推送或扫描结果 ——
-                #   普通属性读不到时 SDK 会二分重试, 一次要好几秒。
+                # 先读复合属性(几十毫秒), 从里面拿到机型
                 data = stream.read(["/System/FirmwareInfo"]) or {}
+                fw = data.get("/System/FirmwareInfo")
+                if isinstance(fw, str):
+                    try:
+                        fw = json.loads(fw)
+                    except Exception:
+                        fw = {}
+                self._model = str((fw or {}).get("Model") or "") \
+                    if isinstance(fw, dict) else ""
+                if self._model not in NO_SN_MODELS:
+                    # 普通机型 SN/BoardSN 在同一句柄上读得到, 补进快照;
+                    # 超时给短一点, 读不到时代价也小。
+                    data.update(stream.read(
+                        ["/System/CustomSN", "/System/BoardSN"],
+                        timeout_ms=1500) or {})
             else:
                 data = self.client.read(paths) or {}
         except Exception:
@@ -170,12 +195,11 @@ class ParamService:
                                   "ts": time.time()}
 
     def start_stream(self):
-        """连接后的第二步：开属性上传流。
+        """确保属性上传流开启（libapos 优先连接时通常已经在跑了）。
 
-        ★ 必须等**所有 librpc_base 读操作做完再开**（型号/SN/固件/基站版本）:
-          实测两套客户端同时用会互相卡死 —— 推送流一开, CppAposSdkRead 一次读
-          要 11~22 秒且返回空，基站版本文件读也会失败。开流之后的读全部走
-          同一个 libapos_client 句柄(`UploadStream.read`)，不再碰 librpc_base。
+        ★ 连接流程现在先开流；这里主要给「老流程/退回轮询后再重开」兜底。
+          开流之后的读全部走同一个 libapos_client 句柄(`UploadStream.read`)，
+          不再碰会互卡的 librpc_base。
         """
         if self.stream is None or not self._connected:
             return False
@@ -358,6 +382,13 @@ class ParamService:
                 log.debug(f"[上传流] 重启失败: {e}")
             time.sleep(0.5)
         log.info("[上传流] 重启失败, 退回轮询")
+        # ★ libapos 优先连接时本来没有 librpc 会话; 这时临时建一个,
+        #   否则推送彻底中断后就没有任何数据通道了(文件读也走 librpc)。
+        if not getattr(self.client, "connected", False):
+            try:
+                self.client.connect(self._ip, retries=1)
+            except Exception as e:
+                log.debug(f"[上传流] 轮询兜底连接失败: {e}")
 
     def _read(self, paths):
         """批量读：推送流在跑时用同一个 libapos_client 句柄，否则走 librpc_base。"""
@@ -410,8 +441,8 @@ class ParamService:
                 data = {p: pushed[p] for p in paths if p in pushed}
                 rest = [p for p in paths if p not in pushed
                         and (p in READ_ONLY_PATHS or p in BINARY_PATHS)]
-                if self._stream_only:
-                    # 新机型的普通属性(如 CustomSN)在 binpack 上读不到, 还会
+                if self._stream_only and self._model in NO_SN_MODELS:
+                    # 这些机型的普通属性(如 CustomSN)在 binpack 上读不到, 还会
                     # 触发 SDK 二分重试(每次好几秒); 只读复合属性, SN 用扫描结果。
                     rest = [p for p in rest if p in COMPOSITE_PATHS]
                 if rest:
