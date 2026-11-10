@@ -226,8 +226,8 @@ class ConnectThread(QThread):
                 pass
         self.done.emit(True, self.ip, info)
         # 先把推送流开起来（参数/曲线立刻有数据），再在后台读基站版本。
-        # 基站在机器人上是文件、只能走 librpc_base，读的时候会临时停流，
-        # 由 ParamService.read_base_station 负责停/恢复。
+        # 基站版本是机器人上的文件：ParamService.read_base_station 会在推流
+        # 句柄上用 binpack 读（librpc 的文件读在开流后会一直返回空）。
         start_stream = getattr(self.service, "start_stream", None)
         if callable(start_stream):
             try:
@@ -237,8 +237,8 @@ class ConnectThread(QThread):
         reader = getattr(self.service, "read_base_station", None)
         client = getattr(self.service, "client", None)
         version = ""
-        # ★ 先让推送流跑几秒（曲线/参数先出数据），再停流读基站版本文件；
-        #   否则一连上就停流 2~6 秒，看起来像"连接很慢/参数不出来"。
+        # ★ 先让推送流跑几秒（曲线/参数先出数据），再读基站版本文件；
+        #   没有基站的机型要走"触发刷新 + 重试"，最多约 2 秒。
         self._sleep(3.0)
         if not self._cancel.is_set():
             try:
@@ -886,7 +886,15 @@ class DevicePage(QWidget):
             self._device_info = {}
             self._update_info_label()
             self.disconnect_btn.setEnabled(False)
+            # ★ 切换设备失败时不能把上一台的旧值留在表里: 否则看起来像
+            #   "参数没有更新"(用户 2026-11-10 切到 192.168.10.21 的实际现象)。
+            self._last_snapshot = {"ok": {}, "failed": {}, "ts": 0}
+            self.curve_view.clear_history()
+            self._rebuild_table()
             msg = str(info.get("error") or "").strip()
+            if msg:
+                self.status_label.setText(f"连接失败（{ip}）：{msg}")
+                self.status_label.setStyleSheet("color:#dc2626;")
             log.info(f"[连接] {ip} 失败: {msg or '未知原因'}")
             self.connectionChanged.emit(False, "")
             self.connect_finished.emit(False, ip, msg)

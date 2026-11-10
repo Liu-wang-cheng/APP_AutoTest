@@ -227,7 +227,7 @@ class FakeClient:
         self.calls = 0
         self.fail = False
 
-    def connect(self, ip):
+    def connect(self, ip, retries=1, **kwargs):
         self.connected = True
         return True
 

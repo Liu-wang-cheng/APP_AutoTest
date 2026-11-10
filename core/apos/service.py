@@ -6,7 +6,8 @@
 import threading
 import time
 
-from core.apos.client import BINARY_PATHS
+from core.apos.client import (BASE_STATION_EVENT, BASE_STATION_FILES,
+                              BINARY_PATHS, COMPOSITE_PATHS, AposClient)
 from core.logger import get_logger
 
 log = get_logger()
@@ -51,6 +52,9 @@ class ParamService:
         self._thread = None
         self._ip = ""
         self._connected = False
+        #: 新机型(如 CLA_ZY2L)的 librpc_base `CppAposSdkInit` 会失败, 只能走
+        #  libapos_client 的上传流句柄(厂商工具也是这样连的)。
+        self._stream_only = False
 
     # ── 生命周期 ──
     def connect(self, ip):
@@ -68,8 +72,24 @@ class ParamService:
                 self.mcu.stop()
             except Exception:
                 pass
-        ok = bool(self.client.connect(ip))
+        # ★ 只试一次: 不支持 librpc 的新机型会稳定失败, 重试只会把连接拖到
+        #   5 秒; 失败后马上走 libapos 兜底(下面)。
+        ok = bool(self.client.connect(ip, retries=1))
         self._ip = str(ip)
+        self._stream_only = False
+        if not ok and self.stream is not None:
+            # ★ 新机型(实测 CLA_ZY2L)只认 libapos_client: 旧 librpc 的
+            #   CppAposSdkInit 返回失败, 但 AposSdkInit 能连上, 推送/MCU/
+            #   固件信息都正常 —— 这时直接用上传流句柄, 不再要求 librpc 连接。
+            try:
+                start = self.stream.start(self._ip,
+                                          list(self._stream_paths or self._paths))
+            except Exception:
+                start = False
+            if start:
+                ok = True
+                self._stream_only = True
+                log.info(f"[参数] {self._ip} 仅支持 libapos, 改用上传流句柄")
         self._connected = ok
         if ok:
             # ★ 换设备后旧快照不能带过去（否则界面会先显示上一台机器的值）
@@ -81,40 +101,67 @@ class ParamService:
             self._prime_system()
             # ★ 立刻开推送流: 开流后所有属性读都走同一个 libapos_client 句柄
             #   (`stream.read`)，不再碰会互卡的 librpc_base。
-            self.start_stream()
+            if not self._stream_only:
+                self.start_stream()
             self.start()
             self._ready.set()
         return ok
 
     def read_base_station(self, retries=2, delay=0.6):
-        """读基站版本（机器人文件，只能走 librpc_base）。
+        """读基站版本（机器人上的文件）。
 
-        ★ 推送流和 librpc 文件读不能同时进行（实测会把流句柄卡死/读空），
-        所以这里临时停流 → 读文件 → 重新开流。文件存在时只要几十毫秒，
-        停流窗口几乎无感；没有基站的机型最多等约 6 秒，期间参数改走轮询。
+        ★ 推流开着的时候不能走 librpc_base 的文件读 —— 实测只要开过上传流，
+          同一个连接的 CppAposSdkReadFile 就一直返回空（停流也恢复不了）。
+          所以在推流句柄上用 binpack 读 `/System/FileStrOp`（厂商工具的做法），
+          流也不用停，读基站版本不会再打断曲线/参数。
         """
-        was_streaming = bool(self.stream is not None
-                             and getattr(self.stream, "running", False))
-        if was_streaming:
-            self._wait_read_idle()       # 别在 stream.read 进行中把流停掉
+        stream = self.stream
+        if stream is not None and getattr(stream, "running", False):
+            version = self._stream_base_version()
+            if version:
+                return version
             try:
-                self.stream.stop()
+                stream.send_event(BASE_STATION_EVENT)
             except Exception:
                 pass
+            for _ in range(max(1, int(retries or 1))):
+                time.sleep(delay)
+                version = self._stream_base_version()
+                if version:
+                    return version
+            return ""
         try:
             return self.client.read_base_station_version(retries=retries,
                                                          delay=delay)
         except Exception:
             return ""
-        finally:
-            if was_streaming and self._connected:
-                self._wait_read_idle()      # 等轮询那一轮 librpc 读结束
-                self.start_stream()         # 内部带重试
+
+    def _stream_base_version(self):
+        """在推流句柄上读两个候选文件，返回解析出的版本号。"""
+        stream = self.stream
+        if stream is None or not getattr(stream, "running", False):
+            return ""
+        for path in BASE_STATION_FILES:
+            try:
+                raw = stream.read_file(path)
+            except Exception:
+                raw = ""
+            version = AposClient._file_data(raw)
+            if version:
+                return version
+        return ""
 
     def _prime_system(self):
         paths = ["/System/CustomSN", "/System/BoardSN", "/System/FirmwareInfo"]
+        stream = self.stream
         try:
-            data = self.client.read(paths) or {}
+            if stream is not None and getattr(stream, "running", False):
+                # 仅 libapos 的机型没有 librpc 连接, 只能在这个句柄上读。
+                # ★ 只读复合属性(几十毫秒); SN/BoardSN 走推送或扫描结果 ——
+                #   普通属性读不到时 SDK 会二分重试, 一次要好几秒。
+                data = stream.read(["/System/FirmwareInfo"]) or {}
+            else:
+                data = self.client.read(paths) or {}
         except Exception:
             data = {}
         if data:
@@ -363,6 +410,10 @@ class ParamService:
                 data = {p: pushed[p] for p in paths if p in pushed}
                 rest = [p for p in paths if p not in pushed
                         and (p in READ_ONLY_PATHS or p in BINARY_PATHS)]
+                if self._stream_only:
+                    # 新机型的普通属性(如 CustomSN)在 binpack 上读不到, 还会
+                    # 触发 SDK 二分重试(每次好几秒); 只读复合属性, SN 用扫描结果。
+                    rest = [p for p in rest if p in COMPOSITE_PATHS]
                 if rest:
                     data.update(stream.read(rest) or {})
             else:

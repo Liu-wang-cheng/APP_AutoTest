@@ -390,6 +390,19 @@ def test_scan_falls_back_to_tcp_when_udp_port_busy(qapp, monkeypatch):
     assert got["items"][0]["ip"] == "10.0.0.5"
 
 
+def test_failed_switch_clears_old_values(page):
+    """切换设备失败后不能把上一台机器的旧值留在表里（用户 2026-11-10）。"""
+    page._apply_snapshot({"ok": {"/BatteryBattery/BatteryLevel": 80},
+                          "failed": {}, "ts": time.time()})
+    row = _row_for(page, "/BatteryBattery/BatteryLevel")
+    assert page.table.item(row, 1).text() == "80"
+    page._connect_done(False, "192.168.10.21", {"error": "机器人未响应"})
+    assert page._last_snapshot["ok"] == {}
+    row = _row_for(page, "/BatteryBattery/BatteryLevel")
+    assert page.table.item(row, 1).text() == "—"
+    assert "连接失败" in page.status_label.text()
+
+
 def test_connect_done_keeps_thread_until_it_finishes(page):
     """done 之后线程还要补读基站版本: 引用不能提前清空（关窗会崩）。"""
     sentinel = object()

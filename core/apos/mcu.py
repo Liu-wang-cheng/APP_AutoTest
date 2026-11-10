@@ -2,6 +2,8 @@
 """MCU 反馈（组件挡位/控制量）：机器人 7809 调试流解码。
 
 * 通道：ZeroMQ SUB，`tcp://<ip>:7809`（AutopackDebugger 同款调试流）；
+  机器人不是一直推流 —— 连接后必须向 `tcp://<ip>:7813` 发控制帧（心跳，
+  `[u16 0xF1][u16 0][u32 0]`）唤醒，并每 3 秒续一帧保活（2026-11-10 实测）；
 * 帧格式：`[u16 类型][u16 子类型][8B 保留][u64 时间戳][u64 序号][负载]`；
 * 已确认的字段（与 AutopackDebugger「MCU 反馈」面板逐值对照过）：
 
@@ -64,6 +66,22 @@ FIELDS = {
 #: 调试流端口（AutopackDebugger 同款）
 PORT = 7809
 
+#: 控制端口：7809 的发布器不是常开的，要先往这里发控制帧（厂商工具连上后
+#: 持续发心跳）机器人才开始推流。实测只订阅 7809 一台都收不到。
+CTRL_PORT = 7813
+
+#: 心跳间隔（秒）：厂商工具持续发，停太久机器人会再次停推
+HEARTBEAT_SECONDS = 3.0
+
+
+def control_frame(func=0xF1, start=0, payload=b""):
+    """7813 控制帧：`[u16 功能码][u16 起始地址][u32 长度][负载]`。
+
+    与厂商 SDK 的 SdkHeader 内存布局一致（short/ushort/uint，共 8 字节）。
+    空负载就是心跳；发一帧心跳即可唤醒 7809 推流（实测）。
+    """
+    return struct.pack("<HHI", int(func), int(start), len(payload)) + payload
+
 
 class McuStream:
     """订阅 7809 调试流并解析 MCU 反馈。线程安全。"""
@@ -74,6 +92,8 @@ class McuStream:
         self._last_event = 0.0
         self._stop = threading.Event()
         self._sub = None
+        self._ctrl = None          # PUSH -> 7813：唤醒/保活调试流
+        self._hb_at = 0.0
         self._thread = None
         self._ip = ""
 
@@ -96,16 +116,35 @@ class McuStream:
             sub.setsockopt(zmq.SUBSCRIBE, b"")
             sub.setsockopt(zmq.RCVTIMEO, 500)
             sub.connect(f"tcp://{self._ip}:{PORT}")
+            # ★ 关键：只订阅 7809 收不到任何帧 —— 机器人要收到 7813 的控制帧
+            #   才开始推流（厂商工具连上后一直在发心跳）。先发一帧，之后在
+            #   接收循环里每 HEARTBEAT_SECONDS 秒补一帧保活。
+            ctrl = ctx.socket(zmq.PUSH)
+            ctrl.setsockopt(zmq.LINGER, 0)
+            ctrl.connect(f"tcp://{self._ip}:{CTRL_PORT}")
         except Exception as e:
             log.info(f"[MCU] 连接调试流失败: {e}")
             return False
         self._sub = sub
+        self._ctrl = ctrl
         self._stop.clear()
+        self._send_heartbeat()
         self._thread = threading.Thread(target=self._loop, daemon=True,
                                         name="mcu-stream")
         self._thread.start()
-        log.info(f"[MCU] 已订阅调试流: {self._ip}:{PORT}")
+        log.info(f"[MCU] 已订阅调试流: {self._ip}:{PORT}"
+                 f"（已发送唤醒帧 {self._ip}:{CTRL_PORT}）")
         return True
+
+    def _send_heartbeat(self):
+        ctrl = self._ctrl
+        if ctrl is None:
+            return
+        try:
+            ctrl.send(control_frame())
+            self._hb_at = time.time()
+        except Exception as e:
+            log.debug(f"[MCU] 调试流心跳失败: {e}")
 
     def stop(self):
         self._stop.set()
@@ -117,6 +156,12 @@ class McuStream:
         if sub is not None:
             try:
                 sub.close(0)
+            except Exception:
+                pass
+        ctrl, self._ctrl = self._ctrl, None
+        if ctrl is not None:
+            try:
+                ctrl.close(0)
             except Exception:
                 pass
         with self._lock:
@@ -140,6 +185,8 @@ class McuStream:
     # ── 内部 ──
     def _loop(self):
         while not self._stop.is_set():
+            if time.time() - self._hb_at >= HEARTBEAT_SECONDS:
+                self._send_heartbeat()          # 保活：否则机器人会停推
             sub = self._sub
             if sub is None:
                 return

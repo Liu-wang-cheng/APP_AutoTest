@@ -174,6 +174,45 @@ class UploadStream:
         with self._life:      # 读期间不许 stop()/start() 换句柄
             return self._read_batch(paths, timeout_ms)
 
+    def read_file(self, path, timeout_ms=3000):
+        """在推流句柄上读机器人文件（`/System/FileStrOp`），返回原始 JSON 文本。
+
+        ★ 不能再走 librpc_base 的 CppAposSdkReadFile：推流一开，librpc 的文件读
+          就返回空（实测），而且停流也恢复不了 —— 读基站版本时只能在这个
+          句柄上读（厂商工具同样是用 binpack 读文件）。
+        """
+        if not self.running or not path:
+            return ""
+        with self._life:
+            if not self.running:
+                return ""
+            client, bp = self._api
+            try:
+                with self._api_lock:      # CLR 对象不并发; 读调用本身不持锁
+                    req = bp.Init()
+                    sub = bp.Init()
+                    bp.SetString(sub, b"FilePath", str(path).encode("utf-8"))
+                    bp.SetObject(req, b"/System/FileStrOp", sub)
+                    out = bp.Init()
+                client.AposSdkRead(self._handle, req, out, int(timeout_ms))
+                with self._api_lock:
+                    raw = bp.ToString(out)
+                return raw.decode("utf-8", "replace") if raw else ""
+            except Exception as e:
+                log.debug(f"[上传流] 读文件失败 {path}: {e}")
+                return ""
+
+    def send_event(self, event_id):
+        """在推流句柄上发 APOS 事件（基站版本刷新等）。返回 SDK 返回值。"""
+        if not self.running:
+            return -1
+        with self._api_lock:
+            try:
+                return int(self._api[0].AposSdkSendEvent(
+                    self._handle, str(event_id).encode("utf-8"), 0))
+            except Exception:
+                return -1
+
     def _read_batch(self, paths, timeout_ms=3000):
         if not self.running or not paths:
             return {}
@@ -277,6 +316,9 @@ class UploadStream:
         bp.Init.restype = ctypes.c_void_p
         bp.SetInt32.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_int32]
         bp.SetInt32.restype = ctypes.c_void_p
+        bp.SetString.argtypes = [ctypes.c_void_p, ctypes.c_char_p,
+                                 ctypes.c_char_p]
+        bp.SetString.restype = ctypes.c_void_p
         bp.SetObject.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_void_p]
         bp.SetObject.restype = ctypes.c_void_p
         bp.ToString.argtypes = [ctypes.c_void_p]

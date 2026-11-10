@@ -117,6 +117,14 @@ def test_service_drops_stale_mcu_values():
     assert snap["ok"]["/Mcu/ChargeStatus"] == 1
 
 
+def test_control_frame_layout():
+    """7813 唤醒帧：厂商 SdkHeader 是 short/ushort/uint，共 8 字节。"""
+    from core.apos.mcu import control_frame
+    assert control_frame() == b"\xf1\x00\x00\x00\x00\x00\x00\x00"
+    assert control_frame(payload=b"\x02\x00\x00\x00\x58\x1b\x00\x00") == (
+        b"\xf1\x00\x00\x00\x08\x00\x00\x00\x02\x00\x00\x00\x58\x1b\x00\x00")
+
+
 def test_mcu_values_with_ts_keeps_per_path_time():
     s = McuStream()
     s._decode(_frame(1111, 82, {55: 248, 64: 160, 65: 2}))

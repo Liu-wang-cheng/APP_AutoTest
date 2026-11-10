@@ -73,7 +73,7 @@ class _FakeClient:
         self.calls = 0
         self.connect_ok = connect_ok
 
-    def connect(self, ip):
+    def connect(self, ip, retries=1, **kwargs):
         return self.connect_ok
 
     def disconnect(self):
@@ -342,6 +342,127 @@ def test_binpack_path_falls_back_to_manifest_source(tmp_path):
     (vendor / "BinpackCLR.dll").write_bytes(b"dll")
     found = sdk_mod.binpack_path(tmp_path)
     assert found == vendor / "BinpackCLR.dll"
+
+
+# ── 新机型只支持 libapos（librpc 的 CppAposSdkInit 失败） ──
+def test_connect_falls_back_to_libapos_stream_only():
+    class FakeClient:
+        connected = False
+        last_error = "sdk_init"
+
+        def connect(self, ip, retries=1, **kwargs):
+            return False
+
+        def read(self, paths):
+            return {}
+
+        def disconnect(self):
+            pass
+
+    class FakeStream:
+        running = False
+
+        def __init__(self):
+            self.started_with = ""
+
+        def start(self, ip, paths, preserve=False):
+            self.started_with = ip
+            self.running = True
+            return True
+
+        def stop(self, clear=True):
+            self.running = False
+
+        def read(self, paths, timeout_ms=3000):
+            return {"/System/FirmwareInfo": '{"Model": "CLA_ZY2L"}'}
+
+        def values(self):
+            return {"/BatteryBattery/BatteryLevel": 88}
+
+        def last_event(self):
+            return time.time()
+
+        def read_file(self, path):
+            return ""
+
+        def send_event(self, event_id):
+            return 0
+
+    st = FakeStream()
+    svc = ParamService(FakeClient(), ["/A"], stream=st, stream_paths=["/A"])
+    try:
+        assert svc.connect("10.0.0.9") is True
+        assert svc._stream_only is True
+        assert st.started_with == "10.0.0.9"
+        snap = svc.latest()
+        assert snap["ok"]["/BatteryBattery/BatteryLevel"] == 88
+        # 系统信息在同一个流句柄上读到了
+        assert snap["ok"]["/System/FirmwareInfo"]
+    finally:
+        svc.stop(timeout=1.0)
+
+
+# ── 基站版本：推流开着时走同一个句柄读文件 ──
+def test_base_station_read_over_stream_keeps_running():
+    """推流开着时不能走 librpc 文件读（会一直返回空），也不能停流。"""
+    import json
+
+    class FakeStream:
+        running = True
+
+        def __init__(self):
+            self.events = []
+            self.stopped = False
+
+        def read_file(self, path):
+            if path == "/tmp/base_station_version":
+                return json.dumps({"/System/FileStrOp":
+                                   {"FilePath": path, "FileData": "8.2.1.1"}})
+            return ""
+
+        def send_event(self, event_id):
+            self.events.append(event_id)
+            return 0
+
+        def stop(self):
+            self.stopped = True
+
+    class _C:
+        def read_base_station_version(self, retries=2, delay=1.0):
+            return "WRONG"
+
+        def read(self, paths):
+            return {}
+
+    st = FakeStream()
+    svc = ParamService(_C(), ["/A"], stream=st)
+    assert svc.read_base_station(retries=1, delay=0.01) == "8.2.1.1"
+    assert not st.stopped            # 不能为了读文件把推流停掉
+    assert st.events == []           # 文件已在, 不用触发刷新
+
+
+def test_base_station_triggers_refresh_when_file_missing():
+    class FakeStream:
+        running = True
+
+        def __init__(self):
+            self.events = []
+
+        def read_file(self, path):
+            return ""
+
+        def send_event(self, event_id):
+            self.events.append(event_id)
+            return 0
+
+    class _C:
+        def read(self, paths):
+            return {}
+
+    st = FakeStream()
+    svc = ParamService(_C(), ["/A"], stream=st)
+    assert svc.read_base_station(retries=1, delay=0.01) == ""
+    assert st.events == ["/TaskManager/GetBaseStationVersion"]
 
 
 # ── 采集线程生命周期（审查 2026-11-09） ──
