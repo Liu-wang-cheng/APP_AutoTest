@@ -344,6 +344,33 @@ def test_binpack_path_falls_back_to_manifest_source(tmp_path):
     assert found == vendor / "BinpackCLR.dll"
 
 
+def test_sn_falls_back_to_robot_files():
+    """CLA_ZY2L 属性里读不到 SN，要从 /oem/bin/sys_data/*.sn 文件补。"""
+    import json as _json
+
+    class FakeStream:
+        running = True
+
+        def read_file(self, path):
+            if path == "/oem/bin/sys_data/custom.sn":
+                # 机器人把文件末尾换行原样塞进 JSON, 整段不是合法 JSON
+                return '{"\\/System\\/FileStrOp":{"FileData":"ZY2L0011\n"}}'
+            if path == "/oem/bin/sys_data/sn":
+                return _json.dumps({"/System/FileStrOp":
+                                    {"FileData": "26420AN3105A00FA"}})
+            return "{}"
+
+    class _C:
+        def read(self, paths):
+            return {}
+
+    svc = ParamService(_C(), ["/A"], stream=FakeStream())
+    data = {}
+    svc._fill_system_from_files(data, ["/System/CustomSN", "/System/BoardSN"])
+    assert data["/System/CustomSN"] == "ZY2L0011"
+    assert data["/System/BoardSN"] == "26420AN3105A00FA"
+
+
 # ── 连接顺序：libapos 优先，失败才退回 librpc 轮询 ──
 def test_connect_prefers_libapos_and_skips_librpc():
     class FakeClient:

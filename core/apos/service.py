@@ -20,8 +20,14 @@ READ_ONLY_PATHS = ("/System/CustomSN", "/System/BoardSN",
                    "/System/FirmwareInfo")
 
 #: 这些机型的 CustomSN/BoardSN 在 binpack 上读不到(还会触发二分重试拖慢连接),
-#: SN 用 UDP 扫描结果。实测 CLA_ZY2L; 新机型确认后往这里加。
+#: 直接从机器人文件读。实测 CLA_ZY2L; 新机型确认后往这里加。
 NO_SN_MODELS = frozenset({"CLA_ZY2L"})
+
+#: 属性路径 → 机器人上的 SN 文件（属性读不到时兜底；厂商源码同样读这些文件）
+SN_FILES = {
+    "/System/CustomSN": ("/oem/bin/sys_data/custom.sn",),
+    "/System/BoardSN": ("/oem/bin/sys_data/sn",),
+}
 
 #: 默认参数（电量监测也依赖它）
 DEFAULT_PATHS = (
@@ -185,6 +191,9 @@ class ParamService:
                     data.update(stream.read(
                         ["/System/CustomSN", "/System/BoardSN"],
                         timeout_ms=1500) or {})
+                # 属性读不到的机型(如 CLA_ZY2L)直接读机器人上的 SN 文件
+                self._fill_system_from_files(
+                    data, ["/System/CustomSN", "/System/BoardSN"])
             else:
                 data = self.client.read(paths) or {}
         except Exception:
@@ -193,6 +202,26 @@ class ParamService:
             with self._lock:
                 self._snapshot = {"ok": dict(data), "failed": {},
                                   "ts": time.time()}
+
+    def _fill_system_from_files(self, data, paths):
+        """属性里没有的 SN 从机器人文件补（`/oem/bin/sys_data/custom.sn`）。
+
+        CLA_ZY2L 的 `/System/CustomSN` 在 binpack 上返回空，但文件里就是 SN。
+        """
+        stream = self.stream
+        if stream is None or not getattr(stream, "running", False):
+            return
+        for path in paths:
+            if path in data or path not in SN_FILES:
+                continue
+            for fn in SN_FILES[path]:
+                try:
+                    value = AposClient._file_data(stream.read_file(fn))
+                except Exception:
+                    value = ""
+                if value:
+                    data[path] = value
+                    break
 
     def start_stream(self):
         """确保属性上传流开启（libapos 优先连接时通常已经在跑了）。
@@ -443,10 +472,11 @@ class ParamService:
                         and (p in READ_ONLY_PATHS or p in BINARY_PATHS)]
                 if self._stream_only and self._model in NO_SN_MODELS:
                     # 这些机型的普通属性(如 CustomSN)在 binpack 上读不到, 还会
-                    # 触发 SDK 二分重试(每次好几秒); 只读复合属性, SN 用扫描结果。
+                    # 触发 SDK 二分重试(每次好几秒); 只读复合属性, SN 走文件。
                     rest = [p for p in rest if p in COMPOSITE_PATHS]
                 if rest:
                     data.update(stream.read(rest) or {})
+                self._fill_system_from_files(data, paths)
             else:
                 data = self.client.read(paths) or {}
         except Exception as e:

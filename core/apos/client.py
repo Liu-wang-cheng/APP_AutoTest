@@ -369,6 +369,11 @@ class AposClient:
         try:
             data = json.loads(text)
         except Exception:
+            # ★ 机器人有时把文件里的换行原样塞进 JSON 字符串(SN 文件末尾就有
+            #   一个 \n), 整段不是合法 JSON —— 用正则把 FileData 抠出来。
+            m = re.search(r'"FileData"\s*:\s*"([^"]*)"', text, re.S)
+            if m:
+                return m.group(1).replace("\\n", "\n").strip()
             return "" if text.startswith("{") else text
         if not isinstance(data, dict):
             return ""

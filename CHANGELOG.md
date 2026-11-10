@@ -18,8 +18,10 @@
   现象)。
 - **连接改为 libapos 优先**: 先开上传流(约 0.5 秒), 系统信息/参数/曲线/MCU/
   基站版本都走同一个句柄; 上传流不可用时才退回 librpc 轮询兜底。新机型
-  CLA_ZY2L(旧 librpc 的 `CppAposSdkInit` 会失败)从此可以正常连接, SN 取扫描
-  结果; 普通机型连接也从约 1 秒降到 0.5 秒。
+  CLA_ZY2L(旧 librpc 的 `CppAposSdkInit` 会失败)从此可以正常连接; 它的
+  `/System/CustomSN` 属性读不到, 改为从机器人文件
+  `/oem/bin/sys_data/custom.sn` 读取(主板 SN 读 `/oem/bin/sys_data/sn`,
+  扫描结果兜底); 普通机型连接也从约 1 秒降到 0.5 秒。
 
 ## [2.0.36] - 2026-11-09
 
