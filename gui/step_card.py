@@ -259,6 +259,26 @@ class StepCard(QFrame):
         head.addWidget(self.summary_label, 1)
         self._refresh_summary()
 
+        # 启用/停用(用户 2026-11-11): 文本按钮 —— 启用=绿色, 停用=灰色
+        self.enabled_btn = QToolButton()
+        self.enabled_btn.setFixedHeight(20)
+        self.enabled_btn.setMinimumWidth(40)
+        on = bool(self.step.get("enabled", True))
+        self.enabled_btn.setText("启用" if on else "停用")
+        self.enabled_btn.setToolTip(
+            "点击停用该步骤（运行时跳过）" if on else "点击启用该步骤")
+        self.enabled_btn.setStyleSheet(
+            "QToolButton { color:#16a34a; background:#f0fdf4;"
+            " border:1px solid #bbf7d0; border-radius:4px;"
+            " padding:0 6px; font-size:11px; }"
+            if on else
+            "QToolButton { color:#94a3b8; background:#f8fafc;"
+            " border:1px solid #e2e8f0; border-radius:4px;"
+            " padding:0 6px; font-size:11px; }")
+        self.enabled_btn.clicked.connect(
+            lambda: self.main.toggle_step_enabled(self))
+        head.addWidget(self.enabled_btn)
+
         if self.is_sub:
             ops = [("▲", "上移", lambda: self.main.move_sub(self.parent_index, self.sub_index, -1,
                                                           self.branch)),
@@ -307,7 +327,13 @@ class StepCard(QFrame):
 
     def _refresh_summary(self):
         # 徽标(else/截图/超时/等待/重试)统一在 schema.step_summary 里拼装
-        self.summary_label.setText(schema.step_summary(self.step))
+        text = schema.step_summary(self.step)
+        if self.step.get("enabled", True):
+            self.summary_label.setText(text)
+            self.summary_label.setStyleSheet("")
+        else:
+            self.summary_label.setText(f"已停用 · {text}")
+            self.summary_label.setStyleSheet("color:#94a3b8;")
 
     # ── 展开态: 参数表单 ──
     def _build_form(self, lay):

@@ -939,6 +939,9 @@ class ActionRunner:
         for i, step in enumerate(steps):
             if self.stopped:
                 break
+            # ★ 停用的步骤完全跳过(用户 2026-11-11): 不等暂停、不出执行行、不写报告
+            if isinstance(step, dict) and not step.get("enabled", True):
+                continue
             # ★ 暂停挂起点(2026-10-13): 当前步骤已跑完, 在步骤间挂起 —— 不打断
             #   设备交互; 挂起中收到停止 → UserStopped(与停止路径同一出口)
             self._wait_if_paused()

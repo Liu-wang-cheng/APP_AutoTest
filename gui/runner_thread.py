@@ -34,6 +34,27 @@ def pre_step_desc(key, batt=-1):
     return desc
 
 
+def resolve_battery_start(cfg, tasks):
+    """校验电量监测配置里的"指定开始步骤"。
+
+    returns (target|None, fell_back)。target 形如 {"case","desc"}；
+    配置了但本次任务里找不到该用例/步骤时 fell_back=True, 调用方回退默认起点。
+    """
+    start = (cfg or {}).get("start") or {}
+    tcase = str(start.get("case") or "").strip()
+    tdesc = str(start.get("desc") or "").strip()
+    if not (tcase and tdesc):
+        return None, False
+    for _module, case, _fp in tasks:
+        if str(case.get("name", "未命名用例")) != tcase:
+            continue
+        for step in case.get("steps") or []:
+            if (isinstance(step, dict) and step.get("enabled", True)
+                    and str(step.get("desc") or "").strip() == tdesc):
+                return {"case": tcase, "desc": tdesc}, False
+    return None, True
+
+
 def resolve_group_preconditions(pre_by_group, group, fallback):
     """按 APP 组取该组的前置项。
 
@@ -84,6 +105,8 @@ class RunWorker(QThread):
         self.param_snapshot = None
         self._device_snapshot_written = False
         self.batt_monitor = None           # BatteryMonitor(运行期间)
+        #: 校验后的指定开始步骤(见 resolve_battery_start); None = 默认起点
+        self._batt_start = None
         # 前置项列表 [{type, enabled, ...参数}](旧版传 dict 时自动转换, 兼容)
         if isinstance(preconditions, dict):
             preconditions = [{"type": k, "enabled": bool(v)}
@@ -109,6 +132,12 @@ class RunWorker(QThread):
             self.runner.stop()
         if self.batt_monitor:
             self.batt_monitor.stop()
+
+    def _batt_hit(self, case_name, desc):
+        """当前步骤是否就是配置的"开始监测"步骤。"""
+        target = self._batt_start
+        return bool(target) and case_name == target["case"] \
+            and str(desc) == target["desc"]
 
     # ── 电量监测(用户 2026-11-03) ────────────────────────────────────────
     def _start_battery_monitor(self, d):
@@ -364,6 +393,11 @@ class RunWorker(QThread):
             if not tasks:
                 self.finished_run.emit(False, "用例文件中没有 cases")
                 return
+            # ★ 电量监测"指定步骤": 开跑前先校验, 找不到就回退默认起点
+            self._batt_start, fell_back = resolve_battery_start(
+                self.battery_cfg, tasks)
+            if fell_back:
+                self.status.emit("[电量监测] 未找到指定步骤，已回退默认起点")
 
             # ★ 同名用例消歧(审查 2026-10-12): 两个文件各有一个「冒烟」时, 报告表键
             #   只由「用例名+轮次」组成 → 两次执行并进同一张表、共用同一批截图。
@@ -502,6 +536,7 @@ class RunWorker(QThread):
                         self._emit_step(r2)
 
                     def on_step_start(desc, attempt=1):
+                        nonlocal monitor_started
                         # ★ 步骤**开始**就通知界面(先插一行「执行中」), 跑完再由 on_result
                         #   就地改成 PASS/FAIL —— 以前要等整步跑完才看得到任何东西,
                         #   长步骤(如 60s 断言)期间界面像卡住(用户要求 2026-10-12)。
@@ -510,6 +545,13 @@ class RunWorker(QThread):
                         if self._exec_label:
                             p["case"] = self._exec_label
                         self.step_started.emit(p)
+                        # ★ 指定步骤: 这一步一开始就启动电量监测(用户 2026-11-11)
+                        if (not monitor_started
+                                and self._batt_hit(case_name, desc)):
+                            self.status.emit(
+                                f"[电量监测] 到达指定步骤: {case_name} · {desc}")
+                            self._start_battery_monitor(d)
+                            monitor_started = True
 
                     runner.shot_subdir = run_dir     # 截图进 screenshots/<用例名-第N次>/
                     runner.on_step_start = on_step_start
@@ -521,7 +563,8 @@ class RunWorker(QThread):
                     # ★ 电量监测从**第一条用例的步骤开始**才启动(用户 2026-11-04):
                     #   前置(进设备页/结束烘干/充电/电量门槛)不算测试运行时间;
                     #   之后各轮/各用例共用一个监测线程(报告是整轮一页)。
-                    if not monitor_started:
+                    #   指定了开始步骤时, 等 on_step_start 命中那一步再启动。
+                    if not monitor_started and not self._batt_start:
                         self._start_battery_monitor(d)
                         monitor_started = True
                     passed = runner.run_steps(steps)

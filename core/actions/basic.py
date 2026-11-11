@@ -567,6 +567,9 @@ def _run_branch(runner, steps, label=""):
     #   一份的话父步骤那张会被清掉 —— 后置块只好等分支(可能含 180s 等待)跑完再重拍。
     parent_shot = getattr(runner, "_pre_click_shot", None)
     for s in steps:
+        # 停用的子步骤完全跳过(用户 2026-11-11)
+        if isinstance(s, dict) and not s.get("enabled", True):
+            continue
         desc = prefix + str(s.get("desc", runner._step_desc(s)))
         # ★ 子步骤的证据归属(用户 2026-10-15: "if 子步骤的截图显示不正确"):
         #   · 证据文件名用**子步骤自己的描述**(以前继承父 if 的, 一串子步骤全同名);

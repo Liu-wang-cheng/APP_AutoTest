@@ -324,6 +324,9 @@ def serialize_step(step):
             out[k] = cleaned if cleaned else True
             continue
         if v is False:
+            # 步骤启停是"False 有意义"的字段: 不能像其它可选布尔那样省掉
+            if k == "enabled":
+                out[k] = False
             continue  # 可选布尔 False 省略(engine 默认即 False)
         out[k] = v
     # fixed_bool 动作保证标量 True

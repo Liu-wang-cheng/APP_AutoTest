@@ -12,11 +12,52 @@ import yaml
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QInputDialog, QMessageBox
 
+from core.logger import get_logger
 from gui.style import _safe_relpath
+
+log = get_logger()
+
+
+def battery_start_options(case_paths):
+    """勾选用例文件里的全部步骤(按执行顺序), 供电量监测弹窗选择开始步骤。"""
+    out = []
+    for fp in case_paths:
+        try:
+            with open(fp, encoding="utf-8") as f:
+                data = yaml.safe_load(f) or {}
+            for case in data.get("cases") or []:
+                if not isinstance(case, dict):
+                    continue
+                out.append({
+                    "case": str(case.get("name") or "未命名用例"),
+                    # 停用的步骤不能作为电量监测起点, 不进下拉
+                    "steps": [str(s.get("desc") or "")
+                              for s in (case.get("steps") or [])
+                              if isinstance(s, dict)
+                              and s.get("enabled", True)],
+                })
+        except Exception as e:
+            log.warning(f"[电量监测] 读取步骤列表失败 {fp}: {e}")
+    return out
 
 
 class CaseFileMixin:
     """用例文件重命名 / 名字绑定相关方法(MainWindow 的状态由宿主提供)。"""
+
+    def toggle_step_enabled(self, card):
+        """启用/停用步骤(用户 2026-11-11): 停用写 enabled:false, 启用删键。
+
+        缺省即启用 —— 旧用例没有该字段, 行为与从前完全一致。
+        """
+        if self.worker:
+            return
+        step = card.step
+        if step.get("enabled", True):
+            step["enabled"] = False
+        else:
+            step.pop("enabled", None)
+        self.render_cards()
+        self._auto_save()
 
     # ── 重命名(2026-10-19 用户反馈: 粘贴后的名字改不了) ───────────────────
     def _rename_case_dialog(self, path):

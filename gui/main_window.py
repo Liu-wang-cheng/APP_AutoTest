@@ -29,7 +29,7 @@ from core.version import __version__ as APP_VERSION   # 版本号单一真源: c
 
 log = get_logger()
 from gui import schema
-from gui.case_files import CaseFileMixin
+from gui.case_files import CaseFileMixin, battery_start_options
 from gui.report_panel import ReportsPanel
 from gui.runner_thread import RunWorker
 from gui.app_pages import install_pages
@@ -461,6 +461,8 @@ class MainWindow(CaseFileMixin, QMainWindow):
         self.batt_enabled = False       # 是否启用(运行时后台采样)
         self.batt_step = 5              # 里程碑步长 %
         self.batt_interval = 60         # 采样间隔 秒
+        #: 指定开始步骤 {"case","desc"}; None = 前置后第一条用例步骤开始(默认)
+        self.batt_start = None
         self.batt_btn = QPushButton("电量监测：关闭")
         self.batt_btn.setToolTip(
             "点击配置电量监测: 启用后从本轮第一条用例开始后台采样,\n"
@@ -874,6 +876,9 @@ class MainWindow(CaseFileMixin, QMainWindow):
                 str(st.value("batt_monitor/enabled", "false")).lower() == "true")
             self.batt_step = max(1, int(st.value("batt_monitor/step", 5)))
             self.batt_interval = max(5, int(st.value("batt_monitor/interval", 60)))
+            sc = str(st.value("batt_monitor/start_case", "") or "").strip()
+            sd = str(st.value("batt_monitor/start_desc", "") or "").strip()
+            self.batt_start = {"case": sc, "desc": sd} if sc and sd else None
         except Exception:
             pass
         self._update_batt_btn_text()
@@ -885,6 +890,9 @@ class MainWindow(CaseFileMixin, QMainWindow):
                         "true" if self.batt_enabled else "false")
             st.setValue("batt_monitor/step", self.batt_step)
             st.setValue("batt_monitor/interval", self.batt_interval)
+            start = self.batt_start or {}
+            st.setValue("batt_monitor/start_case", start.get("case", ""))
+            st.setValue("batt_monitor/start_desc", start.get("desc", ""))
         except Exception:
             pass
 
@@ -894,11 +902,14 @@ class MainWindow(CaseFileMixin, QMainWindow):
 
     def on_battery_settings(self):
         """弹窗配置电量监测; 确定才写回, 取消不动。"""
-        dlg = BatteryMonitorDialog(self.batt_enabled, self.batt_step,
-                                   self.batt_interval, parent=self)
+        dlg = BatteryMonitorDialog(
+            self.batt_enabled, self.batt_step, self.batt_interval, parent=self,
+            case_steps=battery_start_options(self._checked_case_paths()),
+            start=self.batt_start)
         if dlg.exec() != QDialog.Accepted:
             return
-        self.batt_enabled, self.batt_step, self.batt_interval = dlg.values()
+        (self.batt_enabled, self.batt_step, self.batt_interval,
+         self.batt_start) = dlg.values()
         self._update_batt_btn_text()
         self._save_battery_monitor_settings()
         self._set_status("已启用电量监测(本轮运行时采样)"
@@ -908,8 +919,11 @@ class MainWindow(CaseFileMixin, QMainWindow):
         """传给 RunWorker 的电量监测配置; 未启用返回 None。"""
         if not self.batt_enabled:
             return None
-        return {"enabled": True, "step_pct": self.batt_step,
-                "interval": self.batt_interval}
+        cfg = {"enabled": True, "step_pct": self.batt_step,
+               "interval": self.batt_interval}
+        if self.batt_start:
+            cfg["start"] = dict(self.batt_start)
+        return cfg
 
     def _load_expanded_groups(self):
         """读回上次**展开**过的组名(用户要求: 折叠状态跨启动保持原状)。

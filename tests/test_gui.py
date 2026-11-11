@@ -4797,20 +4797,22 @@ def test_battery_monitor_button_dialog_and_config(win_with_cases, monkeypatch):
     seen = {}
 
     class FakeDlg:
-        def __init__(self, enabled, step, interval, parent=None):
+        def __init__(self, enabled, step, interval, parent=None, **kwargs):
             seen["args"] = (enabled, step, interval)
+            seen["kwargs"] = kwargs
 
         def exec(self):
             return mw.QDialog.Accepted
 
         def values(self):
-            return True, 2, 15
+            return True, 2, 15, None
 
     monkeypatch.setattr(mw, "BatteryMonitorDialog", FakeDlg)
     win.batt_enabled = False
     win.batt_step, win.batt_interval = 5, 60
     win.on_battery_settings()
     assert seen["args"] == (False, 5, 60), seen       # 弹窗预填的是当前值
+    assert "case_steps" in seen["kwargs"] and "start" in seen["kwargs"]
     assert win.batt_enabled is True
     assert (win.batt_step, win.batt_interval) == (2, 15)
     assert win.batt_btn.text() == "电量监测：启用"
@@ -4833,7 +4835,7 @@ def test_battery_monitor_button_dialog_and_config(win_with_cases, monkeypatch):
             return mw.QDialog.Accepted
 
         def values(self):
-            return False, 5, 60
+            return False, 5, 60, None
 
     monkeypatch.setattr(mw, "BatteryMonitorDialog", FakeDlgOff)
     win.on_battery_settings()
@@ -4842,16 +4844,126 @@ def test_battery_monitor_button_dialog_and_config(win_with_cases, monkeypatch):
 
 
 def test_battery_monitor_dialog_defaults_and_values(qapp):
-    """弹窗控件: 默认值 5%/60 秒; values() 返回 (启用, 步长, 间隔)。"""
+    """弹窗控件: 默认值 5%/60 秒; values() 返回 (启用, 步长, 间隔, 开始步骤)。"""
     from gui.dialogs import BatteryMonitorDialog
 
     dlg = BatteryMonitorDialog()
     assert not dlg.enable_chk.isChecked()
     assert dlg.step_spin.value() == 5 and dlg.interval_spin.value() == 60
+    assert dlg.start_combo.count() == 1          # 只有"前置步骤后（默认）"
+    assert dlg.values()[3] is None
     dlg.enable_chk.setChecked(True)
     dlg.step_spin.setValue(3)
     dlg.interval_spin.setValue(30)
-    assert dlg.values() == (True, 3, 30)
+    assert dlg.values() == (True, 3, 30, None)
+
+
+def test_battery_monitor_dialog_step_choices(qapp):
+    """"开始监测"下拉: 按用例列出步骤, 选中的步骤随 values() 返回。"""
+    from gui.dialogs import BatteryMonitorDialog
+
+    cases = [{"case": "用例A", "steps": ["打开设备页", "开始清扫"]},
+             {"case": "用例B", "steps": ["回充"]}]
+    dlg = BatteryMonitorDialog(enabled=True, case_steps=cases)
+    assert dlg.start_combo.count() == 4          # 默认 + 3 步
+    assert dlg.start_combo.itemText(1) == "用例A · 第1步 · 打开设备页"
+    assert dlg.start_combo.itemText(3) == "用例B · 第1步 · 回充"
+    dlg.start_combo.setCurrentIndex(2)           # 用例A 的"开始清扫"
+    assert dlg.values()[3] == {"case": "用例A", "desc": "开始清扫"}
+    # 取消启用时下拉置灰
+    dlg.enable_chk.setChecked(False)
+    assert not dlg.start_combo.isEnabled()
+
+
+def test_battery_monitor_config_includes_start_step(win_with_cases):
+    from gui import main_window as mw
+
+    win = win_with_cases
+    win.batt_enabled = True
+    win.batt_start = {"case": "用例A", "desc": "开始清扫"}
+    cfg = win._battery_monitor_config()
+    assert cfg["start"] == {"case": "用例A", "desc": "开始清扫"}
+    win.batt_start = None
+    assert "start" not in win._battery_monitor_config()
+
+
+def test_step_enable_toggle_and_visual(win_with_cases):
+    """步骤启用/停用: 文本按钮 启用=绿 / 停用=灰, 停用后摘要标「已停用」。"""
+    win = win_with_cases
+    win.steps.clear()
+    win.steps.extend([{"desc": "A", "wait": 1}, {"desc": "B", "wait": 1}])
+    win.expanded_key = None
+    win.render_cards()
+    card = win.cards_lay.itemAt(0).widget()
+    assert card.enabled_btn.text() == "启用"
+    assert "#16a34a" in card.enabled_btn.styleSheet()
+    win.toggle_step_enabled(card)
+    assert win.steps[0]["enabled"] is False
+    card = win.cards_lay.itemAt(0).widget()
+    assert card.enabled_btn.text() == "停用"
+    assert "#94a3b8" in card.enabled_btn.styleSheet()
+    assert "已停用" in card.summary_label.text()
+    win.toggle_step_enabled(card)
+    assert "enabled" not in win.steps[0]          # 启用后回到默认(不写键)
+    assert win.cards_lay.itemAt(0).widget().enabled_btn.text() == "启用"
+
+
+def test_runworker_batt_hit_matches_case_and_desc(qapp):
+    from gui.runner_thread import RunWorker
+
+    w = RunWorker("fake-dev", [], [], 1,
+                  battery_cfg={"enabled": True, "step_pct": 5, "interval": 10})
+    try:
+        w._batt_start = {"case": "用例A", "desc": "开始清扫"}
+        assert w._batt_hit("用例A", "开始清扫")
+        assert not w._batt_hit("用例A", "其它步骤")
+        assert not w._batt_hit("用例B", "开始清扫")
+        w._batt_start = None
+        assert not w._batt_hit("用例A", "开始清扫")
+    finally:
+        w.deleteLater()
+
+
+def test_battery_start_options_from_checked_files(tmp_path):
+    from gui.case_files import battery_start_options
+
+    good = tmp_path / "a.yaml"
+    good.write_text(
+        "module: M\ncases:\n"
+        "  - name: 用例A\n    steps:\n"
+        "      - desc: 打开设备页\n      - desc: 开始清扫\n"
+        "      - desc: 停用步骤\n        enabled: false\n",
+        encoding="utf-8")
+    bad = tmp_path / "b.yaml"
+    bad.write_text("cases: [", encoding="utf-8")
+    opts = battery_start_options([str(good), str(bad)])
+    assert opts == [{"case": "用例A",
+                     "steps": ["打开设备页", "开始清扫"]}]
+
+
+def test_resolve_battery_start_found_and_fallback():
+    from gui.runner_thread import resolve_battery_start
+
+    tasks = [("M", {"name": "用例A",
+                    "steps": [{"desc": "打开设备页"},
+                              {"desc": "开始清扫"}]}, "a.yaml")]
+    assert resolve_battery_start(
+        {"start": {"case": "用例A", "desc": "开始清扫"}}, tasks) == (
+            {"case": "用例A", "desc": "开始清扫"}, False)
+    # 步骤不存在 → 回退默认起点
+    assert resolve_battery_start(
+        {"start": {"case": "用例A", "desc": "不存在"}}, tasks) == (None, True)
+    # 用例不存在 → 回退
+    assert resolve_battery_start(
+        {"start": {"case": "用例B", "desc": "开始清扫"}}, tasks) == (None, True)
+    # 指定了但该步骤被停用 → 视为找不到, 回退默认起点
+    disabled = [("M", {"name": "用例A",
+                       "steps": [{"desc": "开始清扫", "enabled": False}]}, "a.yaml")]
+    assert resolve_battery_start(
+        {"start": {"case": "用例A", "desc": "开始清扫"}}, disabled) == (None, True)
+    # 没配置 → 默认起点, 不算回退
+    assert resolve_battery_start({}, tasks) == (None, False)
+    assert resolve_battery_start(None, tasks) == (None, False)
 
 
 def test_compact_spin_right_zone_click_moves_cursor(qapp):

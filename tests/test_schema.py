@@ -47,6 +47,17 @@ def test_validate_and_serialize():
     assert schema.validate_step(bad)             # 必填缺失有报错
 
 
+def test_serialize_keeps_disabled_steps():
+    """步骤启停(false)是"False 有意义"的字段, 不能被序列化清理掉(2026-11-11)。"""
+    s = {"desc": "A", "wait": 1, "enabled": False,
+         "then": [{"desc": "B", "wait": 1, "enabled": False},
+                  {"desc": "C", "wait": 1}]}
+    out = schema.serialize_step(s)
+    assert out["enabled"] is False
+    assert out["then"][0]["enabled"] is False
+    assert "enabled" not in out["then"][1]       # 默认启用不写键
+
+
 def test_fixed_bool_keys_declared():
     """无参动作在 schema 里标了 fixed_bool(序列化时保证标量 True)"""
     assert schema.FIXED_BOOL["back"] is True

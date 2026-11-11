@@ -184,6 +184,31 @@ def test_prereq_click_shoots_before_click(runner):
 _REAL_SLEEP = ActionRunner._sleep   # _fast_sleep(autouse) 换掉前的真实现(暂停测试要用)
 
 
+def test_disabled_steps_are_fully_skipped(runner):
+    """停用的顶层步骤: 不执行、不出结果行(用户 2026-11-11)。"""
+    fired = []
+    runner._execute = lambda step: (fired.append(step.get("desc")), "")[1]
+    ok = runner.run_steps([{"desc": "A", "wait": 0.01},
+                           {"desc": "B", "wait": 0.01, "enabled": False},
+                           {"desc": "C", "wait": 0.01}])
+    assert ok is True
+    assert fired == ["A", "C"]
+    assert [r["desc"] for r in runner.results] == ["A", "C"]
+
+
+def test_disabled_sub_steps_are_skipped(runner):
+    """停用的 then/else/循环体子步骤同样完全跳过。"""
+    from core.actions.basic import _run_branch
+
+    fired = []
+    runner._execute = lambda step: (fired.append(step.get("desc")), "")[1]
+    runner._pending_sub_results = []
+    _run_branch(runner, [{"desc": "子1", "wait": 0.01},
+                         {"desc": "子2", "wait": 0.01, "enabled": False},
+                         {"desc": "子3", "wait": 0.01}], "条件成立")
+    assert fired == ["子1", "子3"]
+
+
 def test_pause_suspends_between_steps_and_resume_completes(runner):
     """步骤 1 跑完 → 挂起(run_steps 步骤间) → 恢复后步骤 2 才开始"""
     fired = []

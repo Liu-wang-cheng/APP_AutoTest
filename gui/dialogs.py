@@ -620,7 +620,8 @@ class BatteryMonitorDialog(QDialog):
     与工具样式同步(setStyleSheet(STYLESHEET), 对话框不会自动继承主窗口样式表)。
     """
 
-    def __init__(self, enabled=False, step=5, interval=60, parent=None):
+    def __init__(self, enabled=False, step=5, interval=60, parent=None,
+                 case_steps=None, start=None):
         super().__init__(parent)
         self.setWindowTitle("电量监测")
         # ★ 对话框不会自动继承主窗口样式表 → 字体/字号不一致(与前置设置弹窗同因)
@@ -653,6 +654,47 @@ class BatteryMonitorDialog(QDialog):
         self.interval_spin.setValue(int(interval))
         self.interval_spin.setToolTip("后台采样间隔(秒)")
         form.addRow("采样间隔(秒)", self.interval_spin)
+
+        # ★ 指定从哪一步开始计时(用户 2026-11-11): 默认仍是"前置步骤后"。
+        #   下拉项来自当前勾选的用例文件, 格式: 用例名 · 第N步 · 描述。
+        # 用 _FitCombo: 长条目不会只显示半截, 弹出列表宽度也按最长项
+        self.start_combo = _FitCombo()
+        self.start_combo.setEditable(True)
+        self.start_combo.setInsertPolicy(QComboBox.NoInsert)
+        self.start_combo.addItem("前置步骤后（默认）", None)
+        for case in case_steps or []:
+            name = str((case or {}).get("case") or "").strip()
+            for i, desc in enumerate((case or {}).get("steps") or [], 1):
+                desc = str(desc or "").strip()
+                if not name or not desc:
+                    continue
+                label = f"{name} · 第{i}步 · {desc}"
+                self.start_combo.addItem(label, {"case": name, "desc": desc})
+                self.start_combo.setItemData(
+                    self.start_combo.count() - 1, label, Qt.ToolTipRole)
+        if self.start_combo.count() > 1:
+            self.start_combo.setToolTip(
+                "从选中的步骤开始计时(该步骤一开始就启动监测);\n"
+                "默认在前置步骤执行完后、第一条用例的步骤开始时启动")
+            comp = self.start_combo.completer()
+            if comp is not None:
+                comp.setFilterMode(Qt.MatchContains)
+                comp.setCaseSensitivity(Qt.CaseInsensitive)
+            self.start_combo.fit_width_to_items()
+        else:
+            self.start_combo.setMinimumWidth(240)
+            self.start_combo.setToolTip("先勾选用例, 才能选择具体步骤")
+        # 恢复上次的选择(找不到就回到默认项)
+        if isinstance(start, dict) and start.get("case") and start.get("desc"):
+            for i in range(1, self.start_combo.count()):
+                data = self.start_combo.itemData(i) or {}
+                if (data.get("case") == start["case"]
+                        and data.get("desc") == start["desc"]):
+                    self.start_combo.setCurrentIndex(i)
+                    break
+        form.addRow("开始监测", self.start_combo)
+        self.enable_chk.toggled.connect(self.start_combo.setEnabled)
+        self.start_combo.setEnabled(self.enable_chk.isChecked())
         v.addLayout(form)
 
         btns = QHBoxLayout()
@@ -667,10 +709,22 @@ class BatteryMonitorDialog(QDialog):
         v.addLayout(btns)
 
     def values(self):
-        """(是否启用, 里程碑步长 %, 采样间隔 秒)"""
+        """(是否启用, 里程碑步长 %, 采样间隔 秒, 开始步骤 dict 或 None)"""
+        start = None
+        data = self.start_combo.currentData()
+        if isinstance(data, dict):
+            start = dict(data)
+        elif self.start_combo.currentText().strip():
+            # 用户输入过滤词后光标停在文本上: 按文字找回对应项
+            text = self.start_combo.currentText().strip()
+            for i in range(1, self.start_combo.count()):
+                if self.start_combo.itemText(i) == text:
+                    start = dict(self.start_combo.itemData(i) or {})
+                    break
         return (self.enable_chk.isChecked(),
                 self.step_spin.value(),
-                self.interval_spin.value())
+                self.interval_spin.value(),
+                start)
 
 
 # ── 裁剪模板(用户 2026-10-16) ──────────────────────────────────────────────
