@@ -12,14 +12,15 @@ import time
 from PySide6.QtCore import QSettings, QThread, QTimer, Signal, Qt
 from PySide6.QtGui import QColor, QKeySequence, QShortcut
 from PySide6.QtWidgets import (QAbstractItemView, QApplication, QCheckBox,
-                                QComboBox, QDialog, QDialogButtonBox, QFormLayout,
+                                QComboBox, QCompleter, QDialog,
+                                QDialogButtonBox, QFileDialog, QFormLayout,
                                 QFrame, QHBoxLayout, QHeaderView, QLabel,
                                 QLineEdit, QListWidget, QListWidgetItem, QMenu,
                                 QMessageBox, QPushButton, QTabWidget,
-                                QTableWidget, QTableWidgetItem, QVBoxLayout,
-                                QWidget)
+                                QTableWidget, QTableWidgetItem, QTextEdit,
+                                QVBoxLayout, QWidget)
 
-from core.apos import catalog, scanner, sdk as sdk_mod
+from core.apos import catalog, faults, scanner, sdk as sdk_mod
 from core.apos.client import AposClient, AposError
 from core.apos.mcu import McuStream
 from core.apos.service import ParamService
@@ -414,9 +415,9 @@ class DevicePage(QWidget):
         self.curve_view = CurveView(settings=self.settings)
         self.curve_view.pathsChanged.connect(self._curve_paths_changed)
         self.tabs.addTab(self.curve_view, "曲线")
-        disabled = QLabel("快速控制 / 故障模拟：后续版本")
-        disabled.setStyleSheet("color:#b0b9c6;padding:20px;")
-        self.tabs.addTab(disabled, "快速控制 · 后续")
+        self.fault_tab = QWidget()
+        self._build_faults(self.fault_tab)
+        self.tabs.addTab(self.fault_tab, "故障模拟")
         v.addWidget(self.tabs, 1)
 
     def _build_params(self, parent):
@@ -467,6 +468,333 @@ class DevicePage(QWidget):
         body.addWidget(self.table, 1)
         v.addLayout(body, 1)
         self._init_categories()
+
+    # ── 故障模拟(用户 2026-11-11): 只验证设备日志里的语音/灯显 ──
+    def _build_faults(self, parent):
+        v = QVBoxLayout(parent)
+        v.setContentsMargins(0, 8, 0, 0)
+        v.setSpacing(7)
+        tip = QLabel("触发故障事件后，等约 3 秒从设备日志解析语音序号、灯显和故障码。")
+        tip.setStyleSheet("color:#94a3b8;font-size:11px;")
+        tip.setWordWrap(True)
+        v.addWidget(tip)
+        cfg_row = QHBoxLayout()
+        self.fault_cfg_label = QLineEdit()
+        self.fault_cfg_label.setReadOnly(True)
+        self.fault_cfg_label.setPlaceholderText("未加载事件配置（可选，用于自动比对）")
+        cfg_row.addWidget(self.fault_cfg_label, 1)
+        cfg_btn = QPushButton("选择事件配置…")
+        cfg_btn.setObjectName("chipBtn")
+        cfg_btn.clicked.connect(self._choose_fault_config)
+        cfg_row.addWidget(cfg_btn)
+        v.addLayout(cfg_row)
+        # 手动选择/输入配置里的事件名触发(用户 2026-11-11)
+        ev_row = QHBoxLayout()
+        ev_row.addWidget(QLabel("事件"))
+        self.fault_event_combo = QComboBox()
+        self.fault_event_combo.setEditable(True)
+        self.fault_event_combo.setMinimumWidth(240)
+        self.fault_event_combo.setInsertPolicy(QComboBox.NoInsert)
+        # 手动输入关键字(中文名或 identifier)时, 下方弹出候选事件
+        self.fault_event_combo.setCompleter(
+            self._make_event_completer(self.fault_event_combo, []))
+        if self.fault_event_combo.lineEdit() is not None:
+            self.fault_event_combo.lineEdit().setPlaceholderText(
+                "输入关键字搜索事件（中文名或英文标识）")
+        ev_row.addWidget(self.fault_event_combo, 2)
+        trig_btn = QPushButton("触发所选事件")
+        trig_btn.setObjectName("chipBtn")
+        trig_btn.setToolTip("工具自动判断事件的触发方式，无需选择主题")
+        trig_btn.clicked.connect(self._trigger_custom_event)
+        ev_row.addWidget(trig_btn)
+        v.addLayout(ev_row)
+        self._fault_expect = {}
+        self.fault_verdict = QLabel("未加载事件配置：只显示实测值")
+        self.fault_verdict.setStyleSheet("color:#94a3b8;font-size:12px;")
+        self.fault_verdict.setWordWrap(True)
+        v.addWidget(self.fault_verdict)
+        path = str(self.settings.value("apos/fault_event_config", "") or "")
+        if path:
+            self._load_fault_config(path, quiet=True)
+        self.fault_status = QLabel("未触发")
+        self.fault_status.setStyleSheet("color:#475569;font-size:12px;")
+        v.addWidget(self.fault_status)
+        self.fault_result = QLabel("—")
+        self.fault_result.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self.fault_result.setWordWrap(True)
+        self.fault_result.setStyleSheet(
+            "font-size:13px;font-weight:600;color:#1e293b;")
+        v.addWidget(self.fault_result)
+        self.fault_log = QTextEdit()
+        self.fault_log.setReadOnly(True)
+        self.fault_log.setFixedHeight(128)
+        self.fault_log.setLineWrapMode(QTextEdit.WidgetWidth)
+        self.fault_log.setStyleSheet(
+            "QTextEdit{color:#64748b;font-size:11px;background:#f8fafc;"
+            "border:1px solid #e4e8ee;border-radius:4px;padding:4px;}")
+        v.addWidget(self.fault_log)
+        # 常用故障不再平铺成一堆按钮(会把窗口撑高), 改成下拉选择 + 触发
+        pick_row = QHBoxLayout()
+        pick_row.addWidget(QLabel("常用故障"))
+        self.fault_pick_combo = QComboBox()
+        self.fault_pick_combo.setEditable(True)
+        self.fault_pick_combo.setInsertPolicy(QComboBox.NoInsert)
+        if self.fault_pick_combo.lineEdit() is not None:
+            self.fault_pick_combo.lineEdit().setPlaceholderText(
+                "输入关键字搜索故障…")
+        self.fault_pick_combo.setCompleter(
+            self._make_event_completer(self.fault_pick_combo, []))
+        pick_row.addWidget(self.fault_pick_combo, 1)
+        pick_btn = QPushButton("触发故障")
+        pick_btn.setObjectName("chipBtn")
+        pick_btn.clicked.connect(self._simulate_picked_fault)
+        pick_row.addWidget(pick_btn)
+        v.addLayout(pick_row)
+        self._refresh_fault_picks()
+        v.addStretch(1)
+        bottom = QHBoxLayout()
+        self.fault_clear_btn = QPushButton("清除故障")
+        self.fault_clear_btn.setToolTip("发 Cmd_ClearStatus(3017) 清除状态提示")
+        self.fault_clear_btn.clicked.connect(self._clear_faults)
+        bottom.addWidget(self.fault_clear_btn)
+        bottom.addStretch(1)
+        v.addLayout(bottom)
+
+    def _choose_fault_config(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self, "选择事件配置", self.fault_cfg_label.text() or "",
+            "事件配置 (*.json);;所有文件 (*)")
+        if path:
+            self._load_fault_config(path)
+
+    def _load_fault_config(self, path, quiet=False):
+        try:
+            expect = faults.load_event_config(path)
+        except Exception as e:
+            self.fault_cfg_label.setText(f"加载失败：{e}")
+            self.fault_cfg_label.setStyleSheet("color:#dc2626;")
+            return
+        self._fault_expect = expect
+        self.fault_cfg_label.setText(path)
+        self.fault_cfg_label.setToolTip(path)
+        self.settings.setValue("apos/fault_event_config", path)
+        # 配置里的全部事件都可以手动选/改后触发
+        if hasattr(self, "fault_event_combo"):
+            self.fault_event_combo.blockSignals(True)
+            self.fault_event_combo.clear()
+            for ident, info in sorted(expect.items()):
+                name = faults.event_name(ident, expect)
+                # 显示中文名, 触发时用 itemData 里的 identifier
+                self.fault_event_combo.addItem(f"{name}（{ident}）", ident)
+                self.fault_event_combo.setItemData(
+                    self.fault_event_combo.count() - 1, ident,
+                    Qt.ToolTipRole)
+            self.fault_event_combo.blockSignals(False)
+            if self.fault_event_combo.count():
+                self.fault_event_combo.setCurrentIndex(0)
+            self.fault_event_combo.setCompleter(self._make_event_completer(
+                self.fault_event_combo,
+                [self.fault_event_combo.itemText(i)
+                 for i in range(self.fault_event_combo.count())]))
+        if hasattr(self, "fault_pick_combo"):
+            self._refresh_fault_picks()
+        if not quiet:
+            self.fault_status.setText(f"已加载事件配置：{len(expect)} 个事件")
+            self.fault_status.setStyleSheet("color:#16a34a;font-size:12px;")
+        self.fault_verdict.setText(
+            f"已加载事件配置（{len(expect)} 个事件）：配置里没有的事件会标为「未配置」")
+        self.fault_verdict.setStyleSheet("color:#64748b;font-size:12px;")
+
+    def _make_event_completer(self, combo, items):
+        """关键字包含匹配的候选列表（下拉在输入框下方弹出）。"""
+        comp = QCompleter(list(items), combo)
+        comp.setCaseSensitivity(Qt.CaseInsensitive)
+        comp.setFilterMode(Qt.MatchContains)
+        comp.setCompletionMode(QCompleter.PopupCompletion)
+        comp.setMaxVisibleItems(12)
+        return comp
+
+    def _current_fault_event(self):
+        """下拉项/候选返回 identifier; 手动输入的名字原样返回。"""
+        combo = self.fault_event_combo
+        text = combo.currentText().strip()
+        for i in range(combo.count()):
+            if combo.itemText(i) == text:
+                data = combo.itemData(i)
+                if data:
+                    return str(data)
+        return text
+
+    def _trigger_custom_event(self):
+        event = self._current_fault_event()
+        self._trigger_event(event, faults.event_name(event, self._fault_expect))
+
+    def _trigger_event(self, event, label=""):
+        """按事件名触发：主题由工具自动判断(用户 2026-11-11)。"""
+        event = str(event or "").strip()
+        if not event:
+            self.fault_status.setText("请选择或输入事件名")
+            self.fault_status.setStyleSheet("color:#dc2626;font-size:12px;")
+            return
+        if not (self._connected and self._service is not None):
+            self.fault_status.setText("请先连接设备")
+            self.fault_status.setStyleSheet("color:#dc2626;font-size:12px;")
+            return
+        label = label or event
+        topic = faults.topic_for(event)
+        t0 = time.time()
+        try:
+            ok = bool(self._service.post_event(topic, event))
+        except Exception:
+            ok = False
+        if not ok:
+            self.fault_status.setText(f"发送失败：{event}（推流未就绪？）")
+            self.fault_status.setStyleSheet("color:#dc2626;font-size:12px;")
+            return
+        self.fault_status.setText(f"已触发：{label}，等待设备日志…")
+        self.fault_status.setStyleSheet("color:#b45309;font-size:12px;")
+        self.fault_result.setText("…")
+        self.fault_log.clear()
+        QTimer.singleShot(
+            3000, lambda: self._show_event_result(event, label, t0))
+
+    def _refresh_fault_picks(self):
+        """常用故障下拉：常用项 + 厂商模拟指令里的其它事件。"""
+        combo = self.fault_pick_combo
+        self._fault_presets = {}
+        combo.blockSignals(True)
+        combo.clear()
+        for p in faults.presets(self._fault_expect):
+            combo.addItem(p["label"], p["event"])
+            combo.setItemData(combo.count() - 1, p["event"], Qt.ToolTipRole)
+            self._fault_presets[p["event"]] = p["name"]
+        combo.blockSignals(False)
+        combo.setCompleter(self._make_event_completer(
+            combo, [combo.itemText(i) for i in range(combo.count())]))
+
+    def _picked_fault_event(self):
+        """下拉项/候选/手动输入(关键字或事件标识) → 事件名。"""
+        combo = self.fault_pick_combo
+        text = combo.currentText().strip()
+        for i in range(combo.count()):
+            if combo.itemText(i) == text:
+                return str(combo.itemData(i) or "")
+        if text in self._fault_presets:
+            return text
+        # 手动输入的关键字: 唯一匹配某个候选时才采用
+        hits = [ev for label, ev in (
+            (combo.itemText(i), str(combo.itemData(i) or ""))
+            for i in range(combo.count())) if text and text in label]
+        return hits[0] if len(hits) == 1 else ""
+
+    def _simulate_picked_fault(self):
+        event = self._picked_fault_event()
+        if not event:
+            self.fault_status.setText("请选择或输入故障关键字（从候选中选一个）")
+            self.fault_status.setStyleSheet("color:#dc2626;font-size:12px;")
+            return
+        self._trigger_event(event, self._fault_presets.get(event) or "")
+
+    def _simulate_fault(self, key):
+        item = faults.get(key)
+        if item is None:
+            return
+        if not (self._connected and self._service is not None):
+            self.fault_status.setText("请先连接设备")
+            self.fault_status.setStyleSheet("color:#dc2626;font-size:12px;")
+            return
+        t0 = time.time()
+        try:
+            ok = bool(self._service.simulate_fault(key))
+        except Exception:
+            ok = False
+        if not ok:
+            self.fault_status.setText(f"发送失败：{item['name']}（推流未就绪？）")
+            self.fault_status.setStyleSheet("color:#dc2626;font-size:12px;")
+            return
+        self.fault_status.setText(f"已触发：{item['name']}，等待设备日志…")
+        self.fault_status.setStyleSheet("color:#b45309;font-size:12px;")
+        self.fault_result.setText("…")
+        self.fault_log.clear()
+        QTimer.singleShot(3000, lambda: self._show_fault_result(key, t0))
+
+    def _show_fault_result(self, key, t0):
+        item = faults.get(key)
+        if item is None:
+            return
+        self._show_event_result(item["event"], item["name"], t0)
+
+    def _show_event_result(self, event, label, t0):
+        if self._service is None:
+            return
+        try:
+            lines = self._service.fault_log_since(t0)
+        except Exception:
+            lines = []
+        res = faults.parse_verification(lines, event)
+        # 配置里有这个事件、但语音/灯显没配 → 显示"未配置"；配置根本没这个
+        # 事件或没加载配置才显示"未捕获"(用户 2026-11-11)
+        exp_item = (self._fault_expect or {}).get(event)
+        sound_cfg = bool((exp_item or {}).get("sound"))
+        led_cfg = bool((exp_item or {}).get("led"))
+        unset = "未配置" if exp_item is not None else "未捕获"
+        beep = res.get("beep") or (unset if not sound_cfg else "未捕获")
+        led = res.get("led") or {}
+        led_text = faults.led_display(led, self._fault_expect) or (
+            unset if not led_cfg else "未捕获")
+        code = res.get("code") or "—"
+        self.fault_result.setText(
+            f"语音序号 {beep} · 灯显 {led_text} · 故障码 {code}")
+        evidence = res.get("evidence") or res.get("matched") or []
+        if not evidence and not faults.has_simulation(event):
+            empty_text = "（该事件没有厂商模拟指令，设备可能不会响应）"
+        else:
+            empty_text = "（日志中未找到该事件，可能设备未处理）"
+        rows = [faults.highlight_log_line(x) for x in evidence[-30:]]
+        if rows:
+            self.fault_log.setHtml("<br>".join(rows))
+        else:
+            self.fault_log.setPlainText(empty_text)
+        # ★ 按事件配置文件验证: 配置里没有的事件 = 未配置(不算失败)
+        if not self._fault_expect:
+            self.fault_verdict.setText("未加载事件配置：只显示实测值")
+            self.fault_verdict.setStyleSheet("color:#94a3b8;font-size:12px;")
+        else:
+            cmp = faults.compare(res, self._fault_expect, event)
+            if cmp["ok"] is None:
+                # 区分"配置里没有该事件"和"配置里未配置语音/灯显"
+                if cmp.get("expected") is None:
+                    tip = "事件配置里没有该事件（未配置，不做判定）"
+                else:
+                    tip = cmp["problems"][0] + "（不做判定）"
+                self.fault_verdict.setText(tip)
+                self.fault_verdict.setStyleSheet(
+                    "color:#94a3b8;font-size:12px;")
+            elif cmp["ok"]:
+                self.fault_verdict.setText("✓ 与事件配置一致")
+                self.fault_verdict.setStyleSheet(
+                    "color:#16a34a;font-size:12px;font-weight:600;")
+            else:
+                self.fault_verdict.setText(
+                    "✗ 与事件配置不一致：" + "；".join(cmp["problems"]))
+                self.fault_verdict.setStyleSheet(
+                    "color:#dc2626;font-size:12px;font-weight:600;")
+        self.fault_status.setText(f"已触发：{label}（设备日志解析完成）")
+        self.fault_status.setStyleSheet("color:#16a34a;font-size:12px;")
+
+    def _clear_faults(self):
+        if self._service is None:
+            self.fault_status.setText("请先连接设备")
+            return
+        try:
+            ok = bool(self._service.clear_faults())
+        except Exception:
+            ok = False
+        self.fault_status.setText(
+            "已发送清除状态(3017)" if ok else "清除失败（设备未连接？）")
+        self.fault_status.setStyleSheet(
+            "color:#16a34a;font-size:12px;" if ok
+            else "color:#dc2626;font-size:12px;")
 
     def _init_categories(self):
         self.cat_list.clear()

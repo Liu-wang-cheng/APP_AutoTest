@@ -4,7 +4,9 @@
 * 通道：ZeroMQ SUB，`tcp://<ip>:7809`（AutopackDebugger 同款调试流）；
   机器人不是一直推流 —— 连接后必须向 `tcp://<ip>:7813` 发控制帧（心跳，
   `[u16 0xF1][u16 0][u32 0]`）唤醒，并每 3 秒续一帧保活（2026-11-10 实测）；
-* 帧格式：`[u16 类型][u16 子类型][8B 保留][u64 时间戳][u64 序号][负载]`；
+* 帧格式：`[u16 类型][u16 子类型][8B 头部][u64 时间戳][负载]`，
+  文本日志负载从第 20 字节开始（2026-11-11 原始帧确认）；数据帧按下面
+  的字节偏移解析；
 * 已确认的字段（与 AutopackDebugger「MCU 反馈」面板逐值对照过）：
 
     类型 1111 / 长度 82 —— 控制量（挡位）
@@ -31,6 +33,8 @@
 这些值不在 APOS 属性接口里，只能从这条调试流拿。LED/传感器开关/蜂鸣等
 32 位位图字段暂未解码，先不采集。
 """
+import collections
+import re
 import struct
 import threading
 import time
@@ -73,6 +77,12 @@ CTRL_PORT = 7813
 #: 心跳间隔（秒）：厂商工具持续发，停太久机器人会再次停推
 HEARTBEAT_SECONDS = 3.0
 
+#: 设备日志行的开头："11-11 7:14:37.944/SW D/..."，用来识别一帧开头是不是残行
+_LOG_LINE_START = re.compile(r"^\d{1,2}-\d{1,2}\s+\d{1,2}:\d{1,2}:\d{1,2}")
+
+#: 厂商控制码 Cmd_ClearStatus（清除当前状态/故障提示）
+CMD_CLEAR_STATUS = 0x0BC9
+
 
 def control_frame(func=0xF1, start=0, payload=b""):
     """7813 控制帧：`[u16 功能码][u16 起始地址][u32 长度][负载]`。
@@ -94,6 +104,12 @@ class McuStream:
         self._sub = None
         self._ctrl = None          # PUSH -> 7813：唤醒/保活调试流
         self._hb_at = 0.0
+        #: 设备日志行(类型 1001 文本帧): [(ts, line)]，故障模拟验证语音/灯显用
+        self._log_lines = collections.deque(maxlen=4000)
+        # 文本帧是按字节流切块的, 一帧往往从一行中间开始; 这里拼回完整行,
+        # 否则界面上会出现 ":5:11.103/SW D/..." 这种缺了开头时间的日志
+        self._log_pending = ""
+        self._log_synced = False
         self._thread = None
         self._ip = ""
 
@@ -136,6 +152,18 @@ class McuStream:
                  f"（已发送唤醒帧 {self._ip}:{CTRL_PORT}）")
         return True
 
+    def send_control_code(self, code):
+        """发一条厂商控制码(7813): 如 CMD_CLEAR_STATUS 清除状态。"""
+        ctrl = self._ctrl
+        if ctrl is None:
+            return False
+        try:
+            ctrl.send(control_frame(payload=struct.pack("<ii", 2, int(code))))
+            return True
+        except Exception as e:
+            log.debug(f"[MCU] 控制码发送失败 {code}: {e}")
+            return False
+
     def _send_heartbeat(self):
         ctrl = self._ctrl
         if ctrl is None:
@@ -167,6 +195,9 @@ class McuStream:
         with self._lock:
             self._values.clear()
             self._last_event = 0.0
+            self._log_lines.clear()
+            self._log_pending = ""
+            self._log_synced = False
 
     # ── 数据 ──
     def values(self):
@@ -181,6 +212,11 @@ class McuStream:
     def last_event(self):
         with self._lock:
             return self._last_event
+
+    def log_since(self, ts):
+        """返回 ts 之后的设备日志行 [(时间, 文本)]（故障模拟验证用）。"""
+        with self._lock:
+            return [(t, line) for t, line in self._log_lines if t >= ts]
 
     # ── 内部 ──
     def _loop(self):
@@ -204,6 +240,32 @@ class McuStream:
         if not frame or len(frame) < 4:
             return
         typ, subtype = struct.unpack_from("<HH", frame, 0)
+        # 类型 1001 / 子类型 0 是机器人的文本日志(语音/灯显/故障处理都在里面)。
+        # ★ 文本从第 20 字节开始（实测原始帧：4B 类型/子类型 + 8B 头部字段 +
+        #   8B u64 时间戳）；以前按 28 取会把每行开头 "11-11 16" 这 8 个字符切掉。
+        if typ == 1001 and subtype == 0 and len(frame) > 20:
+            try:
+                text = frame[20:].decode("utf-8", "replace")
+            except Exception:
+                text = ""
+            now = time.time()
+            with self._lock:
+                data = self._log_pending + text
+                parts = data.split("\n")
+                # 最后一段没有换行, 可能还有后续字节, 留到下一帧
+                self._log_pending = parts.pop()
+                if len(self._log_pending) > 4096:
+                    self._log_pending = self._log_pending[-4096:]
+                if not self._log_synced and parts:
+                    # 第一帧通常从某一行中间开始; 只有缺了行首时间戳的残行才丢
+                    if not _LOG_LINE_START.match(parts[0]):
+                        parts.pop(0)
+                    self._log_synced = True
+                for line in parts:
+                    line = line.strip()
+                    if line:
+                        self._log_lines.append((now, line))
+            return
         if subtype != 2001:          # 只有 0x07D1 子类型的帧是这两类数据帧
             return
         values = None

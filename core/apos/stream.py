@@ -213,6 +213,38 @@ class UploadStream:
             except Exception:
                 return -1
 
+    def post_event(self, topic, event, params=None):
+        """发一个机器人内部事件（厂商 `/Common/SetCmd` + `PostEvent`）。
+
+        故障模拟用的就是这条通道（AutopackDebugger 的模拟按钮同款）:
+          `{Cmd:"PostEvent", Params:{Topic, Event, Params:{}}}`
+        返回 SDK 返回值（<0 视为失败）。
+        """
+        if not self.running:
+            return -1
+        with self._life:
+            if not self.running:
+                return -1
+            client, bp = self._api
+            try:
+                with self._api_lock:
+                    req = bp.Init()
+                    bp.SetString(req, b"Cmd", b"PostEvent")
+                    p = bp.Init()
+                    bp.SetString(p, b"Topic", str(topic).encode("utf-8"))
+                    bp.SetString(p, b"Event", str(event).encode("utf-8"))
+                    inner = bp.Init()
+                    for k, v in (params or {}).items():
+                        bp.SetString(inner, str(k).encode("utf-8"),
+                                     str(v).encode("utf-8"))
+                    bp.SetObject(p, b"Params", inner)
+                    bp.SetObject(req, b"Params", p)
+                return int(client.AposSdkSendEvent(
+                    self._handle, b"/Common/SetCmd", req))
+            except Exception as e:
+                log.debug(f"[上传流] 发事件失败 {topic}/{event}: {e}")
+                return -1
+
     def _read_batch(self, paths, timeout_ms=3000):
         if not self.running or not paths:
             return {}

@@ -6,7 +6,7 @@ import time
 import pytest
 
 pytest.importorskip("PySide6")
-from PySide6.QtCore import QSettings  # noqa: E402
+from PySide6.QtCore import QSettings, Qt  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
 
@@ -224,6 +224,125 @@ def test_remembers_last_connected_ip(qapp, tmp_path):
         assert st.value("apos/last_ip") == "10.0.0.1"
     finally:
         p.shutdown()
+
+
+def test_fault_simulation_panel_reads_voice_and_led_from_device_log(page, tmp_path):
+    """故障模拟: 触发后从设备日志解析语音序号/灯显/故障码(用户 2026-11-11)。"""
+    class FakeService:
+        def simulate_fault(self, key):
+            return True
+
+        def post_event(self, topic, event):
+            self.called = (topic, event)
+            return True
+
+        def fault_log_since(self, t0):
+            return [
+                (1.0, "11-11 7:14:37.944/SW D/application_frame.cpp:241 "
+                      "event:error_fan_stuck, beep:066, ismust_play:1"),
+                (1.0, "11-11 7:14:37.950/SW D/led_show_base.cpp:261 "
+                      "event_id: error_fan_stuck, must_show: 1 data: {"),
+                (1.0, '"rgb_led__home" : "red_slow_flick",'),
+                (1.0, '"rgb_led__start" : "red_flick_3"'),
+                (1.0, "apos_adapter.cpp:3481 "
+                      "msg=error_fan_stuck code=926"),
+            ]
+
+        def clear_faults(self):
+            return True
+
+    page._service = FakeService()
+    page._connected = True
+    page._connected_ip = "10.63"
+    page._simulate_fault("fan_stuck")
+    assert "已触发" in page.fault_status.text()
+    page._show_fault_result("fan_stuck", 0)
+    text = page.fault_result.text()
+    assert "066" in text and "red_slow_flick" in text and "926" in text
+    # 灯显 JSON 续行也要显示在日志区
+    assert "rgb_led__home" in page.fault_log.toPlainText()
+    # 日志区可滚动(用户 2026-11-11)
+    assert page.fault_log.verticalScrollBar() is not None
+    page._clear_faults()
+    assert "已发送清除状态" in page.fault_status.text()
+    assert page.fault_tab is not None
+    # 常用故障改为下拉选择, 不再平铺按钮(用户 2026-11-11)
+    idx = page.fault_pick_combo.findData("error_fan_stuck")
+    assert idx >= 0
+    page.fault_pick_combo.setCurrentIndex(idx)
+    page._simulate_picked_fault()
+    assert "已触发" in page.fault_status.text()
+    # 常用故障也支持手动输入关键字, 下方弹出候选
+    assert page.fault_pick_combo.isEditable()
+    pc = page.fault_pick_combo.completer()
+    assert pc.filterMode() == Qt.MatchContains
+    pc.setCompletionPrefix("风机")
+    assert pc.completionCount() >= 1
+    page.fault_pick_combo.setEditText("风机卡住")
+    page._simulate_picked_fault()
+    assert page._service.called == ("/hardware/error", "error_fan_stuck")
+
+    # 加载事件配置后自动比对: 一致 → 绿勾
+    import json
+    cfg = tmp_path / "events.json"
+    cfg.write_text(json.dumps([{
+        "identifier": "error_fan_stuck", "name": "风机卡住",
+        "rgb_hardware_function_set": [
+            {"identifier": "rgb_led__home",
+             "rgb_light_effect": {"identifier": "red_slow_flick"}}],
+        "sound": {"identifier": "066"}}], ensure_ascii=False), encoding="utf-8")
+    page._load_fault_config(str(cfg))
+    # 下拉显示中文名, 触发仍用 identifier
+    assert "风机卡住" in page.fault_event_combo.itemText(0)
+    page.fault_event_combo.setCurrentIndex(0)
+    assert page._current_fault_event() == "error_fan_stuck"
+    # 手动输入关键字, 下方弹出候选(中文名/英文标识都能包含匹配)
+    comp = page.fault_event_combo.completer()
+    assert comp.filterMode() == Qt.MatchContains
+    comp.setCompletionPrefix("fan")
+    assert comp.completionCount() >= 1
+    comp.setCompletionPrefix("风机")
+    assert comp.completionCount() >= 1
+    # 选中候选(只改输入框文字、没有 currentIndex)也能还原 identifier
+    page.fault_event_combo.currentIndex()
+    page.fault_event_combo.setEditText("风机卡住（error_fan_stuck）")
+    assert page._current_fault_event() == "error_fan_stuck"
+    # 主题不再让用户选(用户 2026-11-11), 工具自动判断
+    assert not hasattr(page, "fault_topic_combo")
+    page._show_fault_result("fan_stuck", 0)
+    assert "✓ 与事件配置一致" in page.fault_verdict.text()
+
+    class BadService(FakeService):
+        def fault_log_since(self, t0):
+            return [(1.0, "event:error_fan_stuck, beep:999"),
+                    (1.0, '"rgb_led__home" : "all_off"')]
+
+    page._service = BadService()
+    page._show_fault_result("fan_stuck", 0)
+    assert "✗ 与事件配置不一致" in page.fault_verdict.text()
+    assert "999" in page.fault_verdict.text()
+    # 触发即实测, 不再有"以实测为准"按钮(用户 2026-11-11)
+    assert not hasattr(page, "fault_accept_btn")
+    # 手动选/输入配置事件名触发; 配置里没有的事件 → 未配置
+    page._service = FakeService()
+    page.fault_event_combo.setCurrentText("error_drop")
+    page._trigger_custom_event()
+    assert page._service.called == ("/hardware/error", "error_drop")
+    page._show_event_result("error_drop", "地检异常", 0)
+    assert "未配置" in page.fault_verdict.text()
+
+    # 配置里有事件但没配语音/灯显(频繁集尘): 显示未配置, 不显示未捕获
+    cfg2 = tmp_path / "events2.json"
+    cfg2.write_text(json.dumps([{
+        "identifier": "app_sweeper_keyboard_press_frequently",
+        "name": "频繁集尘", "rgb_hardware_function_set": [],
+        "sound": {}}], ensure_ascii=False), encoding="utf-8")
+    page._load_fault_config(str(cfg2))
+    page._show_event_result("app_sweeper_keyboard_press_frequently",
+                            "频繁集尘", 0)
+    assert "未配置" in page.fault_result.text()
+    assert "未捕获" not in page.fault_result.text()
+    assert "未配置语音/灯显" in page.fault_verdict.text()
 
 
 def test_curve_view_updates(qapp):

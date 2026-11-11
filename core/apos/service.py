@@ -154,6 +154,52 @@ class ParamService:
         except Exception:
             return ""
 
+    def post_event(self, topic, event):
+        """发任意机器人事件(配置事件手动验证用)。返回是否发送成功。"""
+        stream = self.stream
+        if (stream is None or not getattr(stream, "running", False)
+                or not str(topic or "").strip() or not str(event or "").strip()):
+            return False
+        try:
+            return stream.post_event(topic, event) >= 0
+        except Exception:
+            return False
+
+    def simulate_fault(self, key):
+        """注入一条故障模拟事件(`/Common/SetCmd` PostEvent)。返回是否发送成功。"""
+        from core.apos import faults
+        item = faults.get(key)
+        stream = self.stream
+        if (item is None or stream is None
+                or not getattr(stream, "running", False)):
+            return False
+        try:
+            return stream.post_event(item["topic"], item["event"]) >= 0
+        except Exception as e:
+            log.debug(f"[故障模拟] 发送失败 {key}: {e}")
+            return False
+
+    def fault_log_since(self, ts):
+        """取 ts 之后的设备日志行(故障模拟验证语音/灯显)。"""
+        mcu = self.mcu
+        if mcu is None or not hasattr(mcu, "log_since"):
+            return []
+        try:
+            return mcu.log_since(ts)
+        except Exception:
+            return []
+
+    def clear_faults(self):
+        """清除故障/状态提示（厂商 Cmd_ClearStatus 控制码）。"""
+        mcu = self.mcu
+        if mcu is None or not hasattr(mcu, "send_control_code"):
+            return False
+        try:
+            from core.apos.mcu import CMD_CLEAR_STATUS
+            return bool(mcu.send_control_code(CMD_CLEAR_STATUS))
+        except Exception:
+            return False
+
     def _stream_base_version(self):
         """在推流句柄上读两个候选文件，返回解析出的版本号。"""
         stream = self.stream

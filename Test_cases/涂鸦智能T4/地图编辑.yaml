@@ -1,7 +1,7 @@
 case_order: 1
 module: 地图编辑
 cases:
-- name: 地图编辑完整流程
+- name: '地图编辑'
   priority: P1
   wait: 5
   steps:
