@@ -239,7 +239,11 @@ def test_curve_view_updates(qapp):
     cards = [c for c in v._cards if key in c.series_data]
     assert cards and len(cards[0].series_data[key]) == 1
     assert v.follow is True
-    assert cards[0].plot.getViewBox().autoRangeEnabled()[1] is True
+    # Y 轴由数据驱动手动设范围(顶部刻度=数据最大值), 不再用 pyqtgraph 自动范围
+    vr = cards[0].plot.getViewBox().viewRange()[1]
+    assert vr[1] >= 80
+    levels = cards[0].plot.getAxis("left")._tickLevels
+    assert levels and levels[0][-1] == (80.0, "80")
 
 
 def test_main_window_top_nav(qapp, monkeypatch, tmp_path):
@@ -337,6 +341,142 @@ def test_cliff_trigger_curves_colors_and_hover(qapp):
     text = card._hover.text()
     assert "左边跌落" in text and "右边跌落" in text
     assert "时间" in text
+
+
+def test_curve_auto_fit_after_30s_idle(qapp):
+    """手动缩放/拖动后暂停跟随; 30 秒无操作自动恢复自适应(用户 2026-11-11)。"""
+    from gui.curve_view import AUTO_FIT_IDLE_MS, CurveView
+    v = CurveView()
+    assert AUTO_FIT_IDLE_MS == 30_000
+    assert v._idle_timer.interval() == AUTO_FIT_IDLE_MS
+    assert v._idle_timer.isSingleShot()
+    assert "30 秒" in v.follow_hint.text()
+
+    v._manual_range()                    # 模拟用户拖动/缩放
+    assert v.follow is False
+    assert not v.follow_box.isChecked()
+    assert v._idle_timer.isActive()
+    assert not v.follow_hint.isHidden()
+
+    v._auto_fit_after_idle()             # 计时到点
+    assert v.follow is True
+    assert v.follow_box.isChecked()
+    assert v.follow_hint.isHidden()
+    assert not v._idle_timer.isActive()
+
+    v._manual_range()                    # 再次操作 → 重新计时
+    assert v._idle_timer.isActive()
+
+
+def test_y_axis_top_tick_is_data_max_including_spike(qapp):
+    """Y 轴顶部刻度=当前数据最大值；数据突然变大时轴要跟上(用户 2026-11-11)。"""
+    from core.apos import catalog
+    from gui.curve_view import CurveView
+    v = CurveView()
+    idx = next(i for i, p in enumerate(catalog.CURVE_PAGES)
+               if p["name"] == "风机")
+    v.set_page(idx)
+    card = next(c for c in v._cards if c.plot is not None)
+    base = time.time()
+    for i, val in enumerate((100, 200, 500)):
+        v.update_snapshot({"ok": {"/MotorFan/Speed": val},
+                           "failed": {}, "ts": base + i * 60})
+    v.update_snapshot({"ok": {"/MotorFan/Speed": 5000},
+                       "failed": {}, "ts": base + 240})
+    vr = card.plot.getViewBox().viewRange()[1]
+    assert vr[1] > 5000, "顶部留余量, 最大值标签才不会被裁掉"
+    assert vr[0] < 100, "底部也留余量, 最小值标签才不会被裁掉"
+    ticks = card.plot.getAxis("left")._tickLevels[0]
+    assert ticks[0] == (100.0, "100"), ticks      # 底部刻度 = 数据最小值
+    assert ticks[-1] == (5000.0, "5000"), ticks   # 顶部刻度 = 数据最大值
+
+
+def test_y_axis_min_max_follow_live_data(qapp):
+    """Y 轴上下限随实时数据变化, 并保证两端刻度都存在(用户 2026-11-11)。"""
+    from core.apos import catalog
+    from gui.curve_view import CurveView
+    v = CurveView()
+    idx = next(i for i, p in enumerate(catalog.CURVE_PAGES)
+               if p["name"] == "电池")
+    v.set_page(idx)
+    card = [c for c in v._cards
+            if "/BatteryBattery/BatteryVol" in [x["path"] for x in c.series]][0]
+    base = time.time()
+    for i, val in enumerate((9900, 10000, 10050)):
+        v.update_snapshot({"ok": {"/BatteryBattery/BatteryVol": val},
+                           "failed": {}, "ts": base + i * 60})
+    ticks = card.plot.getAxis("left")._tickLevels[0]
+    assert ticks[0] == (9900.0, "9900")
+    assert ticks[-1] == (10050.0, "10050")
+    # 数据抬升后上限跟着变(下限仍取窗口内的数据)
+    v.update_snapshot({"ok": {"/BatteryBattery/BatteryVol": 12000},
+                       "failed": {}, "ts": base + 240})
+    ticks = card.plot.getAxis("left")._tickLevels[0]
+    assert ticks[-1] == (12000.0, "12000")
+
+
+def test_curve_follow_state_is_per_page(qapp):
+    """跟随/自适应按曲线页(组)独立: 风机暂停不影响电池(用户 2026-11-11)。"""
+    from core.apos import catalog
+    from gui.curve_view import CurveView
+    v = CurveView()
+    fan = next(i for i, p in enumerate(catalog.CURVE_PAGES) if p["name"] == "风机")
+    batt = next(i for i, p in enumerate(catalog.CURVE_PAGES) if p["name"] == "电池")
+
+    v.set_page(fan)
+    v._manual_range()                       # 风机页缩放/拖动
+    assert v.follow is False and not v.follow_box.isChecked()
+    assert not v.follow_hint.isHidden()
+
+    v.set_page(batt)                        # 切到电池: 独立状态, 仍在跟随
+    assert v.follow is True and v.follow_box.isChecked()
+    assert v.follow_hint.isHidden()
+
+    v.set_page(fan)                         # 切回风机: 暂停状态被记住
+    assert v.follow is False
+    v._reset_view()                         # 顶部自适应只恢复风机
+    assert v.follow is True and v.follow_box.isChecked()
+
+    v.set_page(batt)                        # 电池从未被影响
+    assert v.follow is True
+    v._manual_range()                       # 电池单独暂停
+    v.set_page(fan)
+    assert v.follow is True                 # 风机不受电池影响
+
+    # 30 秒到点恢复的是"被暂停的那一页", 即电池; 切回去已恢复
+    v._auto_fit_after_idle()
+    v.set_page(batt)
+    assert v.follow is True and v.follow_box.isChecked()
+
+
+def test_multi_curve_values_above_plot_not_occluded(qapp):
+    """多曲线实时值放在图上方彩色标签里, 不再用透明图例被曲线压住。"""
+    from PySide6.QtCore import QPointF
+    from core.apos import catalog
+    from gui.curve_view import CurveView
+    v = CurveView()
+    v.set_page(next(i for i, p in enumerate(catalog.CURVE_PAGES)
+                    if p["name"] == "地检"))
+    for i, val in enumerate((9, 8)):
+        v.update_snapshot({"ok": {"/Mcu/CliffTrigger": val},
+                           "failed": {}, "ts": 1000.0 + i * 60})
+    card = next(c for c in v._cards if c.group["name"] == "地检触发")
+    assert card._legend is None, "图内图例应移除, 避免曲线压住文字"
+    # Y 轴高度封顶, 不再被拉满整屏(用户 2026-11-11)
+    assert card.plot.minimumHeight() == card.plot.maximumHeight() == 220
+    assert len(card._value_labels) == 4
+    texts = [lab.text() for lab in card._value_labels.values()]
+    assert any("左边跌落" in t and "1" in t for t in texts), texts
+    assert any("#e11d48" in t or "#2563eb" in t for t in texts), "应有彩色圆点"
+    # 数值随数据更新
+    v.update_snapshot({"ok": {"/Mcu/CliffTrigger": 0},
+                       "failed": {}, "ts": 1120.0})
+    texts = [lab.text() for lab in card._value_labels.values()]
+    assert all(": <b>0</b>" in t or ": <b>0 " in t for t in texts), texts
+    # 悬停提示仍然正常
+    pos = card.plot.getViewBox().mapViewToScene(QPointF(1.0, 0.5))
+    card._on_mouse_move(pos)
+    assert "左边跌落" in card._hover.text()
 
 
 def test_curve_dict_key_value(qapp):

@@ -6,16 +6,20 @@
 """
 import bisect
 import copy
+import html
 import json
+import math
 from collections import deque
 
 import pyqtgraph as pg
-from PySide6.QtCore import QEvent, Qt, Signal
+from PySide6.QtCore import QEvent, Qt, QTimer, Signal
 from PySide6.QtWidgets import (QCheckBox, QFrame, QGridLayout, QHBoxLayout,
                                 QLabel, QListWidget, QListWidgetItem, QMenu,
-                                QPushButton, QScrollArea, QVBoxLayout, QWidget)
+                                QPushButton, QScrollArea, QSizePolicy,
+                                QVBoxLayout, QWidget)
 
 from core.apos import catalog
+from gui.widgets import FlowLayout
 
 # ★ 关闭抗锯齿：实测 3600 点 × 多曲线的图，抗锯齿开启时一帧 ~76ms，
 #   关闭后 ~5ms，切页/拖动才不会卡（曲线略粗糙但可接受）。
@@ -27,6 +31,9 @@ SERIES_COLORS = ("#e11d48", "#2563eb", "#16a34a", "#f59e0b",
 
 #: 每条曲线的历史点数上限（5Hz × 12 分钟；窗口默认 10 分钟，足够）
 HISTORY_MAX = 3600
+
+#: 手动缩放/拖动后，闲置这么久自动恢复「自适应 + 跟随实时」(用户 2026-11-11)
+AUTO_FIT_IDLE_MS = 30_000
 
 
 def _series_pen(i):
@@ -70,9 +77,12 @@ class CurveCard(QFrame):
         self._ys = {}
         self.last_t = {}
         self.value_label = None
+        self._value_labels = {}      # 多曲线: 图上方彩色标签, key -> QLabel
         self._hover = None
         self._vline = None
 
+        # 高度按内容(绘图区封顶 240), 不跟着滚动区被拉长(用户 2026-11-11)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
         v = QVBoxLayout(self)
         v.setContentsMargins(8, 7, 8, 5)
         v.setSpacing(2)
@@ -93,6 +103,22 @@ class CurveCard(QFrame):
             head.addWidget(cnt)
         v.addLayout(head)
 
+        # ★ 多条曲线的实时值放在图**上方**的彩色标签里(用户 2026-11-11):
+        #   以前写在图内图例里, 图例透明, 曲线会从文字上穿过导致数值看不清。
+        #   标签按颜色与曲线一一对应, 自动换行; 单条曲线仍在右上角显示数值。
+        if len(self.series) > 1:
+            row = QWidget()
+            self.values_flow = FlowLayout(row, margin=0, spacing=10)
+            for i, curve in enumerate(self.series):
+                name = curve.get("title") or curve["path"]
+                lab = QLabel()
+                lab.setTextFormat(Qt.RichText)
+                lab.setStyleSheet("font-size:11px;color:#1e293b;")
+                lab.setText(self._value_html(i, name, "--"))
+                self.values_flow.addWidget(lab)
+                self._value_labels[_series_key(curve)] = lab
+            v.addWidget(row)
+
         if not self.series:
             empty = QLabel("曲线已隐藏（右键可恢复）")
             empty.setStyleSheet("color:#b0b9c6;font-size:11px;padding:14px 4px;")
@@ -102,7 +128,8 @@ class CurveCard(QFrame):
             return
 
         self.plot = pg.PlotWidget(background="w")
-        self.plot.setMinimumHeight(150)
+        # ★ 单行卡片时不要被拉满整屏: 绘图区固定 220px, Y 轴不再过长(用户 2026-11-11)
+        self.plot.setFixedHeight(220)
         self.plot.showGrid(x=False, y=True, alpha=0.12)
         self.plot.setMouseEnabled(x=True, y=True)
         self.plot.setLabel("bottom", "时间(分钟)")
@@ -118,8 +145,7 @@ class CurveCard(QFrame):
         # 关掉 pyqtgraph 自带的英文右键菜单，改用下面自己的中文菜单
         self.plot.setMenuEnabled(False)
         self.plot.getViewBox().setMenuEnabled(False)
-        self._legend = (self.plot.addLegend(offset=(10, 6))
-                        if len(self.series) > 1 else None)
+        self._legend = None      # 多曲线用上方标签显示数值, 图内不再放图例
         v.addWidget(self.plot, 1)
 
         for i, curve in enumerate(self.series):
@@ -135,10 +161,9 @@ class CurveCard(QFrame):
             self._lines[key] = line
             if data:
                 self.refresh(key)
-        # 默认 Y 轴自适应：数据范围变化时自动缩放，无需手动点“自适应”
-        # autoVisible: 只按视口内的数据算 Y 范围（历史点很多时更流畅）
-        self.plot.getPlotItem().setAutoVisible(y=True)
-        self.plot.enableAutoRange(axis="y")
+        # ★ Y 轴由当前可见数据手动设范围: 顶部刻度就是数据最大值(用户 2026-11-11)。
+        #   关掉自动 Y 范围, 避免它和"顶部=数据最大值"的刻度打架。
+        self.plot.getViewBox().disableAutoRange(axis=pg.ViewBox.YAxis)
 
         # ── 鼠标悬停：竖线 + 参数名/数值 ──
         self._vline = pg.InfiniteLine(
@@ -154,6 +179,14 @@ class CurveCard(QFrame):
         self._hover.hide()
         self.plot.scene().sigMouseMoved.connect(self._on_mouse_move)
         self.plot.viewport().installEventFilter(self)
+
+    @staticmethod
+    def _value_html(index, name, value):
+        """彩色圆点 + 曲线名 + 当前值(名称/数值用正文色, 只有圆点用曲线色)。"""
+        color = SERIES_COLORS[index % len(SERIES_COLORS)]
+        return (f'<span style="color:{color};font-weight:700;">●</span> '
+                f'{html.escape(str(name))}: '
+                f'<b>{html.escape(str(value))}</b>')
 
     def refresh(self, key=None):
         """按历史数据重画（key=None 时重画全部）。"""
@@ -171,11 +204,12 @@ class CurveCard(QFrame):
             curve = next(c for c in self.series if _series_key(c) == k)
             if self.value_label is not None:
                 self.value_label.setText(_fmt(ys[-1], curve))
-            elif self._legend is not None:
-                label = self._legend.getLabel(line)
-                if label is not None:
-                    label.setText(f"{curve.get('title') or curve['path']}"
-                                  f"  {_fmt(ys[-1], curve)}")
+            elif k in self._value_labels:
+                idx = next(i for i, c in enumerate(self.series)
+                           if _series_key(c) == k)
+                self._value_labels[k].setText(self._value_html(
+                    idx, curve.get("title") or curve["path"],
+                    _fmt(ys[-1], curve)))
 
     def eventFilter(self, obj, ev):
         # 鼠标移出图区时收起提示（否则标签会一直停在原处）
@@ -240,7 +274,10 @@ class CurveView(QWidget):
     def __init__(self, window_minutes=10, parent=None, settings=None):
         super().__init__(parent)
         self.window_minutes = float(window_minutes or 10)
+        #: 当前曲线页(组)的跟随状态；每页各自记住自己的状态(用户 2026-11-11)
         self.follow = True
+        self._page_follow = {}       # 页 key -> 是否跟随
+        self._paused_page = None     # 触发 30 秒计时的那一页
         self.settings = settings
         self._t0 = None
         self._cards = []
@@ -256,6 +293,11 @@ class CurveView(QWidget):
         # 键 = (属性路径, 字典字段)，同一路径可对应多条曲线（地检探头）。
         self._history = {}
         self._curve_defs = self._defs()
+        #: 手动操作后 30 秒无再次操作 → 自动恢复当前这一组曲线图的自适应
+        self._idle_timer = QTimer(self)
+        self._idle_timer.setSingleShot(True)
+        self._idle_timer.setInterval(AUTO_FIT_IDLE_MS)
+        self._idle_timer.timeout.connect(self._auto_fit_after_idle)
         self._build()
 
     #: 随曲线一起保存的「值的解释方式」—— 少任何一个都会把曲线画错或画空:
@@ -607,17 +649,19 @@ class CurveView(QWidget):
         self.meta.setStyleSheet("color:#94a3b8;font-size:11px;")
         bar.addWidget(self.meta)
         bar.addStretch(1)
+        # ★ 跟随/自适应按"曲线页(组)"独立: 风机、电池各自记住状态(用户 2026-11-11)
         self.follow_box = QCheckBox("跟随实时")
+        self.follow_box.setToolTip("只影响当前这一组曲线图; 各页状态互不影响")
         self.follow_box.setChecked(True)
         self.follow_box.toggled.connect(self.set_follow)
         bar.addWidget(self.follow_box)
-        # 手动缩放/拖动会关闭跟随；不提示的话看起来就像"曲线卡住不刷新"
-        self.follow_hint = QLabel("已暂停跟随 · 点「自适应」恢复")
+        self.follow_hint = QLabel("已暂停跟随 · 30 秒无操作自动自适应")
         self.follow_hint.setStyleSheet("color:#b45309;font-size:11px;")
         self.follow_hint.hide()
         bar.addWidget(self.follow_hint)
         self.reset_btn = QPushButton("自适应")
         self.reset_btn.setObjectName("chipBtn")
+        self.reset_btn.setToolTip("恢复当前这一组的所有曲线图（不影响其它组）")
         self.reset_btn.clicked.connect(self._reset_view)
         bar.addWidget(self.reset_btn)
         right.addLayout(bar)
@@ -629,6 +673,8 @@ class CurveView(QWidget):
         self.grid = QGridLayout(self.holder)
         self.grid.setContentsMargins(0, 0, 0, 0)
         self.grid.setSpacing(10)
+        # 卡片按自身高度排在顶部, 不被拉伸去填满整个滚动区
+        self.grid.setAlignment(Qt.AlignTop)
         self.scroll.setWidget(self.holder)
         right.addWidget(self.scroll, 1)
         root.addLayout(right, 1)
@@ -648,10 +694,26 @@ class CurveView(QWidget):
                 w.deleteLater()
         self._cards = []
 
+    def _page_key(self, index):
+        """曲线页的身份: 内置页用页名, 自定义图用 custom:标题。"""
+        if index >= len(catalog.CURVE_PAGES):
+            ci = index - len(catalog.CURVE_PAGES)
+            if 0 <= ci < len(self._custom):
+                return f'custom:{self._custom[ci]["title"]}'
+            return f"custom-index:{index}"
+        return catalog.CURVE_PAGES[index]["name"]
+
     def set_page(self, index):
         if index < 0 or index >= len(catalog.CURVE_PAGES) + len(self._custom):
             return
         self._page_index = index
+        # ★ 每组曲线图单独记住跟随状态(用户 2026-11-11): 切换到哪组就恢复哪组
+        self._page_key_current = self._page_key(index)
+        self.follow = bool(self._page_follow.get(self._page_key_current, True))
+        self.follow_box.blockSignals(True)
+        self.follow_box.setChecked(self.follow)
+        self.follow_box.blockSignals(False)
+        self.follow_hint.setVisible(not self.follow)
         custom = index >= len(catalog.CURVE_PAGES)
         custom_index = index - len(catalog.CURVE_PAGES)
         if custom:
@@ -676,6 +738,7 @@ class CurveView(QWidget):
         for gi, group in enumerate(groups):
             card = CurveCard(group, self._history)
             if card.plot is not None:
+                # 组内任意一张图被缩放/拖动 → 这一组暂停跟随(其它组不受影响)
                 card.plot.getViewBox().sigRangeChangedManually.connect(
                     self._manual_range)
             targets = [card]
@@ -851,47 +914,179 @@ class CurveView(QWidget):
             self.remove_custom_curve(ci)
 
     def _manual_range(self, *_):
+        """当前这一组曲线图被缩放/拖动: 只暂停本组, 其它组状态不变。"""
         if self.follow:
             self.follow = False
+            self._page_follow[self._page_key_current] = False
+            self.follow_box.blockSignals(True)
             self.follow_box.setChecked(False)
+            self.follow_box.blockSignals(False)
+            self.follow_hint.setVisible(True)
+            # 手动缩放期间交还刻度自动生成, 否则固定刻度可能覆盖不到新范围
+            for c in self._cards:
+                if c.plot is not None:
+                    c.plot.getAxis("left").setTicks(None)
+        # 30 秒内没再操作 → 只恢复这一组
+        self._paused_page = self._page_key_current
+        self._idle_timer.start()
+
+    def _auto_fit_after_idle(self):
+        """30 秒无操作: 恢复被暂停的那一组(用户 2026-11-11)。"""
+        self._idle_timer.stop()
+        key = self._paused_page
+        self._paused_page = None
+        if not key:
+            return
+        self._page_follow[key] = True
+        if key == self._page_key_current:
+            self._reset_view()
 
     def set_follow(self, on):
+        """顶部开关只作用于当前这一组; 其它组的自适应状态不受影响。"""
         self.follow = bool(on)
-        if hasattr(self, "follow_hint"):
-            self.follow_hint.setVisible(not self.follow)
+        self._page_follow[self._page_key_current] = self.follow
+        self.follow_hint.setVisible(not self.follow)
         if on:
+            if self._paused_page == self._page_key_current:
+                self._idle_timer.stop()
+                self._paused_page = None
+            for c in self._cards:
+                if c.plot is not None:
+                    c.plot.enableAutoRange()
             self._apply_follow()
+        else:
+            self._paused_page = self._page_key_current
+            self._idle_timer.start()
+            for c in self._cards:
+                if c.plot is not None:
+                    c.plot.getAxis("left").setTicks(None)
 
     def _reset_view(self):
+        """顶部「自适应」: 恢复当前这一组的所有曲线图(其它组不受影响)。"""
+        if self._paused_page == self._page_key_current:
+            self._idle_timer.stop()
+            self._paused_page = None
         self.follow = True
+        self._page_follow[self._page_key_current] = True
+        self.follow_box.blockSignals(True)
         self.follow_box.setChecked(True)
+        self.follow_box.blockSignals(False)
+        self.follow_hint.setVisible(False)
         for c in self._cards:
             if c.plot is not None:
                 c.plot.enableAutoRange()
         self._apply_follow()
 
+    def _fit_card_x(self, card):
+        """把一张图的 X 轴拉到最近 window_minutes 的窗口(跟随实时用)。"""
+        last = None
+        for data in card.series_data.values():
+            if data:
+                last = data[-1][0] if last is None else max(last, data[-1][0])
+        if last is None:
+            return
+        # ★ 刚连上时数据只有几秒, 不要一上来就铺 10 分钟(数据会挤在最左边
+        #   看起来像一条竖线)。前 window_minutes 内让 X 轴贴着已有数据铺满
+        #   (数据越多窗口越宽), 超过之后再按固定窗口往右滚动。
+        if last <= self.window_minutes:
+            left, right = 0.0, max(last * 1.05, 0.08)
+        else:
+            left, right = last - self.window_minutes, last
+        card.plot.setXRange(left, right, padding=0.02)
+        self._fit_card_y(card, left, right)
+
+    @staticmethod
+    def _nice_step(span, target=4):
+        """把区间分成 target 段左右时的"整齐"步长(1/2/2.5/5/10 × 10^n)。"""
+        if span <= 0:
+            return 1.0
+        raw = span / max(1, target)
+        mag = 10 ** math.floor(math.log10(raw))
+        for m in (1, 2, 2.5, 5, 10):
+            if raw <= m * mag:
+                return m * mag
+        return 10 * mag
+
+    @staticmethod
+    def _tick_text(value):
+        try:
+            v = float(value)
+        except (TypeError, ValueError):
+            return str(value)
+        if v.is_integer():
+            return str(int(v))
+        return f"{v:.6g}"
+
+    def _fit_card_y(self, card, left=None, right=None):
+        """Y 范围按当前窗口里的数据: 顶部刻度就是数据最大值(用户 2026-11-11)。"""
+        if card.plot is None:
+            return
+        if left is None or right is None:
+            left, right = card.plot.getViewBox().viewRange()[0]
+        ymin = ymax = None
+        for key, xs in card._xs.items():
+            ys = card._ys.get(key)
+            if not xs or not ys:
+                continue
+            i = bisect.bisect_left(xs, left)
+            j = bisect.bisect_right(xs, right)
+            if j <= i:
+                continue
+            seg = ys[i:j]
+            lo, hi = min(seg), max(seg)
+            ymin = lo if ymin is None else min(ymin, lo)
+            ymax = hi if ymax is None else max(ymax, hi)
+        if ymin is None:
+            return
+        if ymax == ymin:
+            # 一条水平线: 给一点高度, 但顶部仍是数据值
+            pad = abs(ymax) * 0.1 or 1.0
+            ymin = ymax - pad
+        # ★ 上下各留一点余量: 否则"数据最大/最小值"的刻度标签贴着绘图区边缘被裁掉
+        #   (用户 2026-11-11: "最大值/最小值不会显示在 Y 轴上")。
+        span = ymax - ymin
+        headroom = span * 0.06 or abs(ymax) * 0.1 or 1.0
+        footroom = span * 0.04 or abs(ymin) * 0.05 or 1.0
+        card.plot.setYRange(ymin - footroom, ymax + headroom, padding=0)
+        step = self._nice_step(ymax - ymin, target=5)
+        ticks = []
+        v = math.ceil(ymin / step) * step
+        # 浮点误差: 留一点余量, 避免把顶部刻度重复加一次
+        while v < ymax - step * 1e-9:
+            ticks.append((v, self._tick_text(v)))
+            v += step
+        # ★ 底部刻度固定为当前数据最小值(与顶部最大值对应, 用户 2026-11-11)
+        if not ticks or abs(ticks[0][0] - ymin) > 1e-9:
+            ticks.insert(0, (ymin, self._tick_text(ymin)))
+        ticks.append((ymax, self._tick_text(ymax)))   # ★ 顶部刻度 = 数据最大值
+        # ★ 顶部最大值可能紧挨着上一个整齐刻度(数据 10400 时 10000 与 10400),
+        #   两个标签会叠在一起 —— 按像素间距去掉过近的那个(用户 2026-11-11)。
+        ticks = self._dedupe_ticks(ticks, ymin, ymax, card.plot.height())
+        card.plot.getAxis("left").setTicks([ticks])
+
+    @staticmethod
+    def _dedupe_ticks(ticks, ymin, ymax, height_px, min_px=14):
+        """去掉纵向间距不足 min_px 的刻度标签; 顶部数据最大值优先保留。"""
+        if len(ticks) < 2:
+            return ticks
+        span = max(float(ymax) - float(ymin), 1e-12)
+        min_gap = span * min_px / max(1.0, float(height_px or 220))
+        out = []
+        for v, label in ticks:
+            if out and (v - out[-1][0]) < min_gap:
+                if abs(v - float(ymax)) < 1e-9:
+                    out.pop()           # 顶掉前一个, 保证最大值标签在
+                else:
+                    continue
+            out.append((v, label))
+        return out
+
     def _apply_follow(self):
         if not self.follow:
             return
         for c in self._cards:
-            if c.plot is None:
-                continue
-            last = None
-            for data in c.series_data.values():
-                if data:
-                    last = data[-1][0] if last is None else max(last, data[-1][0])
-            if last is None:
-                continue
-            # ★ 刚连上时数据只有几秒, 不要一上来就铺 10 分钟(数据会挤在最左边
-            #   看起来像一条竖线)。前 window_minutes 内让 X 轴贴着已有数据铺满
-            #   (数据越多窗口越宽), 超过之后再按固定窗口往右滚动。
-            if last <= self.window_minutes:
-                left, right = 0.0, max(last * 1.05, 0.08)
-            else:
-                left, right = last - self.window_minutes, last
-            c.plot.setXRange(left, right, padding=0.02)
-            # Y 自适应在卡片创建时已开启(autoVisible)，这里不再每次强制
-            # enableAutoRange —— 5Hz 下反复重算范围是切页/拖动卡顿的来源之一。
+            if c.plot is not None:
+                self._fit_card_x(c)
 
     def update_snapshot(self, snapshot):
         """snapshot = ParamService.latest()。"""
