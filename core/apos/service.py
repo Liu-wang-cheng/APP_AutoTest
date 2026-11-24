@@ -68,12 +68,21 @@ class ParamService:
         self._stream_only = False
         #: 当前机型(从 FirmwareInfo 解析), 用于判断 SN 是否能在流句柄上读
         self._model = ""
+        #: 推送反复中断时的兜底状态: 连续重启仍无数据 → 改用 librpc 轮询
+        self._stream_stalls = 0
+        self._stream_fallback = False
+        self._stream_retry_at = 0.0
 
     # ── 生命周期 ──
     def connect(self, ip):
         # ★ 换设备/重连前先停掉旧采集线程和旧推流：librpc_base 连接(prime 读)
         #   与上一台的 libapos 上传流同时存在会互卡，表现为连接慢、SN/固件读空。
         self._ready.clear()
+        # 重连/换设备后旧的兜底状态必须清零, 否则新开好的推流会被当成
+        # “已退轮询”而被 _read 绕过(用户 2026-11-17 代码审查)
+        self._stream_stalls = 0
+        self._stream_fallback = False
+        self._stream_retry_at = 0.0
         self.stop()
         if self.stream is not None:
             try:
@@ -157,12 +166,23 @@ class ParamService:
     def post_event(self, topic, event):
         """发任意机器人事件(配置事件手动验证用)。返回是否发送成功。"""
         stream = self.stream
-        if (stream is None or not getattr(stream, "running", False)
-                or not str(topic or "").strip() or not str(event or "").strip()):
+        if (stream is None or not str(topic or "").strip()
+                or not str(event or "").strip()):
+            return False
+        if not getattr(stream, "running", False):
+            log.info(f"[故障模拟] 上传流未运行, 暂不能发送 {event}"
+                     "(看门狗会自动重连)")
             return False
         try:
-            return stream.post_event(topic, event) >= 0
-        except Exception:
+            rc = stream.post_event(topic, event)
+            # ★ 厂商 SDK 的返回值不是可靠的成败标志: 实测有的设备返回负数,
+            #   但事件已经送达并播报(用户 2026-11-13)。只要调用没抛异常就
+            #   继续按设备日志判定, 不要在这里误报"发送失败"。
+            if isinstance(rc, int) and rc < 0:
+                log.info(f"[故障模拟] {event} SDK 返回 {rc}，继续等待设备日志")
+            return True
+        except Exception as e:
+            log.info(f"[故障模拟] 发送 {event} 异常: {e}")
             return False
 
     def simulate_fault(self, key):
@@ -174,9 +194,12 @@ class ParamService:
                 or not getattr(stream, "running", False)):
             return False
         try:
-            return stream.post_event(item["topic"], item["event"]) >= 0
+            rc = stream.post_event(item["topic"], item["event"])
+            if isinstance(rc, int) and rc < 0:
+                log.info(f"[故障模拟] {key} SDK 返回 {rc}，继续等待设备日志")
+            return True
         except Exception as e:
-            log.debug(f"[故障模拟] 发送失败 {key}: {e}")
+            log.info(f"[故障模拟] 发送 {key} 异常: {e}")
             return False
 
     def fault_log_since(self, ts):
@@ -199,6 +222,33 @@ class ParamService:
             return bool(mcu.send_control_code(CMD_CLEAR_STATUS))
         except Exception:
             return False
+
+    def stop_tasks(self):
+        """批量结束回到空闲: 停止清扫 + 停止找桩(已真机验证事件生效)。
+
+        ★ 优先用推送流句柄: ZY2L 等机型走 libapos 连接时没有 librpc 会话,
+          用 AposClient 发任务命令会一直 -1(用户 2026-11-17)。
+        """
+        paths = ("/TaskManager/StopClean",
+                 "/GoBackStationTask/StopFindCharger")
+        stream = self.stream
+        out = []
+        if stream is not None and getattr(stream, "running", False):
+            for path in paths:
+                try:
+                    out.append((path, int(stream.send_event(path))))
+                except Exception as e:
+                    out.append((path, f"ERR {e}"))
+            return out
+        client = self.client
+        if client is None or not getattr(client, "connected", False):
+            return []
+        for path in paths:
+            try:
+                out.append((path, int(client.send_event(path))))
+            except Exception as e:
+                out.append((path, f"ERR {e}"))
+        return out
 
     def _stream_base_version(self):
         """在推流句柄上读两个候选文件，返回解析出的版本号。"""
@@ -295,11 +345,8 @@ class ParamService:
             if started:
                 break
             time.sleep(0.5)
-        if not started:
-            try:
-                self.stream.stop()
-            except Exception:
-                pass
+        # ★ 启动失败时不要 stream.stop(): 它会把订阅路径清空, 看门狗
+        #   restart() 就再也没有路径可重试, 推送通道永远恢复不了。
         self._ready.set()             # 无论成败都开始轮询(失败就走 librpc 读)
         self._wake.set()
         return started
@@ -428,6 +475,25 @@ class ParamService:
                     if p in READ_ONLY_PATHS and p not in ok}
         return {p: "未返回" for p in paths if p not in ok}
 
+    def _stream_polling_fallback(self):
+        """停掉推送流, 切到 librpc 轮询(推送服务异常时参数至少还能刷新)."""
+        stream = self.stream
+        log.info("[上传流] 连续重新订阅仍无推送, 改用 librpc 轮询")
+        try:
+            stream.stop(clear=False)
+        except Exception:
+            pass
+        self._stream_fallback = True
+        self._stream_stalls = 0
+        self._stream_retry_at = time.time() + 30.0
+        # libapos 优先连接时本来没有 librpc 会话, 这时补建一个
+        if not getattr(self.client, "connected", False):
+            try:
+                self.client.connect(self._ip, retries=1)
+            except Exception as e:
+                log.debug(f"[上传流] 轮询兜底连接失败: {e}")
+        self._wake.set()          # 让采集线程立刻用轮询读一次
+
     def _watch_stream(self, stall=6.0):
         """看门狗：推送流约 30~40 秒后会自己停（机器人侧），重发 Add/重订阅都
         无效，只有换一个新句柄重新 AposSdkInit 才能恢复（实测）。
@@ -435,19 +501,59 @@ class ParamService:
         没有这条，界面会在启动半分钟后永远停在最后一个数值。
         """
         stream = self.stream
-        if stream is None or not getattr(stream, "running", False):
+        if stream is None:
             return
         now = time.time()
         if now < getattr(self, "_watch_at", 0.0):
+            return
+        if self._stream_fallback:
+            # 轮询兜底中: 每分钟试一次恢复推送, 成功则切回推送优先
+            if now < self._stream_retry_at:
+                return
+            self._stream_retry_at = now + 30.0
+            self._wait_read_idle()
+            try:
+                ok = bool(stream.start(
+                    self._ip, list(self._stream_paths or self._paths),
+                    preserve=True))
+            except Exception as e:
+                ok = False
+                log.debug(f"[上传流] 恢复推送异常: {e}")
+            if ok:
+                self._stream_fallback = False
+                self._stream_only = True
+                self._watch_at = now + 15.0
+                log.info("[上传流] 已重新订阅推送, 观察数据…")
+            return
+        if not getattr(stream, "running", False):
+            # ★ 推送通道已经断了(重启失败退回轮询, 或模拟 wifi_reset 事件把
+            #   机器人网络重置): 之后 post_event 会一直报「推流未就绪」。
+            #   这里定期重试恢复, 网络回来后发送/曲线自动恢复正常, 不用重连。
+            self._watch_at = now + 15.0
+            self._wait_read_idle()
+            try:
+                if stream.restart():
+                    log.info("[上传流] 已恢复上传流")
+                else:
+                    log.debug("[上传流] 恢复失败, 继续轮询")
+            except Exception as e:
+                log.debug(f"[上传流] 恢复异常: {e}")
             return
         try:
             last = stream.last_event()
         except Exception:
             return
         if not last or now - last <= stall:
+            self._stream_stalls = 0      # 推送正常, 清零连续中断计数
             return
         self._watch_at = now + 15.0     # 最多 15 秒重启一次，避免反复空转
-        log.info("[上传流] 推送中断 %.0f 秒, 重新建立订阅" % (now - last))
+        self._stream_stalls += 1
+        log.info("[上传流] 推送中断 %.0f 秒 (第 %d 次), 重新建立订阅"
+                 % (now - last, self._stream_stalls))
+        if self._stream_stalls >= 2:
+            # 刚重启过又中断 → 重启解决不了, 直接切轮询(否则界面一直很慢)
+            self._stream_polling_fallback()
+            return
         self._wait_read_idle()
         for _ in range(3):
             try:
@@ -457,19 +563,15 @@ class ParamService:
                 log.debug(f"[上传流] 重启失败: {e}")
             time.sleep(0.5)
         log.info("[上传流] 重启失败, 退回轮询")
-        # ★ libapos 优先连接时本来没有 librpc 会话; 这时临时建一个,
-        #   否则推送彻底中断后就没有任何数据通道了(文件读也走 librpc)。
-        if not getattr(self.client, "connected", False):
-            try:
-                self.client.connect(self._ip, retries=1)
-            except Exception as e:
-                log.debug(f"[上传流] 轮询兜底连接失败: {e}")
+        self._stream_polling_fallback()
 
     def _read(self, paths):
         """批量读：推送流在跑时用同一个 libapos_client 句柄，否则走 librpc_base。"""
         self._reading.set()
         try:
-            if self.stream is not None and getattr(self.stream, "running", False):
+            if (self.stream is not None
+                    and getattr(self.stream, "running", False)
+                    and not self._stream_fallback):
                 # ★ 只读系统信息(复合 JSON)和二进制数组(上传流不一定推送)；
                 #   普通数值属性一律用推送值（binpack 读数值会得到 0）。
                 only = [p for p in paths
@@ -486,7 +588,8 @@ class ParamService:
     def _stream_snapshot(self):
         """推送流里的最新值（没有则空）。"""
         stream = self.stream
-        if stream is None or not getattr(stream, "running", False):
+        if (stream is None or not getattr(stream, "running", False)
+                or self._stream_fallback):
             return {}, 0.0
         try:
             return stream.values(), stream.last_event() or 0.0
@@ -537,7 +640,9 @@ class ParamService:
             # 先等一个周期再读：连接阶段让 ConnectThread 先读型号/SN/固件/基站
             # （同一把 librpc 锁），开流之后这里就会自动切到推送句柄。
             wait = self.interval
-            if self.stream is not None and getattr(self.stream, "running", False):
+            if (self.stream is not None
+                    and getattr(self.stream, "running", False)
+                    and not self._stream_fallback):
                 # 推送流已经给了 5~50Hz 的数据，轮询只用来兜底补漏
                 wait = max(wait, 5.0)
             self._wake.wait(wait)
@@ -549,7 +654,8 @@ class ParamService:
             self._watch_stream()
             paths = self.paths()
             stream_on = (self.stream is not None
-                         and getattr(self.stream, "running", False))
+                         and getattr(self.stream, "running", False)
+                         and not self._stream_fallback)
             # ★ 曲线页只含 /Mcu/* 时 _apos_paths 过滤后是空列表 —— 仍然要在
             #   推送流句柄上做一次保活读, 否则机器人约 35 秒后自己停推, 只剩
             #   看门狗反复重建会话(_read() 里会兜底读 READ_ONLY_PATHS)。

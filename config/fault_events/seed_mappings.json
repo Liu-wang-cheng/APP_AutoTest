@@ -1,0 +1,957 @@
+{
+ "version": 1,
+ "entries": [
+  {
+   "key": "设备上电开机待所有程序都启动成功后触发该场景",
+   "event": "system_start",
+   "event_name": "系统启动完成事件",
+   "kind": "通用",
+   "voice_text": "已开机",
+   "source": "ai_review"
+  },
+  {
+   "key": "机器配网成功机器断开网络后重新连上网",
+   "event": "config_wifi_success",
+   "event_name": "连接网络成功事件",
+   "kind": "通用",
+   "voice_text": "机器联网成功",
+   "source": "ai_review"
+  },
+  {
+   "key": "重置wifi",
+   "event": "wifi_reset",
+   "event_name": "wifi已重置事件",
+   "kind": "通用",
+   "voice_text": "机器等待联网",
+   "source": "ai_review"
+  },
+  {
+   "key": "机器开始全局清扫",
+   "event": "total_clean_start",
+   "event_name": "开始全局扫事件",
+   "kind": "通用",
+   "voice_text": "开始清洁",
+   "source": "ai_review"
+  },
+  {
+   "key": "暂停清洁",
+   "event": "clean_paused",
+   "event_name": "暂停清扫事件",
+   "kind": "通用",
+   "voice_text": "暂停清洁",
+   "source": "ai_review"
+  },
+  {
+   "key": "继续清洁需要包含中途定位成功后继续清洁的情形",
+   "event": "clean_resume",
+   "event_name": "继续清扫事件",
+   "kind": "通用",
+   "voice_text": "继续清洁",
+   "source": "ai_review"
+  },
+  {
+   "key": "开始定点清洁",
+   "event": "point_clean_start",
+   "event_name": "开始定点扫事件",
+   "kind": "通用",
+   "voice_text": "开始定点清洁",
+   "source": "ai_review"
+  },
+  {
+   "key": "清洁完成全屋房间划区定点定制扫",
+   "event": "clean_finish",
+   "event_name": "清扫完成事件",
+   "kind": "通用",
+   "voice_text": "清洁完成，返回基站",
+   "source": "ai_review"
+  },
+  {
+   "key": "清洁中电量不足",
+   "event": "low_battery_find_charger",
+   "event_name": "电量低启动回充事件",
+   "kind": "通用",
+   "voice_text": "电量不足，返回基站",
+   "source": "ai_review"
+  },
+  {
+   "key": "单独启动回充任务时触发",
+   "event": "back_charger_start",
+   "event_name": "开始回充事件",
+   "kind": "通用",
+   "voice_text": "开始回充",
+   "source": "ai_review"
+  },
+  {
+   "key": "暂停回充",
+   "event": "back_charger_paused",
+   "event_name": "回充暂停事件",
+   "kind": "通用",
+   "voice_text": "暂停回充",
+   "source": "ai_review"
+  },
+  {
+   "key": "上桩充电",
+   "event": "charging",
+   "event_name": "开始充电事件",
+   "kind": "通用",
+   "voice_text": "开始充电",
+   "source": "ai_review"
+  },
+  {
+   "key": "充电时按回充按键播报",
+   "event": "robot_in_base_station",
+   "event_name": "机器人已在基站内",
+   "kind": "通用",
+   "voice_text": "充电中",
+   "source": "ai_review"
+  },
+  {
+   "key": "充电满足断点续扫条件后自动下桩清扫",
+   "event": "charge_ok_resume_clean",
+   "event_name": "充电已完成继续清扫事件",
+   "kind": "通用",
+   "voice_text": "电量充足，继续开始清洁",
+   "source": "ai_review"
+  },
+  {
+   "key": "设备低电量启动清洁任务",
+   "event": "low_battery_to_clean",
+   "event_name": "电量太低无法启动清扫事件",
+   "kind": "通用",
+   "voice_text": "电量低",
+   "source": "ai_review"
+  },
+  {
+   "key": "开始升级固件",
+   "event": "firmware_upgrade_down_start",
+   "event_name": "固件升级开始下载",
+   "kind": "通用",
+   "voice_text": "开始升级",
+   "source": "ai_review"
+  },
+  {
+   "key": "固件升级完成",
+   "event": "firmware_upgrade_done",
+   "event_name": "固件升级完成事件",
+   "kind": "通用",
+   "voice_text": "升级完成",
+   "source": "ai_review"
+  },
+  {
+   "key": "非尘满取出尘盒",
+   "event": "dust_box_water_box_out",
+   "event_name": "尘盒水箱移除事件",
+   "kind": "通用",
+   "voice_text": "尘盒未安装",
+   "source": "ai_review"
+  },
+  {
+   "key": "放回尘盒",
+   "event": "dust_box_water_box_in",
+   "event_name": "尘盒水箱安装事件",
+   "kind": "通用",
+   "voice_text": "尘盒已装回",
+   "source": "ai_review"
+  },
+  {
+   "key": "主动关机设备自动关机时触发此场景",
+   "event": "shutdown",
+   "event_name": "关机事件",
+   "kind": "通用",
+   "voice_text": "关机",
+   "source": "ai_review"
+  },
+  {
+   "key": "全局清扫过程中定位失败触发重新建图时",
+   "event": "restart_work_and_build_map",
+   "event_name": "定位失败,重新建图事件",
+   "kind": "通用",
+   "voice_text": "定位失败，开始新建地图",
+   "source": "ai_review"
+  },
+  {
+   "key": "无尘盒触发工作",
+   "event": "no_dust_box_water_box_do_task",
+   "event_name": "尘盒水箱未安装无法启动任务事件",
+   "kind": "故障",
+   "voice_text": "无尘盒触发工作",
+   "source": "ai_review"
+  },
+  {
+   "key": "回充暂停后再继续回充",
+   "event": "back_charger_resume",
+   "event_name": "继续回充事件",
+   "kind": "通用",
+   "voice_text": "继续回充",
+   "source": "ai_review"
+  },
+  {
+   "key": "前方激光传感器被遮挡",
+   "event": "line_laser_avoid_obstacle_dirty",
+   "event_name": "线激光避障传感器被遮挡",
+   "kind": "提醒",
+   "voice_text": "前方传感器脏污，请擦拭",
+   "source": "ai_review"
+  },
+  {
+   "key": "沿墙传感器被遮挡线激光tof被遮挡场景",
+   "event": "error_psd_dirty",
+   "event_name": "沿墙传感器异常",
+   "kind": "提醒",
+   "voice_text": "右侧传感器脏污，请擦拭",
+   "source": "ai_review"
+  },
+  {
+   "key": "沿墙传感器开路",
+   "event": "error_psd_dirty",
+   "event_name": "沿墙传感器异常",
+   "kind": "故障",
+   "voice_text": "沿墙传感器异常，请检查",
+   "source": "ai_review"
+  },
+  {
+   "key": "碰撞传感器被卡住",
+   "event": "error_collision_stuck",
+   "event_name": "前撞异常",
+   "kind": "故障",
+   "voice_text": "前挡卡住，请检查",
+   "source": "ai_review"
+  },
+  {
+   "key": "尘盒已满建议清理尘盒",
+   "event": "garbage_box_full",
+   "event_name": "尘盒满请清理尘盒事件",
+   "kind": "提醒",
+   "voice_text": "尘盒已满，请清理尘盒",
+   "source": "ai_review"
+  },
+  {
+   "key": "尘满取出尘盒",
+   "event": "garbage_box_full_out",
+   "event_name": "尘盒满取出尘盒事件",
+   "kind": "通用",
+   "voice_text": "尘满取出尘盒",
+   "source": "ai_review"
+  },
+  {
+   "key": "机器被困",
+   "event": "error_physical_trapped",
+   "event_name": "机器被困事件",
+   "kind": "故障",
+   "voice_text": "机器被困，请移动机器到其他位置启动",
+   "source": "ai_review"
+  },
+  {
+   "key": "在倾斜面上启动工作",
+   "event": "error_tilt_do_task",
+   "event_name": "请勿倾斜面上启动事件",
+   "kind": "故障",
+   "voice_text": "机器倾斜，请将机器放到水平地面启动",
+   "source": "ai_review"
+  },
+  {
+   "key": "主轮卡住",
+   "event": "error_left_wheel_stuck",
+   "event_name": "左轮卡住",
+   "kind": "故障",
+   "voice_text": "轮组卡住，请检查",
+   "source": "ai_review"
+  },
+  {
+   "key": "主刷卡住",
+   "event": "error_middle_brush_stuck",
+   "event_name": "中刷卡住",
+   "kind": "故障",
+   "voice_text": "滚刷卡住，请检查",
+   "source": "ai_review"
+  },
+  {
+   "key": "边刷卡住",
+   "event": "error_side_brush_stuck",
+   "event_name": "边刷卡住",
+   "kind": "提醒",
+   "voice_text": "边刷卡住，请检查",
+   "source": "ai_review"
+  },
+  {
+   "key": "返回基站失败回充失败",
+   "event": "back_charger_fail",
+   "event_name": "回充失败事件",
+   "kind": "故障",
+   "voice_text": "无法返回基站",
+   "source": "ai_review"
+  },
+  {
+   "key": "电量过低设备即将自动关机关机前播报",
+   "event": "low_bat_poweroff",
+   "event_name": "低电关机事件",
+   "kind": "通用",
+   "voice_text": "电量过低，系统即将自动关机。",
+   "source": "ai_review"
+  },
+  {
+   "key": "充电中关机",
+   "event": "try_poweroff_on_charger",
+   "event_name": "充电桩上无法关机事件",
+   "kind": "通用",
+   "voice_text": "机器正在充电，请取出机器再试",
+   "source": "ai_review"
+  },
+  {
+   "key": "定位机器人",
+   "event": "find_robot",
+   "event_name": "寻找机器人事件",
+   "kind": "通用",
+   "voice_text": "Hi，我在这里",
+   "source": "ai_review"
+  },
+  {
+   "key": "预约清洁生效全屋划区定点",
+   "event": "time_to_work_start",
+   "event_name": "预约清扫开始事件",
+   "kind": "提醒",
+   "voice_text": "预约清洁生效（全屋，划区，定点）",
+   "source": "ai_review"
+  },
+  {
+   "key": "开始恢复出厂设置",
+   "event": "request_factory_reset",
+   "event_name": "开始恢复出厂设置事件",
+   "kind": "通用",
+   "voice_text": "开始恢复出厂设置",
+   "source": "ai_review"
+  },
+  {
+   "key": "恢复出厂设置成功",
+   "event": "factory_reset_success",
+   "event_name": "恢复出厂设置成功事件",
+   "kind": "通用",
+   "voice_text": "已恢复出厂设置",
+   "source": "ai_review"
+  },
+  {
+   "key": "开始房间清洁",
+   "event": "auto_area_clean_start",
+   "event_name": "开始选区扫事件",
+   "kind": "通用",
+   "voice_text": "开始区域清洁",
+   "source": "ai_review"
+  },
+  {
+   "key": "风机异常",
+   "event": "error_fan_stuck",
+   "event_name": "风机卡住",
+   "kind": "故障",
+   "voice_text": "主机风机异常，请检查",
+   "source": "ai_review"
+  },
+  {
+   "key": "固件升级失败",
+   "event": "firmware_upgrade_fail",
+   "event_name": "固件升级失败事件",
+   "kind": "故障",
+   "voice_text": "升级失败，请重试",
+   "source": "ai_review"
+  },
+  {
+   "key": "房间区域清洁任务中定位失败",
+   "event": "clean_lost_pose",
+   "event_name": "清扫定位失败事件",
+   "kind": "提醒",
+   "voice_text": "定位失败，停止清洁，返回基站",
+   "source": "ai_review"
+  },
+  {
+   "key": "机器通过手机获取路由器信息后断开手机并开始连接路由器配网机器断网重连",
+   "event": "config_wifi_begin",
+   "event_name": "开始配置网络事件",
+   "kind": "通用",
+   "voice_text": "断网重连中",
+   "source": "ai_review"
+  },
+  {
+   "key": "收到集尘宝发出的集尘中信号",
+   "event": "collect_dust_start",
+   "event_name": "开始集尘事件",
+   "kind": "通用",
+   "voice_text": "开始集尘",
+   "source": "ai_review"
+  },
+  {
+   "key": "收到集尘宝发出集尘完成",
+   "event": "collect_dust_done",
+   "event_name": "集尘完成事件",
+   "kind": "通用",
+   "voice_text": "结束集尘",
+   "source": "ai_review"
+  },
+  {
+   "key": "尘袋不在位",
+   "event": "collect_dust_no_bag",
+   "event_name": "工作站未安装尘袋事件",
+   "kind": "故障",
+   "voice_text": "尘袋未安装",
+   "source": "ai_review"
+  },
+  {
+   "key": "集尘宝风机出现异常",
+   "event": "collect_dust_no_fan",
+   "event_name": "工作站风机异常事件",
+   "kind": "故障",
+   "voice_text": "基站风机异常，请检查。",
+   "source": "ai_review"
+  },
+  {
+   "key": "app调节吸力水量基站设置",
+   "event": "change_fan_level",
+   "event_name": "风机档位改变事件",
+   "kind": "通用",
+   "voice_text": "【0.3s短嘀】",
+   "source": "ai_review"
+  },
+  {
+   "key": "主机清水箱缺水",
+   "event": "error_water_box_empty",
+   "event_name": "检测到水箱中水量不足事件",
+   "kind": "提醒",
+   "voice_text": "清水箱水位低，请加水",
+   "source": "ai_review"
+  },
+  {
+   "key": "机器休眠唤醒",
+   "event": "exit_dormant",
+   "event_name": "退出休眠事件",
+   "kind": "通用",
+   "voice_text": "机器休眠唤醒",
+   "source": "ai_review"
+  },
+  {
+   "key": "配网密码错误",
+   "event": "incorrect_wifi_passwd",
+   "event_name": "配网验证错误事件",
+   "kind": "通用",
+   "voice_text": "密码错误",
+   "source": "ai_review"
+  },
+  {
+   "key": "配网失败",
+   "event": "distribution_network_timeout",
+   "event_name": "配网超时事件",
+   "kind": "通用",
+   "voice_text": "机器联网失败",
+   "source": "ai_review"
+  },
+  {
+   "key": "设置音量生效",
+   "event": "change_volum",
+   "event_name": "音量改变事件",
+   "kind": "通用",
+   "voice_text": "设置音量生效",
+   "source": "ai_review"
+  },
+  {
+   "key": "插入拖布",
+   "event": "mop_in",
+   "event_name": "拖布安装事件",
+   "kind": "通用",
+   "voice_text": "拖布已装回",
+   "source": "ai_review"
+  },
+  {
+   "key": "待机时取下拖布",
+   "event": "mop_out",
+   "event_name": "拖布移除事件",
+   "kind": "通用",
+   "voice_text": "拖布未安装",
+   "source": "ai_review"
+  },
+  {
+   "key": "开始遥控",
+   "event": "remote_ctrl_start",
+   "event_name": "开始遥控事件",
+   "kind": "通用",
+   "voice_text": "开始遥控模式",
+   "source": "ai_review"
+  },
+  {
+   "key": "退出遥控",
+   "event": "remote_ctrl_stop",
+   "event_name": "退出遥控事件",
+   "kind": "通用",
+   "voice_text": "退出遥控模式",
+   "source": "ai_review"
+  },
+  {
+   "key": "跌落传感器触发时启动工作运动过程中地检异常",
+   "event": "error_drop",
+   "event_name": "地检异常",
+   "kind": "故障",
+   "voice_text": "悬崖被触发，请把我移动到平坦的地面。",
+   "source": "ai_review"
+  },
+  {
+   "key": "不满足升级条件",
+   "event": "cannot_upgrade",
+   "event_name": "不满足升级条件事件",
+   "kind": "通用",
+   "voice_text": "请将机器放在基站上，确保电量充足",
+   "source": "ai_review"
+  },
+  {
+   "key": "升级中进行其他操作",
+   "event": "opt_during_upgrade",
+   "event_name": "升级中，请勿操作事件",
+   "kind": "通用",
+   "voice_text": "系统升级中，请稍等",
+   "source": "ai_review"
+  },
+  {
+   "key": "启动清扫轮子离地开关触发",
+   "event": "pickup",
+   "event_name": "离地检测异常",
+   "kind": "故障",
+   "voice_text": "轮子悬空，机器人无法正常启动。",
+   "source": "user"
+  },
+  {
+   "key": "工作中抱起设备或抱起状态下启动",
+   "event": "pickup",
+   "event_name": "离地检测异常",
+   "kind": "故障",
+   "voice_text": "主机悬空异常",
+   "source": "ai_review"
+  },
+  {
+   "key": "清洁区域无法到达",
+   "event": "clean_cannot_arrive",
+   "event_name": "清扫区域无法到达事件",
+   "kind": "提醒",
+   "voice_text": "无法到达指定区域",
+   "source": "ai_review"
+  },
+  {
+   "key": "从禁区启动清洁",
+   "event": "start_form_forbid_area",
+   "event_name": "在禁区中无法启动工作事件",
+   "kind": "故障",
+   "voice_text": "检测到禁区，请移动到新位置启动",
+   "source": "ai_review"
+  },
+  {
+   "key": "充电中电池异常电池开短路",
+   "event": "battery_disconnect",
+   "event_name": "电池异常事件",
+   "kind": "故障",
+   "voice_text": "电池受损或未安装",
+   "source": "ai_review"
+  },
+  {
+   "key": "规避地毯策略下地毯上启动拖地报错",
+   "event": "rug_start_error",
+   "event_name": "地毯启动报错事件",
+   "kind": "故障",
+   "voice_text": "【不需要，机器自行退出地毯清洁】",
+   "source": "ai_review"
+  },
+  {
+   "key": "雷达堵转",
+   "event": "error_kit_lidar_stuck",
+   "event_name": "雷达堵转事件",
+   "kind": "故障",
+   "voice_text": "雷达卡住，请检查",
+   "source": "ai_review"
+  },
+  {
+   "key": "雷达有效数据少或雷达无数据",
+   "event": "error_kit_lidar_err",
+   "event_name": "雷达异常事件",
+   "kind": "故障",
+   "voice_text": "雷达有效数据少或雷达无数据",
+   "source": "ai_review"
+  },
+  {
+   "key": "电池温度异常",
+   "event": "robot_battery_temperature_error",
+   "event_name": "电池包温度异常",
+   "kind": "故障",
+   "voice_text": "主机电池温度异常，请检查",
+   "source": "ai_review"
+  },
+  {
+   "key": "主刷开路或短路",
+   "event": "error_kit_middle_brush_err",
+   "event_name": "中刷开路或短路",
+   "kind": "故障",
+   "voice_text": "滚刷异常，请检查",
+   "source": "ai_review"
+  },
+  {
+   "key": "主轮开路或短路",
+   "event": "error_kit_right_wheel_err",
+   "event_name": "右轮开路或短路",
+   "kind": "故障",
+   "voice_text": "轮组异常，请检查",
+   "source": "ai_review"
+  },
+  {
+   "key": "边刷开路或短路",
+   "event": "error_kit_side_brush_err",
+   "event_name": "边刷开路或短路",
+   "kind": "提醒",
+   "voice_text": "边刷异常，请检查",
+   "source": "ai_review"
+  },
+  {
+   "key": "风机开路或短路",
+   "event": "error_kit_fan_err",
+   "event_name": "风机开路或短路",
+   "kind": "故障",
+   "voice_text": "风机开路或短路",
+   "source": "ai_review"
+  },
+  {
+   "key": "雷达开路或转速异常",
+   "event": "error_kit_lidar_err",
+   "event_name": "雷达异常事件",
+   "kind": "故障",
+   "voice_text": "激光传感器异常，请检查",
+   "source": "ai_review"
+  },
+  {
+   "key": "水泵开路或短路",
+   "event": "error_kit_pwm_water_pump_err",
+   "event_name": "水泵电机开路或短路",
+   "kind": "提醒",
+   "voice_text": "水泵异常，请检查",
+   "source": "ai_review"
+  },
+  {
+   "key": "回充失败找到基站但是上桩失败或者超时",
+   "event": "infrared_guidance_back_charger_fail",
+   "event_name": "回充失败，请移除集尘充电桩附近障碍物",
+   "kind": "故障",
+   "voice_text": "上桩失败",
+   "source": "ai_review"
+  },
+  {
+   "key": "旋转拖布开路或短路",
+   "event": "error_double_rotate_rag_motor_open_short_circuit",
+   "event_name": "双旋转抹布电机开路或短路",
+   "kind": "故障",
+   "voice_text": "拖布机械异常，请检查",
+   "source": "ai_review"
+  },
+  {
+   "key": "电量太低无法在充电桩上启动清洁事件",
+   "event": "low_battery_to_clean_on_charger",
+   "event_name": "电量太低无法在充电桩上启动清扫事件",
+   "kind": "通用",
+   "voice_text": "电量太低无法在充电桩上启动清洁事件",
+   "source": "ai_review"
+  },
+  {
+   "key": "集尘中断",
+   "event": "not_finish_dust_collect",
+   "event_name": "集尘失败事件",
+   "kind": "提醒",
+   "voice_text": "暂时不提供语音",
+   "source": "ai_review"
+  },
+  {
+   "key": "用户更换不同语音包设置",
+   "event": "apply_voice_package_success",
+   "event_name": "切换语音包成功",
+   "kind": "通用",
+   "voice_text": "用户更换不同语音包设置",
+   "source": "ai_review"
+  },
+  {
+   "key": "触发童锁",
+   "event": "child_lock_on",
+   "event_name": "开启童锁事件",
+   "kind": "通用",
+   "voice_text": "童锁已激活",
+   "source": "ai_review"
+  },
+  {
+   "key": "解除童锁",
+   "event": "child_lock_off",
+   "event_name": "关闭童锁事件",
+   "kind": "通用",
+   "voice_text": "童锁已解除",
+   "source": "ai_review"
+  },
+  {
+   "key": "童锁打开后触发按键",
+   "event": "child_lock_is_on",
+   "event_name": "童锁已开启事件",
+   "kind": "通用",
+   "voice_text": "按键已锁定，请解除童锁后再试",
+   "source": "ai_review"
+  },
+  {
+   "key": "基站清水泵短路过流异常",
+   "event": "station_clean_water_pump_short",
+   "event_name": "基站清水泵短路",
+   "kind": "故障",
+   "voice_text": "基站清水泵短路(过流)异常",
+   "source": "ai_review"
+  },
+  {
+   "key": "基站污水泵短路过流异常",
+   "event": "station_sewage_pump_short",
+   "event_name": "基站污水泵短路",
+   "kind": "故障",
+   "voice_text": "基站污水泵短路（过流）异常",
+   "source": "ai_review"
+  },
+  {
+   "key": "开始快速建图",
+   "event": "explore_map_start",
+   "event_name": "开始探索建图事件",
+   "kind": "通用",
+   "voice_text": "开始快速建图",
+   "source": "ai_review"
+  },
+  {
+   "key": "暂停快速建图",
+   "event": "explore_map_paused",
+   "event_name": "暂停探索建图事件",
+   "kind": "通用",
+   "voice_text": "暂停快速建图",
+   "source": "ai_review"
+  },
+  {
+   "key": "继续快速建图",
+   "event": "explore_map_resume",
+   "event_name": "继续探索建图事件",
+   "kind": "通用",
+   "voice_text": "继续快速建图",
+   "source": "ai_review"
+  },
+  {
+   "key": "基站清水泵开路异常",
+   "event": "station_clean_water_pump_open",
+   "event_name": "基站清水泵开路",
+   "kind": "故障",
+   "voice_text": "基站清水泵开路异常",
+   "source": "ai_review"
+  },
+  {
+   "key": "抽水后仍触发清洗盘水满的检测清洗盘水满清洗盘未安装",
+   "event": "station_clean_tray_water_full",
+   "event_name": "清洗托盘水满",
+   "kind": "故障",
+   "voice_text": "清洗盘未安装或水满，请检查",
+   "source": "ai_review"
+  },
+  {
+   "key": "基站污水泵开路异常",
+   "event": "station_sewage_pump_open",
+   "event_name": "基站污水泵开路",
+   "kind": "故障",
+   "voice_text": "基站污水泵开路异常",
+   "source": "ai_review"
+  },
+  {
+   "key": "烘干时机器被手动移出基站",
+   "event": "dry_mop_leave_charge",
+   "event_name": "烘干时，手动移出基站",
+   "kind": "通用",
+   "voice_text": "烘干暂停",
+   "source": "ai_review"
+  },
+  {
+   "key": "手动启动烘干回洗完毕后自动启动烘干暂停后继续烘干",
+   "event": "dry_mop_start",
+   "event_name": "烘干拖布开始事件",
+   "kind": "通用",
+   "voice_text": "开始烘干",
+   "source": "ai_review"
+  },
+  {
+   "key": "手动结束烘干",
+   "event": "dry_mop_done",
+   "event_name": "烘干拖布完成事件",
+   "kind": "通用",
+   "voice_text": "结束烘干",
+   "source": "ai_review"
+  },
+  {
+   "key": "双旋转拖布清扫卡住升降拖布卡住",
+   "event": "error_double_rotate_rag_motor_stuck",
+   "event_name": "双旋转抹布电机卡住",
+   "kind": "故障",
+   "voice_text": "拖布支架卡住，请检查",
+   "source": "ai_review"
+  },
+  {
+   "key": "基站清水箱未安装请检查取出清水箱时",
+   "event": "base_station_clean_water_tank_not_in",
+   "event_name": "基站清水箱不在位事件",
+   "kind": "故障",
+   "voice_text": "清水箱水位较低或未安装",
+   "source": "ai_review"
+  },
+  {
+   "key": "基站污水箱未安装请检查取出污水箱时污水桶满时",
+   "event": "base_station_sewage_tank_not_in",
+   "event_name": "基站污水箱不在位事件",
+   "kind": "故障",
+   "voice_text": "污水箱满或未安装到位，请检查",
+   "source": "ai_review"
+  },
+  {
+   "key": "基站清洁液未安装",
+   "event": "station_detergent_bottle_not_install",
+   "event_name": "基站清洁液瓶未安装",
+   "kind": "故障",
+   "voice_text": "清洁液未安装",
+   "source": "ai_review"
+  },
+  {
+   "key": "基站开始拖布清洗",
+   "event": "add_water_start",
+   "event_name": "加水开始事件",
+   "kind": "通用",
+   "voice_text": "开始拖布清洗",
+   "source": "user"
+  },
+  {
+   "key": "基站洗拖布过程中手动停止清洗拖布",
+   "event": "stop_wash_mop",
+   "event_name": "结束洗拖布",
+   "kind": "通用",
+   "voice_text": "停止清洗拖布",
+   "source": "ai_review"
+  },
+  {
+   "key": "基站正在执行其他任务请稍后再试",
+   "event": "do_not_operate_during_station_working",
+   "event_name": "基站工作中勿操作提醒事件",
+   "kind": "提醒",
+   "voice_text": "基站正在执行其他任务，请稍后再试",
+   "source": "ai_review"
+  },
+  {
+   "key": "建图完成",
+   "event": "explore_map_finish_back_charger",
+   "event_name": "探索建图完成后回充事件",
+   "kind": "通用",
+   "voice_text": "建图完成",
+   "source": "ai_review"
+  },
+  {
+   "key": "电磁阀短路过流",
+   "event": "station_water_valve_short",
+   "event_name": "基站电磁阀短路",
+   "kind": "故障",
+   "voice_text": "电磁阀短路（过流）",
+   "source": "ai_review"
+  },
+  {
+   "key": "电磁阀开路",
+   "event": "station_water_valve_open",
+   "event_name": "基站电磁阀开路",
+   "kind": "故障",
+   "voice_text": "电磁阀开路",
+   "source": "ai_review"
+  },
+  {
+   "key": "基站烘干风扇过流异常",
+   "event": "dry_mop_fan_short",
+   "event_name": "基站烘干风机短路",
+   "kind": "故障",
+   "voice_text": "基站烘干风扇过流异常",
+   "source": "ai_review"
+  },
+  {
+   "key": "基站烘干风扇开路短路异常",
+   "event": "dry_mop_fan_open",
+   "event_name": "基站烘干风机开路",
+   "kind": "故障",
+   "voice_text": "基站烘干风扇开路短路异常",
+   "source": "ai_review"
+  },
+  {
+   "key": "清洁液余量不足5%基站统计时语音播报一次",
+   "event": "station_detergent_not_enough",
+   "event_name": "基站清洁液不足",
+   "kind": "提醒",
+   "voice_text": "清洁液余量不足5%（基站统计）时，语音播报一次",
+   "source": "ai_review"
+  },
+  {
+   "key": "超声波传感器开短路触发",
+   "event": "error_ultrasonic_carpet_err",
+   "event_name": "超声波故障",
+   "kind": "提醒",
+   "voice_text": "超声波传感器异常，请检查",
+   "source": "ai_review"
+  },
+  {
+   "key": "暂停回洗拖布指开始回基站但还没回去的阶段",
+   "event": "back_wash_paused",
+   "event_name": "暂停回洗拖布事件",
+   "kind": "通用",
+   "voice_text": "停止回洗拖布",
+   "source": "ai_review"
+  },
+  {
+   "key": "任务中回洗拖布中途回洗以及手动下发回洗拖布",
+   "event": "go_back_mop_after_clean",
+   "event_name": "清扫任务中回洗拖布",
+   "kind": "通用",
+   "voice_text": "开始回洗拖布",
+   "source": "ai_review"
+  },
+  {
+   "key": "定位中请稍等",
+   "event": "clean_relocation",
+   "event_name": "清扫重定位",
+   "kind": "通用",
+   "voice_text": "定位中，请稍等",
+   "source": "ai_review"
+  },
+  {
+   "key": "定位成功继续清洁",
+   "event": "clean_location_success",
+   "event_name": "定位成功，继续清扫",
+   "kind": "通用",
+   "voice_text": "定位成功，继续清洁",
+   "source": "ai_review"
+  },
+  {
+   "key": "定位成功继续回充",
+   "event": "go_back_station_location_success",
+   "event_name": "定位成功，继续回充",
+   "kind": "通用",
+   "voice_text": "定位成功，继续回充",
+   "source": "ai_review"
+  },
+  {
+   "key": "定位成功继续建图",
+   "event": "explore_map_location_success",
+   "event_name": "定位成功，继续建图",
+   "kind": "通用",
+   "voice_text": "定位成功，继续建图",
+   "source": "ai_review"
+  },
+  {
+   "key": "边刷伸缩被卡住外扩收回",
+   "event": "error_side_brush_telescoping",
+   "event_name": "伸缩边刷电机异常",
+   "kind": "故障",
+   "voice_text": "边刷伸缩被卡住（外扩/收回）",
+   "source": "ai_review"
+  },
+  {
+   "key": "边刷摆臂开路或短路",
+   "event": "error_side_brush_telescoping",
+   "event_name": "伸缩边刷电机异常",
+   "kind": "故障",
+   "voice_text": "边刷摆臂开路或短路",
+   "source": "ai_review"
+  }
+ ]
+}

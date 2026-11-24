@@ -76,6 +76,10 @@ class UploadStream:
         if not ip or not paths or not self._license:
             return False
         self._ip = str(ip)
+        # ★ 订阅路径先记下来: 初始化失败时也要保留, 否则看门狗后续的
+        #   restart() 会因为"没有路径"直接放弃, 推送通道再也恢复不了
+        #   (实测: 模拟 wifi_reset 后断流, 之后所有发事件都报"推流未就绪")。
+        self._paths = list(paths)
         try:
             client, bp = self._load_api()
         except Exception as e:
@@ -100,6 +104,7 @@ class UploadStream:
             if client.AposSdkSetEventSubscribe(handle, cb, arr, len(topics)) != 0:
                 log.info("[上传流] 订阅 PropertyUpload 失败")
                 self.stop()
+                self._paths = list(paths)   # 失败也保留, 供看门狗重试
                 return False
             root = bp.Init()
             for path in paths:
@@ -110,11 +115,11 @@ class UploadStream:
                             256 if path in client_mod.BINARY_PATHS else 800)
                 bp.SetObject(root, path.encode("utf-8"), sub)
             self._root = root
-            self._paths = list(paths)
             client.AposSdkSendEvent(handle, b"/AposSystem/PropertyUploadAdd", root)
         except Exception as e:
             log.info(f"[上传流] 启动失败: {e}")
             self.stop()
+            self._paths = list(paths)       # 失败也保留, 供看门狗重试
             return False
         log.info(f"[上传流] 已订阅 {len(paths)} 条属性: {ip}")
         return True

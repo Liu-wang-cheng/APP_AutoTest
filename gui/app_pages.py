@@ -12,9 +12,10 @@ from PySide6.QtWidgets import (QComboBox, QFrame, QHBoxLayout, QLabel,
                                 QMessageBox, QPushButton, QStackedWidget,
                                 QVBoxLayout, QWidget)
 
+from gui.ai_config_page import AiConfigPage
 from gui.device_page import DevicePage
 from gui.sdk_setup import ensure_sdk
-
+from gui.widgets import NoWheelComboBox
 _NAV_QSS = """
 QPushButton#pageTab {
     background: transparent; border: none; border-bottom: 2px solid transparent;
@@ -37,7 +38,10 @@ class PageNav(QWidget):
         h.setSpacing(2)
         self.btn_test = QPushButton("自动化测试")
         self.btn_device = QPushButton("设备参数")
-        for b in (self.btn_test, self.btn_device):
+        self.btn_fault = QPushButton("故障模拟")
+        self.btn_ai = QPushButton("AI 配置")
+        for b in (self.btn_test, self.btn_device, self.btn_fault,
+                  self.btn_ai):
             b.setObjectName("pageTab")
             b.setCheckable(True)
             b.setAutoExclusive(True)
@@ -52,7 +56,9 @@ class PageNav(QWidget):
         self.btn_test.setChecked(True)
 
     def set_active(self, name):
-        (self.btn_device if name == "device" else self.btn_test).setChecked(True)
+        btn = {"device": self.btn_device, "fault": self.btn_fault,
+               "ai": self.btn_ai}.get(name, self.btn_test)
+        btn.setChecked(True)
 
     def set_running(self, running):
         self.run_status.setText("● 运行中" if running else "● 空闲")
@@ -181,13 +187,18 @@ def select_robot_ip(window, device, warn=True):
 def install_pages(window, test_page):
     """把测试页与设备页装进顶部导航 + QStackedWidget，返回新的中央控件。"""
     device = DevicePage(parent=window)
+    fault_page = device.fault_page
+    ai_page = AiConfigPage(parent=window)
     stack = QStackedWidget()
     stack.addWidget(test_page)
     stack.addWidget(device)
+    stack.addWidget(fault_page)
+    stack.addWidget(ai_page)
     nav = PageNav()
+    pages = {"test": 0, "device": 1, "fault": 2, "ai": 3}
 
     def show(name):
-        idx = 1 if name == "device" else 0
+        idx = pages.get(name, 0)
         stack.setCurrentIndex(idx)
         nav.set_active(name)
         # ★ 切页后强制重新布局: 页面隐藏期间若有布局请求进来(实测: 在设备参数页
@@ -199,10 +210,14 @@ def install_pages(window, test_page):
 
     nav.btn_test.clicked.connect(lambda: show("test"))
     nav.btn_device.clicked.connect(lambda: show("device"))
+    nav.btn_fault.clicked.connect(lambda: show("fault"))
+    nav.btn_ai.clicked.connect(lambda: show("ai"))
     device.connectionChanged.connect(nav.set_device)
     device.connectingChanged.connect(nav.set_connecting)
     window.test_page = test_page
     window.device_page = device
+    window.fault_page = fault_page
+    window.ai_page = ai_page
     window.pages = stack
     window.page_nav = nav
     window._show_page = show
@@ -215,7 +230,7 @@ def install_pages(window, test_page):
     rh.setContentsMargins(5, 4, 5, 4)
     rh.setSpacing(6)
     rh.addWidget(QLabel("扫地机IP"))
-    robot_combo = QComboBox()
+    robot_combo = NoWheelComboBox()
     robot_combo.setEditable(True)
     robot_combo.setSizeAdjustPolicy(QComboBox.AdjustToContents)
     robot_combo.setMinimumContentsLength(16)

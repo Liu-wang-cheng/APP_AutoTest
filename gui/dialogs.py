@@ -18,7 +18,7 @@ from core import vision
 from core.logger import get_logger
 from gui.step_card import _StepsEditor
 from gui.style import STYLESHEET
-from gui.widgets import _FitCombo, mouse_xy, CompactSpin, StaticCheckBox
+from gui.widgets import _FitCombo, mouse_xy, CompactSpin, StaticCheckBox, NoWheelComboBox
 
 log = get_logger()
 
@@ -272,7 +272,7 @@ class PreconditionEditDialog(QDialog):
         v = QVBoxLayout(self)
 
         v.addWidget(QLabel("类型"))
-        self.type_combo = QComboBox()
+        self.type_combo = NoWheelComboBox()
         for t, spec in self._types.items():
             self.type_combo.addItem(spec["label"], t)
         v.addWidget(self.type_combo)

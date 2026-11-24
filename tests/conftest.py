@@ -32,6 +32,9 @@ from pathlib import Path
 
 import pytest
 
+# 界面测试统一无头运行, 不弹前台窗口(用户 2026-11-16)
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 # 用 `from core.driver import BASE_DIR` 把名字绑定到**自己模块**的那批模块。
@@ -42,10 +45,13 @@ BASE_DIR_MODULES = (
     "core.actions.asserts",
     "core.actions.map_ops",
     "core.apos.sdk",
+    "core.apos.prd_memory",
     "core.excel_report",
     "core.paths",
     "core.runner",
     "core.vision",
+    "gui.ai_config_page",
+    "gui.device_page",
     "gui.main_window",
     "gui.step_card",
     "gui.style",

@@ -28,6 +28,7 @@
 | `check_env.py` | 离线: 运行环境自检(Python/依赖/ADB/设备) |
 | `check_update_e2e.py` | 手动: 起本地假更新源, 端到端走一遍"检查更新 → 下载 → 校验" |
 | `rehearse_autoupdate.py` | 手动: 用真实安装目录彩排一次自动更新(替换/回滚), **不碰线上** |
+| `publish_learning_seed.py` | 手动: 导出 verified/ai_review 学习库, 先让 AI 复核再由 `--upload` 提交 GitHub 分支/PR |
 | `runtime_snapshot.py` | 真机(P1): 进入设备页/菜单/打扫报告, 采集无障碍树+OCR 文本存快照; 与基线 diff —— 覆盖 APK 里没有的服务端/WebView 动态文案(基线有、现在没有 = 回归) |
 
 ## 三、约定

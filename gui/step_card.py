@@ -16,7 +16,7 @@ from core.driver import BASE_DIR
 from core.logger import get_logger
 from gui import schema
 from gui.style import CATEGORY_COLORS, _FIELD_LABEL_W
-from gui.widgets import ClickableFrame, _FitCombo, StaticCheckBox, make_action_menu
+from gui.widgets import ClickableFrame, _FitCombo, StaticCheckBox, make_action_menu, NoWheelComboBox
 
 log = get_logger()
 
@@ -699,7 +699,7 @@ class _StepsEditor(QWidget):
         # ★ APP 组选择: 模板/基准图下拉按所选组取模板(用户要求)
         grow = QHBoxLayout()
         grow.addWidget(QLabel("APP 组"))
-        self.group_combo = QComboBox()
+        self.group_combo = NoWheelComboBox()
         self.group_combo.addItems(self._list_groups())
         # 优先用传入的组, 其次当前上下文, 最后**默认第一个组** ——
         # 否则首次打开时组为空 → 模板上下文为空 → 模板下拉读不到模板,

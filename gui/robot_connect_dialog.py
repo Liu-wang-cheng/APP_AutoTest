@@ -1,3 +1,4 @@
+from gui.widgets import NoWheelComboBox
 # -*- coding: utf-8 -*-
 """执行前选择/切换扫地机 IP 的弹窗。
 
@@ -40,7 +41,7 @@ class RobotConnectDialog(QDialog):
         row = QHBoxLayout()
         row.setSpacing(8)
         row.addWidget(QLabel("扫地机IP"))
-        self.combo = QComboBox()
+        self.combo = NoWheelComboBox()
         self.combo.setEditable(True)
         self.combo.setSizeAdjustPolicy(QComboBox.AdjustToContents)
         self.combo.setMinimumWidth(280)

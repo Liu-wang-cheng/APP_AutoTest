@@ -162,6 +162,20 @@ def main():
         icon_path = os.path.join(assets, "app_icon.png")
     if os.path.isfile(icon_path):
         app.setWindowIcon(QIcon(icon_path))
+    # ★ 单实例: 两个实例会同时抢同一个机器人的 SDK 连接(上传流/librpc/7809),
+    #   表现为连接十几秒、推送中断、发送失败(用户 2026-11-17: 10.63 连不上)。
+    import tempfile
+    from PySide6.QtCore import QLockFile
+    from PySide6.QtWidgets import QMessageBox as _QMB
+    lock = QLockFile(os.path.join(tempfile.gettempdir(), "AutoTest.lock"))
+    if not lock.tryLock(200):
+        _QMB.warning(
+            None, "AutoTest 已在运行",
+            "检测到工具已经启动。\n"
+            "同时运行多个实例会争用同一个机器人的 SDK 连接，"
+            "导致连接慢、推送中断或发送失败。\n"
+            "请使用已经打开的窗口。")
+        return 0
     win = MainWindow()
     win.show()
     win.raise_()

@@ -148,6 +148,17 @@ VALUE_LABELS = {
     "work_status_disassemble_mop": "拆卸拖布",
     "work_status_collect_dust": "集尘中",
     "work_status_cut_hair": "割毛发",
+    # 厂商枚举里的其余工作状态(用户 2026-11-18)
+    "work_status_area_clean": "划区清扫中",
+    "work_status_segment_clean": "分区清扫中",
+    "work_status_curpoint_clean": "定点清扫中",
+    "work_status_back_charge": "回充中",
+    "work_status_back_charge_pause": "回充暂停",
+    "work_status_base_station": "基站任务中",
+    "work_status_base_station_pause": "基站任务暂停",
+    "work_status_error": "故障",
+    "work_status_remote": "遥控中",
+    "work_status_shutdown": "关机中",
     "CARRIER_WORK_IDLE": "空闲",
     "CARRIER_WORK_NORMAL": "正常工作",
     "CARRIER_WORK_NULL": "无效",
@@ -245,6 +256,30 @@ CURATED_GROUPS = [
         {"name": "工作状态", "vendor_name": "CleanAppStatus", "path": "/CleanTask/CleanAppStatus"},
         {"name": "底盘模式", "vendor_name": "CarrierWorkMode", "path": "/Carrier/CarrierWorkMode"},
     ]},
+    {"name": "清洁滚筒", "items": [
+        # 三种到位状态各自独立显示(用户 2026-11-18)
+        {"name": "清洁滚筒下降到位",
+         "path": "/KeyStretchingInPlaceDown/WorkState",
+         "labels": {"0": "未到位", "1": "到位"}},
+        {"name": "清洁滚筒外扩到位",
+         "path": "/KeyStretchingInPlaceEx/WorkState",
+         "labels": {"0": "未到位", "1": "到位"}},
+        {"name": "清洁滚筒抬升到位",
+         "path": "/KeyStretchingInPlaceUp/WorkState",
+         "labels": {"0": "未到位", "1": "到位"}},
+    ]},
+    {"name": "IMU", "items": [
+        {"name": "加速度X", "path": "/ImuImu/AccelX"},
+        {"name": "加速度Y", "path": "/ImuImu/AccelY"},
+        {"name": "加速度Z", "path": "/ImuImu/AccelZ"},
+        {"name": "角速度X", "path": "/ImuImu/GyroX"},
+        {"name": "角速度Y", "path": "/ImuImu/GyroY"},
+        {"name": "角速度Z", "path": "/ImuImu/GyroZ"},
+        # Z 轴角速度下面就是俯仰/横滚角(用户 2026-11-18),
+        # 取自 7809 调试帧(与 AutopackDebugger 同一套字节/公式)
+        {"name": "俯仰角", "path": "/Mcu/PitchAngle", "unit": "°"},
+        {"name": "横滚角", "path": "/Mcu/RollAngle", "unit": "°"},
+    ]},
     {"name": "沿墙红外", "items": [
         # 厂商面板「红外沿墙 → 沿墙距离」由 IrAlongWall 的 ADC 差值数组换算
         # （AutopackDebugger APOSSDKThread.UpdateIrAlongWallAdcDifData：
@@ -316,11 +351,37 @@ MCU_GROUP = {"name": "挡位（MCU反馈）", "items": [
 ]}
 
 
+#: 本项目不展示的厂商分组(三合一拖布电机/万向轮/振动电机, 用户 2026-11-18)
+HIDDEN_GROUPS = {"MotorThreeInOneMop", "SpinnerWheel", "VibrationMotor"}
+
+#: 10.21 实测取不到值的参数, 不再展示(用户 2026-11-18)
+MISSING_PATHS = {
+    "/DustdetDustdet/DustLevel",
+    "/DustdetDustdet/DustAmount",
+    "/KeyDrainTank/IsExistedBool",
+    "/KeyDrainTankEmpty/IsExistedBool",
+    "/KeyDrainTankFull/IsExistedBool",
+    "/IrRecvBackLeft/Data",
+    "/MotorMidLift/Curr",
+    "/KeyMidBrushLift/WorkState",
+    "/PointLaser/PointLaserData",
+    "/KeyRightWheelLiftUp/WorkState",
+    "/KeyLeftWheelLiftUp/WorkState",
+    "/MotorWheelLift/Curr",
+    "/MotorWheelLift/Speed",
+    "/KeySwivelWheelLiftUp/WorkState",
+    "/MotorSwivelWheelLift/Curr",
+}
+
+
 def _vendor_groups():
     seen = {it["path"] for g in CURATED_GROUPS for it in g["items"]}
     groups = []
     for p in VENDOR_PARAMS:
         path = p.get("path") or ""
+        # 这些分组/参数在本机型上取不到或已确认不要(用户 2026-11-18)
+        if p.get("group") in HIDDEN_GROUPS or path in MISSING_PATHS:
+            continue
         # 二进制 ADC 数组不是距离/状态，界面上不展示（用户 2026-11-09）
         if not path or path in seen or path in BINARY_PATHS:
             continue
@@ -520,6 +581,11 @@ CURVE_PAGES = [
             {"title": "IMU-角速度Y", "path": "/ImuImu/GyroY"},
             {"title": "IMU-角速度Z", "path": "/ImuImu/GyroZ"},
         ]},
+        {"name": "姿态角", "curves": [
+            # 取自 7809 调试帧里的姿态角(float, 毫弧度→度), 用户 2026-11-18
+            {"title": "IMU-俯仰角(°)", "path": "/Mcu/PitchAngle", "unit": "°"},
+            {"title": "IMU-横滚角(°)", "path": "/Mcu/RollAngle", "unit": "°"},
+        ]},
     ]},
 ]
 
@@ -587,6 +653,9 @@ def display_value(item, snapshot):
     raw = decode_value(item, raw)
     if raw is None:
         return ""
+    labels = item.get("labels")
+    if labels is not None:
+        return labels.get(str(raw).strip(), str(raw))
     if item.get("bit") is not None:
         try:
             return str((int(raw) >> int(item["bit"])) & 1)

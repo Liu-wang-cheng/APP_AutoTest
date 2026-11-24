@@ -47,6 +47,19 @@ FAULTS = [
 ]
 
 _BY_KEY = {f["key"]: f for f in FAULTS}
+_FAULT_EVENTS = {f["event"] for f in FAULTS}
+
+
+def is_fault_event(event):
+    """故障类事件：常用故障 + error_* 硬件异常 + 被困。其它业务/状态事件不算。"""
+    e = str(event or "").strip()
+    return (e in _FAULT_EVENTS or e.startswith("error_")
+            or "trapped" in e)
+
+
+def fault_event_list(expected=None):
+    """AI 解析/故障验证只针对故障类事件(用户 2026-11-12)。"""
+    return [p for p in presets(expected) if is_fault_event(p["event"])]
 
 #: 厂商模拟指令里的准确主题(用户 2026-11-11：界面不再让用户选，工具自动判断)。
 #: 从 AutopackDebugger 的 Simulation.PostEvent 反编译结果提取；不在表里的
@@ -68,6 +81,15 @@ EVENT_TOPICS = {
     "collect_dust_no_bag": "/event/onboard_ui",
     "collect_dust_no_fan": "/event/onboard_ui",
     "distribution_network_timeout": "/event/network",
+    "config_wifi_success": "/event/network",
+    "config_wifi_begin": "/event/network",
+    "network_config": "/event/network",
+    "network_config_voice": "/event/network",
+    "wifi_reset": "/event/network",
+    "wifi_reset_smart_mode": "/event/network",
+    "network_manager_reset_tuya_t4": "/event/network",
+    "network_manager_reset_xiaomi_normal": "/event/network",
+    "net_connect": "/event/onboard_ui",
     "dry_mop_fan_error": "/event/onboard_ui",
     "dust_box_water_box_out": "/event/robot_monitor",
     "enter_silent_mode": "/event/onboard_ui",
@@ -171,6 +193,12 @@ _LED_KEYS = ("rgb_led__home", "rgb_led__start", "rgb_led__power",
              "rgb_led__error", "rgb_led__ring")
 
 
+#: 设备实际处理时可能换成另一个事件名播报/亮灯(实测 2026-11-12)
+EVENT_ALIASES = {
+    "low_bat_need_recharge": ("low_battery_find_charger",),
+}
+
+
 def parse_verification(lines, event):
     """从设备日志里解析某故障的语音序号/灯显/故障码。
 
@@ -185,9 +213,16 @@ def parse_verification(lines, event):
     matched = []
     evidence = []
     in_led_block = False
+    # 精确匹配事件名, 避免 charging 命中 work_status_charging 这类干扰;
+    # 同时接受设备实际响应时使用的别名事件(如 low_bat_need_recharge →
+    # low_battery_find_charger 才有播报/灯显)。
+    names = [str(event)] + list(EVENT_ALIASES.get(str(event), ()))
+    ev_re = re.compile(
+        r"(?<![A-Za-z0-9_])(?:" + "|".join(re.escape(n) for n in names)
+        + r")(?![A-Za-z0-9_])")
     for _ts, line in lines:
         low = line.lower()
-        if event in line:
+        if ev_re.search(line):
             matched.append(line)
             # 只保留能说明"事件名/语音/灯显/故障码"的日志行; 过滤 id/JSON 回声
             if ("application_frame" in low
@@ -195,6 +230,10 @@ def parse_verification(lines, event):
                     or "musicplay" in low or "filename:" in low
                     or "code=" in low or "keylog" in low):
                 evidence.append(line)
+            # 只解析**本事件**的灯显, 避免上一条事件/状态恢复的灯显串进来
+            if any(k in line for k in ("led_show_base", "rgb_led",
+                                       "lights_effect_set", "RGB LED")):
+                _parse_led_line(line, led)
             # 灯显明细是后续几行 JSON: data: { / "rgb_led__home" : "white1_breathing"
             if "led_show_base" in low and "data:" in low:
                 in_led_block = True
@@ -213,18 +252,49 @@ def parse_verification(lines, event):
             # 灯显 JSON 的续行没有事件名, 但它们就是该事件的灯显参数
             if re.search(r'"rgb_led__\w+"\s*:\s*"', line):
                 evidence.append(line)
+                _parse_led_line(line, led)
             else:
                 in_led_block = False
-        if any(k in line for k in ("led_show_base", "rgb_led",
-                                   "lights_effect_set", "RGB LED")):
-            for key in _LED_KEYS:
-                m = re.search(r'"%s"\s*:\s*"([^"]*)"' % key, line)
-                if m and m.group(1) and key not in led:
-                    led[key] = m.group(1)
-            if "RGB LED show_mode" in line and not led:
-                led["show"] = line.strip()[-80:]
     return {"beep": beep or file_beep, "led": led, "code": code,
             "matched": matched[-8:], "evidence": evidence[-12:]}
+
+
+def _parse_led_line(line, led):
+    """解析一行里的灯效键值(仅在该事件的灯显块里调用)。"""
+    import re
+    for key in _LED_KEYS:
+        m = re.search(r'"%s"\s*:\s*"([^"]*)"' % key, line)
+        if m and m.group(1) and key not in led:
+            led[key] = m.group(1)
+    if "RGB LED show_mode" in line and "show" not in led:
+        led["show"] = line.strip()[-80:]
+
+
+def other_event_responses(lines, event, aliases=()):
+    """时间窗内其它事件的播报, 用于解释“触发后没捕获到本事件”。
+
+    返回 {event_name: beep}（只统计 application_frame/MusicPlay 的播报行）。
+    """
+    import re
+    known = {str(event)} | set(aliases or ())
+    known |= set(EVENT_ALIASES.get(str(event), ()))
+    out = {}
+    for _ts, line in lines:
+        low = line.lower()
+        if "application_frame" not in low and "musicplay" not in low:
+            continue
+        m = re.search(r"event(?:_id)?:?\s*([A-Za-z0-9_]+)", line)
+        if not m:
+            continue
+        name = m.group(1)
+        if name in known:
+            continue
+        b = re.search(r"beep:\s*(\d+)", line)
+        f = re.search(r"fileName:\s*(\d+)\.mp3", line)
+        beep = (b.group(1) if b else (f.group(1) if f else ""))
+        if beep and name not in out:
+            out[name] = beep
+    return out
 
 
 def highlight_log_line(line):
@@ -324,8 +394,12 @@ def led_name_maps(expected):
 def led_display(led, expected=None):
     """{rgb_led__home: red_slow_flick} → "RGB回充灯设备=红灯慢闪"（中文）。"""
     dev_names, effect_names = led_name_maps(expected)
+    # 统一顺序: 电源灯在前, 回充灯在后(用户 2026-11-16)
+    order = {"rgb_led__start": 0, "rgb_led__home": 1}
     parts = []
-    for dev, effect in (led or {}).items():
+    for dev, effect in sorted(
+            (led or {}).items(),
+            key=lambda kv: (order.get(kv[0], 2), str(kv[0]))):
         parts.append(f"{dev_names.get(dev, dev)}="
                      f"{effect_names.get(effect, effect)}")
     return "、".join(parts)
@@ -340,18 +414,28 @@ def compare(actual, expected, event):
     """
     exp = dict((expected or {}).get(event) or {})
     if not exp:
-        return {"ok": None, "problems": ["事件配置里没有该事件"],
+        return {"ok": None, "problems": ["AP平台未配置该事件"],
                 "expected": None}
     want = exp.get("sound") or ""
     want_led = exp.get("led") or {}
     if not want and not want_led:
         # 配置里有这个事件，但没配语音/灯显（用户 2026-11-11：应显示"未配置"）
-        return {"ok": None, "problems": ["事件配置里未配置语音/灯显"],
+        return {"ok": None, "problems": ["AP平台未配置语音/灯显"],
                 "expected": exp}
     problems = []
     got = str(actual.get("beep") or "")
-    if want and got != want:
-        problems.append(f"语音序号 期望 {want}, 实际 {got or '未捕获'}")
+
+    def _vno(value):
+        import re
+        m = re.search(r"\d+", str(value or ""))
+        return int(m.group(0)) if m else None
+
+    accepts = [want] + list(exp.get("acceptable_sounds") or [])
+    accept_nos = {_vno(x) for x in accepts if _vno(x) is not None}
+    want_label = "/".join(str(x) for x in accepts if str(x).strip())
+    if want and _vno(got) not in accept_nos:
+        problems.append(
+            f"语音序号 期望 {want_label}, 实际 {got or '未捕获'}")
     want_led = exp.get("led") or {}
     got_led = actual.get("led") or {}
     dev_names, effect_names = led_name_maps(expected)
@@ -369,6 +453,8 @@ def compare(actual, expected, event):
 def infer_topic(event):
     """按事件名猜主题：厂商模拟表里没有的事件才用这个兜底。"""
     e = str(event or "").strip()
+    if any(k in e for k in ("wifi", "network")):
+        return "/event/network"
     if e.startswith("error") or e.startswith("pickup"):
         return "/hardware/error"
     if any(k in e for k in ("dust_box", "water_box_out", "tank")):
@@ -402,6 +488,15 @@ EVENT_NAMES = {
     "charge_ok_resume_explore_map": "充电已完成继续探索建图事件",
     "clean_cannot_arrive": "清扫区域无法到达事件",
     "clean_finish": "清扫完成事件",
+    "config_wifi_success": "连接网络成功事件",
+    "config_wifi_begin": "开始配置网络事件",
+    "network_config": "重置网络事件",
+    "network_config_voice": "重置网络语音事件",
+    "wifi_reset": "WiFi 已重置事件",
+    "wifi_reset_smart_mode": "智能配网事件",
+    "network_manager_reset_tuya_t4": "切换涂鸦 T4 IOT 事件",
+    "network_manager_reset_xiaomi_normal": "切换米家 IOT 事件",
+    "net_connect": "网络已连接事件",
     "clean_lost_pose": "清扫定位失败事件",
     "collect_dust_done": "集尘完成事件",
     "collect_dust_full": "工作站尘袋已满事件",

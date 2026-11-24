@@ -48,11 +48,13 @@ def test_decode_value_frame():
 
 
 def test_decode_other_sensor_frame():
-    """1008/94：偏航角度、左右里程计(mm)、光流x轴偏移量。"""
+    """1008/94：偏航角度、左右里程计(mm)、光流、俯仰/横滚角。"""
     buf = bytearray(94)
     struct.pack_into("<HH", buf, 0, 1008, 2001)
     struct.pack_into("<III", buf, 40, 553571, 1147149, 1265990)
     struct.pack_into("<h", buf, 78, -8649)
+    # 与 AutopackDebugger 相同: 状态结构后两个 float(毫弧度) ×0.001×180/π
+    struct.pack_into("<ff", buf, 86, 13.4659, -3.763)
     s = McuStream()
     s._decode(bytes(buf))
     vals = s.values()
@@ -60,6 +62,8 @@ def test_decode_other_sensor_frame():
     assert vals["/Mcu/LeftOdometer"] == 1147149
     assert vals["/Mcu/RightOdometer"] == 1265990
     assert vals["/Mcu/OpticalFlowX"] == -8649
+    assert vals["/Mcu/PitchAngle"] == round(13.4659 * 0.0572957795130823, 2)
+    assert vals["/Mcu/RollAngle"] == round(-3.763 * 0.0572957795130823, 2)
 
 
 def test_ignores_other_frames():
@@ -283,6 +287,18 @@ def test_event_config_load_and_compare(tmp_path):
         "电源灯=红灯慢闪"
     assert faults.led_display({"rgb_led__start": "all_off"}, expect) == \
         "电源灯=all_off"
+    # 电源灯在前, 回充灯在后
+    both_expected = {"evt": {"led_names": {
+        "rgb_led__home": {"device": "RGB回充灯设备",
+                          "effect_id": "red_slow_flick",
+                          "effect": "红灯慢闪"},
+        "rgb_led__start": {"device": "RGB电源灯设备",
+                           "effect_id": "red_slow_flick",
+                           "effect": "红灯慢闪"}}}}
+    both = faults.led_display(
+        {"rgb_led__home": "red_slow_flick",
+         "rgb_led__start": "red_slow_flick"}, both_expected)
+    assert both.startswith("电源灯=") and "、回充灯=" in both
     actual = {"beep": "066", "led": {"rgb_led__start": "red_slow_flick"}}
     assert faults.compare(actual, expect, "error_fan_stuck")["ok"] is True
     bad = {"beep": "999", "led": {"rgb_led__start": "all_off"}}
@@ -418,3 +434,80 @@ def test_catalog_keeps_mcu_paths_out_of_apos_reads():
     # 但曲线定义里仍然有，用于画图
     titles = [c["path"] for g in page["groups"] for c in g["curves"]]
     assert "/Mcu/SideBrushControl" in titles
+
+
+def test_only_fault_events_are_parsed():
+    """AI 只解析故障类事件(用户 2026-11-12)。"""
+    from core.apos import faults
+    evs = {p["event"] for p in faults.fault_event_list()}
+    assert "error_fan_stuck" in evs
+    assert "error_physical_trapped" in evs
+    # 常用故障里的非 error_* 事件也算故障
+    assert "dust_box_water_box_out" in evs
+    assert "low_battery_to_clean_on_charger" in evs
+    # 业务/状态事件不解析
+    assert "clean_finish" not in evs
+    assert "enter_silent_mode" not in evs
+    assert "time_to_work_start" not in evs
+    assert all(faults.is_fault_event(e) for e in evs)
+
+
+def test_network_events_use_network_topic():
+    """联网/配网类事件要发到 /event/network, 否则设备只回显不播报(用户 2026-11-12)。"""
+    from core.apos.faults import topic_for
+    assert topic_for("config_wifi_success") == "/event/network"
+    assert topic_for("config_wifi_begin") == "/event/network"
+    assert topic_for("wifi_reset") == "/event/network"
+    assert topic_for("distribution_network_timeout") == "/event/network"
+    # net_connect 实测 /event/onboard_ui 可用
+    assert topic_for("net_connect") == "/event/onboard_ui"
+
+
+def test_led_parse_ignores_other_events():
+    """批量触发时, 其它事件/状态恢复的灯显不能串到当前事件(用户 2026-11-12)。"""
+    from core.apos.faults import parse_verification
+    lines = [
+        (1.0, "led_show_base.cpp:261 event_id: work_status_full_charging, "
+              "data: {"),
+        (1.0, '"rgb_led__home" : "white1_on"'),
+        (1.0, '"rgb_led__start" : "all_off"'),
+        (1.0, "application_frame.cpp:241 event:config_wifi_success, beep:004"),
+        (1.0, "led_show_base.cpp:261 event_id: config_wifi_success, data: {"),
+        (1.0, '"rgb_led__home" : "all_off"'),
+        (1.0, '"rgb_led__start" : "white1_on"'),
+    ]
+    res = parse_verification(lines, "config_wifi_success")
+    assert res["beep"] == "004"
+    assert res["led"] == {"rgb_led__home": "all_off",
+                          "rgb_led__start": "white1_on"}
+
+
+def test_parse_event_name_exact_not_substring():
+    """事件名精确匹配: charging 不能命中 work_status_charging 的语音。"""
+    from core.apos.faults import parse_verification
+    lines = [
+        (1.0, "application_frame.cpp:241 "
+              "event:work_status_charging, beep:099"),
+        (1.0, "application_frame.cpp:241 event:charging, beep:014"),
+    ]
+    res = parse_verification(lines, "charging")
+    assert res["beep"] == "014"
+    assert all("work_status_charging" not in ln for ln in res["evidence"])
+
+
+def test_low_battery_alias_voice_and_led():
+    """low_bat_need_recharge 实际由 low_battery_find_charger 播报/亮灯。"""
+    from core.apos.faults import parse_verification
+    lines = [
+        (1.0, "application_frame.cpp:241 event:low_bat_need_recharge"),
+        (1.0, "application_frame.cpp:241 "
+              "event:low_battery_find_charger, beep:011"),
+        (1.0, "led_show_base.cpp:261 event_id: low_battery_find_charger, "
+              "data: {"),
+        (1.0, '"rgb_led__home" : "red_on"'),
+        (1.0, '"rgb_led__start" : "red_on"'),
+    ]
+    res = parse_verification(lines, "low_bat_need_recharge")
+    assert res["beep"] == "011"
+    assert res["led"] == {"rgb_led__home": "red_on",
+                          "rgb_led__start": "red_on"}

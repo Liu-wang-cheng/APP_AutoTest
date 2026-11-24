@@ -1,0 +1,3250 @@
+version: 1
+prd: C:\Users\LD\Desktop\HS4_LED_Voice_Config.xlsx
+device:
+  base_station_version: 8.2.3.1
+  firmware_version: 2.4.17
+  model: CLA_HS4
+  sn: B43A89CL800003A
+saved_at: '2026-11-17 10:43:29'
+events:
+- qid: Q003
+  event: system_start
+  name: 系统启动完成事件
+  kind: 通用
+  voice: '003'
+  reuse_voice: ''
+  voice_text: 已开机
+  fault_code: ''
+  fault_push: ''
+  led_home: all_off
+  led_home_text: 关闭
+  led_start: white1_on
+  led_start_text: 白灯1长亮
+  voice_key: 设备上电开机待所有程序都启动成功后触发该场景
+  source: verified
+  event_options:
+  - event: system_start
+    name: 系统启动完成事件
+    fault_code: ''
+    fault_push: ''
+    kind: 通用
+    source: verified
+  note: 'PRD：设备上电开机，待所有程序都启动成功后，触发该场景
+
+    （Q003）'
+- qid: Q004
+  event: config_wifi_success
+  name: 连接网络成功事件
+  kind: 通用
+  voice: '004'
+  reuse_voice: ''
+  voice_text: 机器联网成功
+  fault_code: ''
+  fault_push: ''
+  led_home: ''
+  led_home_text: ''
+  led_start: ''
+  led_start_text: ''
+  voice_key: 机器配网成功机器断开网络后重新连上网
+  source: verified
+  event_options:
+  - event: config_wifi_success
+    name: 连接网络成功事件
+    fault_code: ''
+    fault_push: ''
+    kind: 通用
+    source: verified
+  note: 'PRD：机器配网成功/机器断开网络后重新连上网
+
+    （Q004）'
+- qid: Q005
+  event: wifi_reset
+  name: wifi已重置事件
+  kind: 通用
+  voice: '005'
+  reuse_voice: ''
+  voice_text: 机器等待联网
+  fault_code: ''
+  fault_push: ''
+  led_home: white1_slow_flick
+  led_home_text: 白灯1慢闪
+  led_start: white1_slow_flick
+  led_start_text: 白灯1慢闪
+  voice_key: 重置wifi
+  source: verified
+  event_options:
+  - event: wifi_reset
+    name: wifi已重置事件
+    fault_code: ''
+    fault_push: ''
+    kind: 通用
+    source: verified
+  note: 'PRD：重置WiFi
+
+    （Q005）'
+- qid: Q006
+  event: total_clean_start
+  name: 开始全局扫事件
+  kind: 通用
+  voice: '006'
+  reuse_voice: ''
+  voice_text: 开始清洁
+  fault_code: ''
+  fault_push: ''
+  led_home: all_off
+  led_home_text: 关闭
+  led_start: white1_on
+  led_start_text: 白灯1长亮
+  voice_key: 机器开始全局清扫
+  source: verified
+  event_options:
+  - event: total_clean_start
+    name: 开始全局扫事件
+    fault_code: ''
+    fault_push: ''
+    kind: 通用
+    source: verified
+  - event: mop_clean_start
+    name: 开始拖地事件
+    fault_code: ''
+    fault_push: ''
+    kind: 通用
+    source: ap
+  note: 'PRD：机器开始全局清扫
+
+    （Q006）'
+- qid: Q007
+  event: clean_paused
+  name: 暂停清扫事件
+  kind: 通用
+  voice: '007'
+  reuse_voice: ''
+  voice_text: 暂停清洁
+  fault_code: ''
+  fault_push: ''
+  led_home: all_off
+  led_home_text: 关闭
+  led_start: ''
+  led_start_text: ''
+  voice_key: 暂停清洁
+  source: verified
+  event_options:
+  - event: clean_paused
+    name: 暂停清扫事件
+    fault_code: ''
+    fault_push: ''
+    kind: 通用
+    source: verified
+  note: 'PRD：暂停清洁
+
+    （Q007）'
+- qid: Q008
+  event: clean_resume
+  name: 继续清扫事件
+  kind: 通用
+  voice: 008
+  reuse_voice: ''
+  voice_text: 继续清洁
+  fault_code: ''
+  fault_push: ''
+  led_home: all_off
+  led_home_text: 关闭
+  led_start: white1_on
+  led_start_text: 白灯1长亮
+  voice_key: 继续清洁需要包含中途定位成功后继续清洁的情形
+  source: verified
+  event_options:
+  - event: clean_resume
+    name: 继续清扫事件
+    fault_code: ''
+    fault_push: ''
+    kind: 通用
+    source: verified
+  - event: clean_location_success
+    name: 定位成功，继续清扫
+    fault_code: ''
+    fault_push: ''
+    kind: 通用
+    source: ap
+  note: 'PRD：继续清洁（需要包含中途定位成功后继续清洁的情形）
+
+    （Q008）'
+- qid: Q009
+  event: point_clean_start
+  name: 开始定点扫事件
+  kind: 通用
+  voice: 009
+  reuse_voice: ''
+  voice_text: 开始定点清洁
+  fault_code: ''
+  fault_push: ''
+  led_home: all_off
+  led_home_text: 关闭
+  led_start: all_off
+  led_start_text: 关闭
+  voice_key: 开始定点清洁
+  source: verified
+  event_options:
+  - event: point_clean_start
+    name: 开始定点扫事件
+    fault_code: ''
+    fault_push: ''
+    kind: 通用
+    source: verified
+  note: 'PRD：开始定点清洁
+
+    （Q009）'
+- qid: Q010
+  event: clean_finish
+  name: 清扫完成事件
+  kind: 通用
+  voice: '010'
+  reuse_voice: ''
+  voice_text: 清洁完成，返回基站
+  fault_code: '45'
+  fault_push: ''
+  led_home: white3_on
+  led_home_text: 白灯3常亮
+  led_start: all_off
+  led_start_text: 关闭
+  voice_key: 清洁完成全屋房间划区定点定制扫
+  source: verified
+  event_options:
+  - event: clean_finish
+    name: 清扫完成事件
+    fault_code: ''
+    fault_push: ''
+    kind: 通用
+    source: verified
+  - event: time_area_clean_mop_finish
+    name: 预约划区扫拖结束事件
+    fault_code: ''
+    fault_push: ''
+    kind: 通用
+    source: ap
+  note: 'PRD：清洁完成（全屋、房间、划区、定点、定制扫）
+
+    （Q010）'
+  code_source: actual
+- qid: Q011
+  event: low_battery_find_charger
+  name: 电量低启动回充事件
+  kind: 通用
+  voice: '011'
+  reuse_voice: ''
+  voice_text: 电量不足，返回基站
+  fault_code: ''
+  fault_push: ''
+  led_home: red_on
+  led_home_text: 红灯常亮
+  led_start: red_on
+  led_start_text: 红灯常亮
+  voice_key: 清洁中电量不足
+  source: verified
+  event_options:
+  - event: low_battery_find_charger
+    name: 电量低启动回充事件
+    fault_code: ''
+    fault_push: ''
+    kind: 通用
+    source: verified
+  - event: low_battery_to_clean
+    name: 电量太低无法启动清扫事件
+    fault_code: ''
+    fault_push: ''
+    kind: 通用
+    source: ap
+  note: 'PRD：清洁中电量不足
+
+    （Q011）'
+- qid: Q012
+  event: back_charger_start
+  name: 开始回充事件
+  kind: 通用
+  voice: '012'
+  reuse_voice: ''
+  voice_text: 开始回充
+  fault_code: ''
+  fault_push: ''
+  led_home: white1_slow_flick
+  led_home_text: 白灯1慢闪
+  led_start: all_off
+  led_start_text: 关闭
+  voice_key: 单独启动回充任务时触发
+  source: verified
+  event_options:
+  - event: back_charger_start
+    name: 开始回充事件
+    fault_code: ''
+    fault_push: ''
+    kind: 通用
+    source: verified
+  note: 'PRD：单独启动回充任务时触发
+
+    （Q012）'
+- qid: Q013
+  event: back_charger_paused
+  name: 回充暂停事件
+  kind: 通用
+  voice: '013'
+  reuse_voice: ''
+  voice_text: 暂停回充
+  fault_code: ''
+  fault_push: ''
+  led_home: all_off
+  led_home_text: 关闭
+  led_start: white1_breathing
+  led_start_text: 白灯1呼吸
+  voice_key: 暂停回充
+  source: verified
+  event_options:
+  - event: back_charger_paused
+    name: 回充暂停事件
+    fault_code: ''
+    fault_push: ''
+    kind: 通用
+    source: verified
+  - event: station_work_back_charger_pause
+    name: 基站工作中回充暂停事件
+    fault_code: ''
+    fault_push: ''
+    kind: 通用
+    source: ap
+  - event: work_status_back_charge_pause
+    name: 回充暂停状态
+    fault_code: ''
+    fault_push: ''
+    kind: 通用
+    source: ap
+  note: 'PRD：暂停回充
+
+    （Q013）'
+- qid: Q014
+  event: charging
+  name: 开始充电事件
+  kind: 通用
+  voice: '014'
+  reuse_voice: ''
+  voice_text: 开始充电
+  fault_code: ''
+  fault_push: ''
+  led_home: ''
+  led_home_text: ''
+  led_start: ''
+  led_start_text: ''
+  voice_key: 上桩充电
+  source: user
+  event_options:
+  - event: charging
+    name: 开始充电事件
+    fault_code: ''
+    fault_push: ''
+    kind: 通用
+    source: user
+  note: 'PRD：上桩充电
+
+    （Q014）'
+- qid: Q015
+  event: robot_in_base_station
+  name: 机器人已在基站内
+  kind: 通用
+  voice: '015'
+  reuse_voice: ''
+  voice_text: 充电中
+  fault_code: ''
+  fault_push: ''
+  led_home: ''
+  led_home_text: ''
+  led_start: ''
+  led_start_text: ''
+  voice_key: 充电时按回充按键播报
+  source: user
+  event_options:
+  - event: robot_in_base_station
+    name: 机器人已在基站内
+    fault_code: ''
+    fault_push: ''
+    kind: 通用
+    source: user
+  note: 'PRD：充电时按回充按键播报
+
+    （Q015）'
+- qid: Q016
+  event: charge_ok_resume_clean
+  name: 充电已完成继续清扫事件
+  kind: 通用
+  voice: '016'
+  reuse_voice: ''
+  voice_text: 电量充足，继续开始清洁
+  fault_code: ''
+  fault_push: ''
+  led_home: all_off
+  led_home_text: 关闭
+  led_start: white1_on
+  led_start_text: 白灯1长亮
+  voice_key: 充电满足断点续扫条件后自动下桩清扫
+  source: verified
+  event_options:
+  - event: charge_ok_resume_clean
+    name: 充电已完成继续清扫事件
+    fault_code: ''
+    fault_push: ''
+    kind: 通用
+    source: verified
+  note: 'PRD：充电满足断点续扫条件后，自动下桩清扫
+
+    （Q016）'
+- qid: Q017
+  event: low_battery_to_clean
+  name: 电量太低无法启动清扫事件
+  kind: 通用
+  voice: '017'
+  reuse_voice: ''
+  voice_text: 电量低
+  fault_code: ''
+  fault_push: ''
+  led_home: red_flick_3
+  led_home_text: 红灯快闪3次
+  led_start: red_flick_3
+  led_start_text: 红灯快闪3次
+  voice_key: 设备低电量启动清洁任务
+  source: verified
+  event_options:
+  - event: low_battery_to_clean
+    name: 电量太低无法启动清扫事件
+    fault_code: ''
+    fault_push: ''
+    kind: 通用
+    source: verified
+  note: 'PRD：设备低电量启动清洁任务
+
+    （Q017）'
+- qid: Q018
+  event: firmware_upgrade_down_start
+  name: 固件升级开始下载
+  kind: 通用
+  voice: 018
+  reuse_voice: ''
+  voice_text: 开始升级
+  fault_code: ''
+  fault_push: ''
+  led_home: white1_breathing
+  led_home_text: 白灯1呼吸
+  led_start: white1_breathing
+  led_start_text: 白灯1呼吸
+  voice_key: 开始升级固件
+  source: verified
+  event_options:
+  - event: firmware_upgrade_down_start
+    name: 固件升级开始下载
+    fault_code: ''
+    fault_push: ''
+    kind: 通用
+    source: verified
+  note: 'PRD：开始升级固件
+
+    （Q018）'
+- qid: Q019
+  event: firmware_upgrade_done
+  name: 固件升级完成事件
+  kind: 通用
+  voice: 019
+  reuse_voice: ''
+  voice_text: 升级完成
+  fault_code: ''
+  fault_push: ''
+  led_home: white1_on_3s
+  led_home_text: 白灯1亮3秒
+  led_start: white1_on_3s
+  led_start_text: 白灯1亮3秒
+  voice_key: 固件升级完成
+  source: verified
+  event_options:
+  - event: firmware_upgrade_done
+    name: 固件升级完成事件
+    fault_code: ''
+    fault_push: ''
+    kind: 通用
+    source: verified
+  note: 'PRD：固件升级完成
+
+    （Q019）'
+- qid: Q020
+  event: dust_box_water_box_out
+  name: 尘盒水箱移除事件
+  kind: 通用
+  voice: '020'
+  reuse_voice: ''
+  voice_text: 尘盒未安装
+  fault_code: ''
+  fault_push: ''
+  led_home: red_slow_flick
+  led_home_text: 红灯慢闪
+  led_start: red_slow_flick
+  led_start_text: 红灯慢闪
+  voice_key: 非尘满取出尘盒
+  source: verified
+  event_options:
+  - event: dust_box_water_box_out
+    name: 尘盒水箱移除事件
+    fault_code: ''
+    fault_push: ''
+    kind: 通用
+    source: verified
+  note: 'PRD：非尘满取出尘盒
+
+    （Q020）'
+- qid: Q021
+  event: dust_box_water_box_in
+  name: 尘盒水箱安装事件
+  kind: 通用
+  voice: '021'
+  reuse_voice: ''
+  voice_text: 尘盒已装回
+  fault_code: ''
+  fault_push: ''
+  led_home: all_off
+  led_home_text: 关闭
+  led_start: white1_on
+  led_start_text: 白灯1长亮
+  voice_key: 放回尘盒
+  source: verified
+  event_options:
+  - event: dust_box_water_box_in
+    name: 尘盒水箱安装事件
+    fault_code: ''
+    fault_push: ''
+    kind: 通用
+    source: verified
+  note: 'PRD：放回尘盒
+
+    （Q021）'
+- qid: Q022
+  event: shutdown
+  name: 关机事件
+  kind: 通用
+  voice: '022'
+  reuse_voice: ''
+  voice_text: 关机
+  fault_code: ''
+  fault_push: ''
+  led_home: ''
+  led_home_text: ''
+  led_start: ''
+  led_start_text: ''
+  voice_key: 主动关机设备自动关机时触发此场景
+  source: verified
+  event_options:
+  - event: shutdown
+    name: 关机事件
+    fault_code: ''
+    fault_push: ''
+    kind: 通用
+    source: verified
+  - event: bat_need_poweroff
+    name: 低电需要关机事件
+    fault_code: ''
+    fault_push: ''
+    kind: 通用
+    source: ap
+  - event: low_bat_poweroff
+    name: 低电关机事件
+    fault_code: ''
+    fault_push: ''
+    kind: 通用
+    source: ap
+  - event: power_off
+    name: 按键关机事件
+    fault_code: ''
+    fault_push: ''
+    kind: 通用
+    source: ap
+  note: 'PRD：主动关机/设备自动关机时触发此场景
+
+    （Q022）'
+- qid: Q023
+  event: restart_work_and_build_map
+  name: 定位失败,重新建图事件
+  kind: 通用
+  voice: '023'
+  reuse_voice: ''
+  voice_text: 定位失败，开始新建地图
+  fault_code: '49'
+  fault_push: ''
+  led_home: all_off
+  led_home_text: 关闭
+  led_start: white1_on
+  led_start_text: 白灯1长亮
+  voice_key: 全局清扫过程中定位失败触发重新建图时
+  source: verified
+  event_options:
+  - event: restart_work_and_build_map
+    name: 定位失败,重新建图事件
+    fault_code: ''
+    fault_push: ''
+    kind: 通用
+    source: verified
+  - event: restart_work_and_explore_map
+    name: 定位失败,重新探索建图事件
+    fault_code: ''
+    fault_push: ''
+    kind: 通用
+    source: ap
+  note: 'PRD：全局清扫过程中定位失败，触发重新建图时
+
+    （Q023）'
+  code_source: actual
+- qid: Q024
+  event: no_dust_box_water_box_do_task
+  name: 尘盒水箱未安装无法启动任务事件
+  kind: 故障
+  voice: '024'
+  reuse_voice: '020'
+  voice_text: 无尘盒触发工作
+  fault_code: '8'
+  fault_push: ''
+  led_home: red_slow_flick
+  led_home_text: 红灯慢闪
+  led_start: red_slow_flick
+  led_start_text: 红灯慢闪
+  voice_key: 无尘盒触发工作
+  source: verified
+  event_options:
+  - event: no_dust_box_water_box_do_task
+    name: 尘盒水箱未安装无法启动任务事件
+    fault_code: ''
+    fault_push: ''
+    kind: 故障
+    source: verified
+  note: 'PRD：无尘盒触发工作
+
+    （Q024）；复用语音Q020'
+  code_source: actual
+- qid: Q025
+  event: back_charger_resume
+  name: 继续回充事件
+  kind: 通用
+  voice: '025'
+  reuse_voice: ''
+  voice_text: 继续回充
+  fault_code: ''
+  fault_push: ''
+  led_home: white1_slow_flick
+  led_home_text: 白灯1慢闪
+  led_start: all_off
+  led_start_text: 关闭
+  voice_key: 回充暂停后再继续回充
+  source: verified
+  event_options:
+  - event: back_charger_resume
+    name: 继续回充事件
+    fault_code: ''
+    fault_push: ''
+    kind: 通用
+    source: verified
+  note: 'PRD：回充暂停后，再继续回充
+
+    （Q025）'
+- qid: Q028
+  event: error_front_wall_dirty
+  name: 检测到正前方避障传感器脏事件
+  kind: 提醒
+  voice: 028
+  reuse_voice: ''
+  voice_text: 前方传感器脏污，请擦拭
+  fault_code: '6'
+  fault_push: ''
+  led_home: red_flick_3
+  led_home_text: 红灯快闪3次
+  led_start: red_flick_3
+  led_start_text: 红灯快闪3次
+  voice_key: 前方激光传感器被遮挡
+  source: verified
+  event_options:
+  - event: error_front_wall_dirty
+    name: 检测到正前方避障传感器脏事件
+    fault_code: ''
+    fault_push: ''
+    kind: 提醒
+    source: verified
+  note: 'PRD：前方激光传感器被遮挡
+
+    （Q028）'
+  code_source: actual
+- qid: Q029
+  event: line_laser_wall_follow_dirty
+  name: 线激光沿墙传感器被遮挡
+  kind: 提醒
+  voice: 029
+  reuse_voice: ''
+  voice_text: 右侧传感器脏污，请擦拭
+  fault_code: '232'
+  fault_push: ''
+  led_home: red_flick_3
+  led_home_text: 红灯快闪3次
+  led_start: red_flick_3
+  led_start_text: 红灯快闪3次
+  voice_key: 沿墙传感器被遮挡线激光tof被遮挡场景
+  source: ai_review
+  event_options:
+  - event: line_laser_wall_follow_dirty
+    name: 线激光沿墙传感器被遮挡
+    fault_code: ''
+    fault_push: ''
+    kind: 提醒
+    source: ai_review
+  note: 'PRD：沿墙传感器被遮挡（线激光，Tof被遮挡场景）
+
+    （Q029）'
+  code_source: actual
+- qid: Q030
+  event: error_psd_dirty
+  name: 沿墙传感器异常
+  kind: 故障
+  voice: '030'
+  reuse_voice: ''
+  voice_text: 沿墙传感器异常，请检查
+  fault_code: '232'
+  fault_push: ''
+  led_home: red_slow_flick
+  led_home_text: 红灯慢闪
+  led_start: red_slow_flick
+  led_start_text: 红灯慢闪
+  voice_key: 沿墙传感器开路
+  source: user
+  event_options:
+  - event: error_psd_dirty
+    name: 沿墙传感器异常
+    fault_code: ''
+    fault_push: ''
+    kind: 故障
+    source: user
+  note: 'PRD：沿墙传感器开路
+
+    （Q030）'
+  code_source: actual
+- qid: Q031
+  event: error_collision_stuck
+  name: 前撞异常
+  kind: 故障
+  voice: '031'
+  reuse_voice: ''
+  voice_text: 前挡卡住，请检查
+  fault_code: '194'
+  fault_push: ''
+  led_home: ''
+  led_home_text: ''
+  led_start: red_alt_3
+  led_start_text: 红灯交替闪3次
+  voice_key: 碰撞传感器被卡住
+  source: verified
+  event_options:
+  - event: error_collision_stuck
+    name: 前撞异常
+    fault_code: ''
+    fault_push: ''
+    kind: 故障
+    source: verified
+  note: 'PRD：碰撞传感器被卡住
+
+    （Q031）'
+  code_source: actual
+- qid: Q032
+  event: garbage_box_full
+  name: 尘盒满请清理尘盒事件
+  kind: 提醒
+  voice: '032'
+  reuse_voice: ''
+  voice_text: 尘盒已满，请清理尘盒
+  fault_code: ''
+  fault_push: ''
+  led_home: ''
+  led_home_text: ''
+  led_start: ''
+  led_start_text: ''
+  voice_key: 尘盒已满建议清理尘盒
+  source: user
+  event_options:
+  - event: garbage_box_full
+    name: 尘盒满请清理尘盒事件
+    fault_code: ''
+    fault_push: ''
+    kind: 提醒
+    source: user
+  note: 'PRD：尘盒已满，建议清理尘盒
+
+    （Q032）'
+- qid: Q033
+  event: garbage_box_full_out
+  name: 尘盒满取出尘盒事件
+  kind: 通用
+  voice: '033'
+  reuse_voice: '020'
+  voice_text: 尘满取出尘盒
+  fault_code: ''
+  fault_push: ''
+  led_home: ''
+  led_home_text: ''
+  led_start: ''
+  led_start_text: ''
+  voice_key: 尘满取出尘盒
+  source: ai_review
+  event_options:
+  - event: garbage_box_full_out
+    name: 尘盒满取出尘盒事件
+    fault_code: ''
+    fault_push: ''
+    kind: 通用
+    source: ai_review
+  note: 'PRD：尘满取出尘盒
+
+    （Q033）；复用语音Q020'
+- qid: Q034
+  event: error_physical_trapped
+  name: 机器被困事件
+  kind: 故障
+  voice: '034'
+  reuse_voice: ''
+  voice_text: 机器被困，请移动机器到其他位置启动
+  fault_code: '0'
+  fault_push: ''
+  led_home: red_slow_flick
+  led_home_text: 红灯慢闪
+  led_start: red_slow_flick
+  led_start_text: 红灯慢闪
+  voice_key: 机器被困
+  source: verified
+  event_options:
+  - event: error_physical_trapped
+    name: 机器被困事件
+    fault_code: ''
+    fault_push: ''
+    kind: 故障
+    source: verified
+  - event: error_virtual_trapped
+    name: 机器禁区被困事件
+    fault_code: ''
+    fault_push: ''
+    kind: 故障
+    source: ap
+  note: 'PRD：机器被困
+
+    （Q034）'
+  code_source: actual
+- qid: Q035
+  event: error_tilt_do_task
+  name: 请勿倾斜面上启动事件
+  kind: 故障
+  voice: '035'
+  reuse_voice: ''
+  voice_text: 机器倾斜，请将机器放到水平地面启动
+  fault_code: '27'
+  fault_push: ''
+  led_home: red_slow_flick
+  led_home_text: 红灯慢闪
+  led_start: red_slow_flick
+  led_start_text: 红灯慢闪
+  voice_key: 在倾斜面上启动工作
+  source: verified
+  event_options:
+  - event: error_tilt_do_task
+    name: 请勿倾斜面上启动事件
+    fault_code: ''
+    fault_push: ''
+    kind: 故障
+    source: verified
+  note: 'PRD：在倾斜面上启动工作
+
+    （Q035）'
+  code_source: actual
+- qid: Q036
+  event: error_left_wheel_stuck
+  name: 左轮卡住
+  kind: 故障
+  voice: '036'
+  reuse_voice: ''
+  voice_text: 轮组卡住，请检查
+  fault_code: '157'
+  fault_push: ''
+  led_home: red_slow_flick
+  led_home_text: 红灯慢闪
+  led_start: red_slow_flick
+  led_start_text: 红灯慢闪
+  voice_key: 主轮卡住
+  source: verified
+  event_options:
+  - event: error_left_wheel_stuck
+    name: 左轮卡住
+    fault_code: ''
+    fault_push: ''
+    kind: 故障
+    source: verified
+  - event: error_right_wheel_stuck
+    name: 右轮卡住
+    fault_code: ''
+    fault_push: ''
+    kind: 故障
+    source: ap
+  note: 'PRD：主轮卡住
+
+    （Q036）'
+  code_source: actual
+- qid: Q037
+  event: error_middle_brush_stuck
+  name: 中刷卡住
+  kind: 故障
+  voice: '037'
+  reuse_voice: ''
+  voice_text: 滚刷卡住，请检查
+  fault_code: '156'
+  fault_push: ''
+  led_home: red_slow_flick
+  led_home_text: 红灯慢闪
+  led_start: red_slow_flick
+  led_start_text: 红灯慢闪
+  voice_key: 主刷卡住
+  source: verified
+  event_options:
+  - event: error_middle_brush_stuck
+    name: 中刷卡住
+    fault_code: ''
+    fault_push: ''
+    kind: 故障
+    source: verified
+  note: 'PRD：主刷卡住
+
+    （Q037）'
+  code_source: actual
+- qid: Q038
+  event: error_side_brush_stuck
+  name: 边刷卡住
+  kind: 提醒
+  voice: 038
+  reuse_voice: ''
+  voice_text: 边刷卡住，请检查
+  fault_code: '161'
+  fault_push: ''
+  led_home: red_flick_3
+  led_home_text: 红灯快闪3次
+  led_start: red_flick_3
+  led_start_text: 红灯快闪3次
+  voice_key: 边刷卡住
+  source: verified
+  event_options:
+  - event: error_side_brush_stuck
+    name: 边刷卡住
+    fault_code: ''
+    fault_push: ''
+    kind: 提醒
+    source: verified
+  - event: prompt_side_brush_stuck
+    name: 边刷卡住警告事件
+    fault_code: ''
+    fault_push: ''
+    kind: 提醒
+    source: ap
+  - event: side_brush_stuck_message
+    name: 边刷卡住报错事件
+    fault_code: ''
+    fault_push: ''
+    kind: 提醒
+    source: ap
+  note: 'PRD：边刷卡住
+
+    （Q038）'
+  code_source: actual
+- qid: Q039
+  event: back_charger_fail
+  name: 回充失败事件
+  kind: 故障
+  voice: 039
+  reuse_voice: ''
+  voice_text: 无法返回基站
+  fault_code: '179'
+  fault_push: ''
+  led_home: red_flick_3
+  led_home_text: 红灯快闪3次
+  led_start: red_flick_3
+  led_start_text: 红灯快闪3次
+  voice_key: 返回基站失败回充失败
+  source: verified
+  event_options:
+  - event: back_charger_fail
+    name: 回充失败事件
+    fault_code: ''
+    fault_push: ''
+    kind: 故障
+    source: verified
+  - event: back_charger_lost_pose
+    name: 回充定位失败事件
+    fault_code: ''
+    fault_push: ''
+    kind: 故障
+    source: ap
+  - event: clean_not_find_single_back_charger_fail
+    name: 回充不找桩并回充失败事件
+    fault_code: ''
+    fault_push: ''
+    kind: 故障
+    source: ap
+  note: 'PRD：返回基站失败，回充失败
+
+    （Q039）'
+  code_source: actual
+- qid: Q042
+  event: bat_need_poweroff
+  name: 低电需要关机事件
+  kind: 通用
+  voice: '042'
+  reuse_voice: ''
+  voice_text: 电量过低，系统即将自动关机。
+  fault_code: ''
+  fault_push: ''
+  led_home: ''
+  led_home_text: ''
+  led_start: ''
+  led_start_text: ''
+  voice_key: 电量过低设备即将自动关机关机前播报
+  source: ai_review
+  event_options:
+  - event: bat_need_poweroff
+    name: 低电需要关机事件
+    fault_code: ''
+    fault_push: ''
+    kind: 通用
+    source: ai_review
+  - event: low_bat_poweroff
+    name: 低电关机事件
+    fault_code: ''
+    fault_push: ''
+    kind: 通用
+    source: ap
+  note: 'PRD：电量过低，设备即将自动关机，关机前播报
+
+    （Q042）'
+- qid: Q043
+  event: try_poweroff_on_charger
+  name: 充电桩上无法关机事件
+  kind: 通用
+  voice: '043'
+  reuse_voice: ''
+  voice_text: 机器正在充电，请取出机器再试
+  fault_code: ''
+  fault_push: ''
+  led_home: red_flick_3
+  led_home_text: 红灯快闪3次
+  led_start: red_flick_3
+  led_start_text: 红灯快闪3次
+  voice_key: 充电中关机
+  source: verified
+  event_options:
+  - event: try_poweroff_on_charger
+    name: 充电桩上无法关机事件
+    fault_code: ''
+    fault_push: ''
+    kind: 通用
+    source: verified
+  note: 'PRD：充电中关机
+
+    （Q043）'
+- qid: Q045
+  event: find_robot
+  name: 寻找机器人事件
+  kind: 通用
+  voice: '045'
+  reuse_voice: ''
+  voice_text: Hi，我在这里
+  fault_code: ''
+  fault_push: ''
+  led_home: white3_flick_5
+  led_home_text: 白灯3快闪5次
+  led_start: white3_flick_5
+  led_start_text: 白灯3快闪5次
+  voice_key: 定位机器人
+  source: verified
+  event_options:
+  - event: find_robot
+    name: 寻找机器人事件
+    fault_code: ''
+    fault_push: ''
+    kind: 通用
+    source: verified
+  note: 'PRD：定位机器人
+
+    （Q045）'
+- qid: Q047
+  event: time_to_work_start
+  name: 预约清扫开始事件
+  kind: 提醒
+  voice: '047'
+  reuse_voice: ''
+  voice_text: 预约清洁生效（全屋，划区，定点）
+  fault_code: '41'
+  fault_push: ''
+  led_home: all_off
+  led_home_text: 关闭
+  led_start: white1_on
+  led_start_text: 白灯1长亮
+  voice_key: 预约清洁生效全屋划区定点
+  source: verified
+  event_options:
+  - event: time_to_work_start
+    name: 预约清扫开始事件
+    fault_code: ''
+    fault_push: ''
+    kind: 提醒
+    source: verified
+  - event: time_area_clean_mop_start
+    name: 预约划区扫拖事件
+    fault_code: ''
+    fault_push: ''
+    kind: 提醒
+    source: ap
+  - event: time_auto_area_clean_start
+    name: 预约选区扫事件
+    fault_code: ''
+    fault_push: ''
+    kind: 提醒
+    source: ap
+  - event: time_total_clean_mop_start
+    name: 预约全局扫拖事件
+    fault_code: ''
+    fault_push: ''
+    kind: 提醒
+    source: ap
+  note: 'PRD：预约清洁生效（全屋，划区，定点）
+
+    （Q047）'
+  code_source: actual
+- qid: Q059
+  event: request_factory_reset
+  name: 开始恢复出厂设置事件
+  kind: 通用
+  voice: 059
+  reuse_voice: ''
+  voice_text: 开始恢复出厂设置
+  fault_code: ''
+  fault_push: ''
+  led_home: white2_flick
+  led_home_text: 白灯2快闪
+  led_start: white1_flick
+  led_start_text: 白灯1快闪
+  voice_key: 开始恢复出厂设置
+  source: verified
+  event_options:
+  - event: request_factory_reset
+    name: 开始恢复出厂设置事件
+    fault_code: ''
+    fault_push: ''
+    kind: 通用
+    source: verified
+  note: 'PRD：开始恢复出厂设置
+
+    （Q059）'
+- qid: Q060
+  event: factory_reset_success
+  name: 恢复出厂设置成功事件
+  kind: 通用
+  voice: '060'
+  reuse_voice: ''
+  voice_text: 已恢复出厂设置
+  fault_code: ''
+  fault_push: ''
+  led_home: white2_flick
+  led_home_text: 白灯2快闪
+  led_start: white1_flick
+  led_start_text: 白灯1快闪
+  voice_key: 恢复出厂设置成功
+  source: verified
+  event_options:
+  - event: factory_reset_success
+    name: 恢复出厂设置成功事件
+    fault_code: ''
+    fault_push: ''
+    kind: 通用
+    source: verified
+  note: 'PRD：恢复出厂设置成功
+
+    （Q060）'
+- qid: Q065
+  event: auto_area_clean_start
+  name: 开始选区扫事件
+  kind: 通用
+  voice: '065'
+  reuse_voice: ''
+  voice_text: 开始区域清洁
+  fault_code: ''
+  fault_push: ''
+  led_home: all_off
+  led_home_text: 关闭
+  led_start: white1_on
+  led_start_text: 白灯1长亮
+  voice_key: 开始房间清洁
+  source: verified
+  event_options:
+  - event: auto_area_clean_start
+    name: 开始选区扫事件
+    fault_code: ''
+    fault_push: ''
+    kind: 通用
+    source: verified
+  - event: area_clean_start
+    name: 开始划区扫事件
+    fault_code: ''
+    fault_push: ''
+    kind: 通用
+    source: ap
+  note: 'PRD：开始房间清洁
+
+    （Q065）'
+- qid: Q066
+  event: error_fan_stuck
+  name: 风机卡住
+  kind: 故障
+  voice: '066'
+  reuse_voice: ''
+  voice_text: 主机风机异常，请检查
+  fault_code: '926'
+  fault_push: ''
+  led_home: red_slow_flick
+  led_home_text: 红灯慢闪
+  led_start: red_slow_flick
+  led_start_text: 红灯慢闪
+  voice_key: 风机异常
+  source: verified
+  event_options:
+  - event: error_fan_stuck
+    name: 风机卡住
+    fault_code: ''
+    fault_push: ''
+    kind: 故障
+    source: verified
+  note: 'PRD：风机异常
+
+    （Q066）'
+  code_source: actual
+- qid: Q070
+  event: firmware_upgrade_fail
+  name: 固件升级失败事件
+  kind: 故障
+  voice: '070'
+  reuse_voice: ''
+  voice_text: 升级失败，请重试
+  fault_code: ''
+  fault_push: ''
+  led_home: red_flick
+  led_home_text: 红灯快闪
+  led_start: red_flick
+  led_start_text: 红灯快闪
+  voice_key: 固件升级失败
+  source: verified
+  event_options:
+  - event: firmware_upgrade_fail
+    name: 固件升级失败事件
+    fault_code: ''
+    fault_push: ''
+    kind: 故障
+    source: verified
+  note: 'PRD：固件升级失败
+
+    （Q070）'
+- qid: Q072
+  event: clean_lost_pose
+  name: 清扫定位失败事件
+  kind: 提醒
+  voice: '072'
+  reuse_voice: ''
+  voice_text: 定位失败，停止清洁，返回基站
+  fault_code: '48'
+  fault_push: ''
+  led_home: red_flick_3
+  led_home_text: 红灯快闪3次
+  led_start: red_flick_3
+  led_start_text: 红灯快闪3次
+  voice_key: 房间区域清洁任务中定位失败
+  source: verified
+  event_options:
+  - event: clean_lost_pose
+    name: 清扫定位失败事件
+    fault_code: ''
+    fault_push: ''
+    kind: 提醒
+    source: verified
+  note: 'PRD：房间/区域 清洁任务中定位失败
+
+    （Q072）'
+  code_source: actual
+- qid: Q079
+  event: config_wifi_begin
+  name: 开始配置网络事件
+  kind: 通用
+  voice: 079
+  reuse_voice: ''
+  voice_text: 断网重连中
+  fault_code: ''
+  fault_push: ''
+  led_home: white1_flick
+  led_home_text: 白灯1快闪
+  led_start: white1_flick
+  led_start_text: 白灯1快闪
+  voice_key: 机器通过手机获取路由器信息后断开手机并开始连接路由器配网机器断网重连
+  source: verified
+  event_options:
+  - event: config_wifi_begin
+    name: 开始配置网络事件
+    fault_code: ''
+    fault_push: ''
+    kind: 通用
+    source: verified
+  note: 'PRD：机器通过手机获取路由器信息后，断开手机，并开始连接路由器配网/机器断网重连
+
+    （Q079）'
+- qid: Q080
+  event: collect_dust_start
+  name: 开始集尘事件
+  kind: 通用
+  voice: 080
+  reuse_voice: ''
+  voice_text: 开始集尘
+  fault_code: ''
+  fault_push: ''
+  led_home: white1_breathing
+  led_home_text: 白灯1呼吸
+  led_start: all_off
+  led_start_text: 关闭
+  voice_key: 收到集尘宝发出的集尘中信号
+  source: verified
+  event_options:
+  - event: collect_dust_start
+    name: 开始集尘事件
+    fault_code: ''
+    fault_push: ''
+    kind: 通用
+    source: verified
+  note: 'PRD：收到集尘宝发出的集尘中信号
+
+    （Q080）'
+- qid: Q081
+  event: collect_dust_done
+  name: 集尘完成事件
+  kind: 通用
+  voice: 081
+  reuse_voice: ''
+  voice_text: 结束集尘
+  fault_code: ''
+  fault_push: ''
+  led_home: white1_breathing
+  led_home_text: 白灯1呼吸
+  led_start: all_off
+  led_start_text: 关闭
+  voice_key: 收到集尘宝发出集尘完成
+  source: verified
+  event_options:
+  - event: collect_dust_done
+    name: 集尘完成事件
+    fault_code: ''
+    fault_push: ''
+    kind: 通用
+    source: verified
+  note: 'PRD：收到集尘宝发出集尘完成
+
+    （Q081）'
+- qid: Q083
+  event: collect_dust_no_bag
+  name: 工作站未安装尘袋事件
+  kind: 故障
+  voice: 083
+  reuse_voice: ''
+  voice_text: 尘袋未安装
+  fault_code: ''
+  fault_push: ''
+  led_home: red_flick_3
+  led_home_text: 红灯快闪3次
+  led_start: red_flick_3
+  led_start_text: 红灯快闪3次
+  voice_key: 尘袋不在位
+  source: verified
+  event_options:
+  - event: collect_dust_no_bag
+    name: 工作站未安装尘袋事件
+    fault_code: ''
+    fault_push: ''
+    kind: 故障
+    source: verified
+  note: 'PRD：尘袋不在位
+
+    （Q083）'
+- qid: Q084
+  event: collect_dust_no_fan
+  name: 工作站风机异常事件
+  kind: 故障
+  voice: 084
+  reuse_voice: ''
+  voice_text: 基站风机异常，请检查。
+  fault_code: '246'
+  fault_push: ''
+  led_home: red_flick
+  led_home_text: 红灯快闪
+  led_start: all_off
+  led_start_text: 关闭
+  voice_key: 集尘宝风机出现异常
+  source: verified
+  event_options:
+  - event: collect_dust_no_fan
+    name: 工作站风机异常事件
+    fault_code: ''
+    fault_push: ''
+    kind: 故障
+    source: verified
+  note: 'PRD：集尘宝风机出现异常
+
+    （Q084）'
+  code_source: actual
+- qid: Q085
+  event: change_fan_level
+  name: 风机档位改变事件
+  kind: 通用
+  voice: 085
+  reuse_voice: ''
+  voice_text: 【0.3s短嘀】
+  fault_code: ''
+  fault_push: ''
+  led_home: ''
+  led_home_text: ''
+  led_start: ''
+  led_start_text: ''
+  voice_key: app调节吸力水量基站设置
+  source: user
+  event_options:
+  - event: change_fan_level
+    name: 风机档位改变事件
+    fault_code: ''
+    fault_push: ''
+    kind: 通用
+    source: user
+  note: 'PRD：APP调节吸力/水量/基站设置
+
+    （Q085）'
+- qid: Q096
+  event: error_water_box_empty
+  name: 检测到水箱中水量不足事件
+  kind: 提醒
+  voice: 096
+  reuse_voice: ''
+  voice_text: 清水箱水位低，请加水
+  fault_code: ''
+  fault_push: ''
+  led_home: ''
+  led_home_text: ''
+  led_start: ''
+  led_start_text: ''
+  voice_key: 主机清水箱缺水
+  source: user
+  event_options:
+  - event: error_water_box_empty
+    name: 检测到水箱中水量不足事件
+    fault_code: ''
+    fault_push: ''
+    kind: 提醒
+    source: user
+  note: 'PRD：主机清水箱缺水
+
+    （Q096）'
+- qid: Q100
+  event: exit_dormant
+  name: 退出休眠事件
+  kind: 通用
+  voice: '100'
+  reuse_voice: 085
+  voice_text: 机器休眠唤醒
+  fault_code: ''
+  fault_push: ''
+  led_home: all_off
+  led_home_text: 关闭
+  led_start: white1_on
+  led_start_text: 白灯1长亮
+  voice_key: 机器休眠唤醒
+  source: verified
+  event_options:
+  - event: exit_dormant
+    name: 退出休眠事件
+    fault_code: ''
+    fault_push: ''
+    kind: 通用
+    source: verified
+  note: 'PRD：机器休眠唤醒
+
+    （Q100）；复用语音Q085'
+- qid: Q103
+  event: incorrect_wifi_passwd
+  name: 配网验证错误事件
+  kind: 通用
+  voice: '103'
+  reuse_voice: ''
+  voice_text: 密码错误
+  fault_code: ''
+  fault_push: ''
+  led_home: red_on
+  led_home_text: 红灯常亮
+  led_start: red_on
+  led_start_text: 红灯常亮
+  voice_key: 配网密码错误
+  source: verified
+  event_options:
+  - event: incorrect_wifi_passwd
+    name: 配网验证错误事件
+    fault_code: ''
+    fault_push: ''
+    kind: 通用
+    source: verified
+  note: 'PRD：配网密码错误
+
+    （Q103）'
+- qid: Q104
+  event: distribution_network_timeout
+  name: 配网超时事件
+  kind: 通用
+  voice: '104'
+  reuse_voice: ''
+  voice_text: 机器联网失败
+  fault_code: ''
+  fault_push: ''
+  led_home: all_off
+  led_home_text: 关闭
+  led_start: white1_on
+  led_start_text: 白灯1长亮
+  voice_key: 配网失败
+  source: verified
+  event_options:
+  - event: distribution_network_timeout
+    name: 配网超时事件
+    fault_code: ''
+    fault_push: ''
+    kind: 通用
+    source: verified
+  note: 'PRD：配网失败
+
+    （Q104）'
+- qid: Q107
+  event: change_volum
+  name: 音量改变事件
+  kind: 通用
+  voice: '107'
+  reuse_voice: 085
+  voice_text: 设置音量生效
+  fault_code: ''
+  fault_push: ''
+  led_home: ''
+  led_home_text: ''
+  led_start: ''
+  led_start_text: ''
+  voice_key: 设置音量生效
+  source: ai_review
+  event_options:
+  - event: change_volum
+    name: 音量改变事件
+    fault_code: ''
+    fault_push: ''
+    kind: 通用
+    source: ai_review
+  note: 'PRD：设置音量生效
+
+    （Q107）；复用语音Q085'
+- qid: Q110
+  event: mop_in
+  name: 拖布安装事件
+  kind: 通用
+  voice: '110'
+  reuse_voice: ''
+  voice_text: 拖布已装回
+  fault_code: ''
+  fault_push: ''
+  led_home: ''
+  led_home_text: ''
+  led_start: ''
+  led_start_text: ''
+  voice_key: 插入拖布
+  source: user
+  event_options:
+  - event: mop_in
+    name: 拖布安装事件
+    fault_code: ''
+    fault_push: ''
+    kind: 通用
+    source: user
+  - event: double_rotate_rag_in
+    name: 双旋转抹布安装事件
+    fault_code: ''
+    fault_push: ''
+    kind: 通用
+    source: ap
+  - event: double_rotate_rag_in_non_motion
+    name: 非运动双旋转拖布装入事件
+    fault_code: ''
+    fault_push: ''
+    kind: 通用
+    source: ap
+  note: 'PRD：插入拖布
+
+    （Q110）'
+- qid: Q111
+  event: mop_out
+  name: 拖布移除事件
+  kind: 通用
+  voice: '111'
+  reuse_voice: ''
+  voice_text: 拖布未安装
+  fault_code: ''
+  fault_push: ''
+  led_home: ''
+  led_home_text: ''
+  led_start: ''
+  led_start_text: ''
+  voice_key: 待机时取下拖布
+  source: user
+  event_options:
+  - event: mop_out
+    name: 拖布移除事件
+    fault_code: ''
+    fault_push: ''
+    kind: 通用
+    source: user
+  note: 'PRD：待机时取下拖布
+
+    （Q111）'
+- qid: Q114
+  event: remote_ctrl_start
+  name: 开始遥控事件
+  kind: 通用
+  voice: '114'
+  reuse_voice: ''
+  voice_text: 开始遥控模式
+  fault_code: ''
+  fault_push: ''
+  led_home: all_off
+  led_home_text: 关闭
+  led_start: white1_on
+  led_start_text: 白灯1长亮
+  voice_key: 开始遥控
+  source: verified
+  event_options:
+  - event: remote_ctrl_start
+    name: 开始遥控事件
+    fault_code: ''
+    fault_push: ''
+    kind: 通用
+    source: verified
+  note: 'PRD：开始遥控
+
+    （Q114）'
+- qid: Q115
+  event: remote_ctrl_stop
+  name: 退出遥控事件
+  kind: 通用
+  voice: '115'
+  reuse_voice: ''
+  voice_text: 退出遥控模式
+  fault_code: ''
+  fault_push: ''
+  led_home: ''
+  led_home_text: ''
+  led_start: ''
+  led_start_text: ''
+  voice_key: 退出遥控
+  source: user
+  event_options:
+  - event: remote_ctrl_stop
+    name: 退出遥控事件
+    fault_code: ''
+    fault_push: ''
+    kind: 通用
+    source: user
+  note: 'PRD：退出遥控
+
+    （Q115）'
+- qid: Q117
+  event: error_drop
+  name: 地检异常
+  kind: 故障
+  voice: '117'
+  reuse_voice: ''
+  voice_text: 悬崖被触发，请把我移动到平坦的地面。
+  fault_code: '160'
+  fault_push: ''
+  led_home: red_slow_flick
+  led_home_text: 红灯慢闪
+  led_start: red_slow_flick
+  led_start_text: 红灯慢闪
+  voice_key: 跌落传感器触发时启动工作运动过程中地检异常
+  source: verified
+  event_options:
+  - event: error_drop
+    name: 地检异常
+    fault_code: ''
+    fault_push: ''
+    kind: 故障
+    source: verified
+  - event: error_self_test_monitor_drop_false_trigger
+    name: rtt地检检测异常
+    fault_code: ''
+    fault_push: ''
+    kind: 故障
+    source: ap
+  note: 'PRD：跌落传感器触发时启动工作/运动过程中地检异常
+
+    （Q117）'
+  code_source: actual
+- qid: Q122
+  event: cannot_upgrade
+  name: 不满足升级条件事件
+  kind: 通用
+  voice: '122'
+  reuse_voice: ''
+  voice_text: 请将机器放在基站上，确保电量充足
+  fault_code: ''
+  fault_push: ''
+  led_home: red_flick_3
+  led_home_text: 红灯快闪3次
+  led_start: red_flick_3
+  led_start_text: 红灯快闪3次
+  voice_key: 不满足升级条件
+  source: verified
+  event_options:
+  - event: cannot_upgrade
+    name: 不满足升级条件事件
+    fault_code: ''
+    fault_push: ''
+    kind: 通用
+    source: verified
+  note: 'PRD：不满足升级条件
+
+    （Q122）'
+- qid: Q123
+  event: opt_during_upgrade
+  name: 升级中，请勿操作事件
+  kind: 通用
+  voice: '123'
+  reuse_voice: ''
+  voice_text: 系统升级中，请稍等
+  fault_code: ''
+  fault_push: ''
+  led_home: white1_breathing
+  led_home_text: 白灯1呼吸
+  led_start: white1_breathing
+  led_start_text: 白灯1呼吸
+  voice_key: 升级中进行其他操作
+  source: verified
+  event_options:
+  - event: opt_during_upgrade
+    name: 升级中，请勿操作事件
+    fault_code: ''
+    fault_push: ''
+    kind: 通用
+    source: verified
+  note: 'PRD：升级中进行其他操作
+
+    （Q123）'
+- qid: Q124
+  event: pickup
+  name: 离地检测异常
+  kind: 故障
+  voice: '124'
+  reuse_voice: ''
+  voice_text: 轮子悬空，机器人无法正常启动。
+  fault_code: '27'
+  fault_push: ''
+  led_home: red_slow_flick
+  led_home_text: 红灯慢闪
+  led_start: red_slow_flick
+  led_start_text: 红灯慢闪
+  voice_key: 启动清扫轮子离地开关触发
+  source: user
+  event_options:
+  - event: pickup
+    name: 离地检测异常
+    fault_code: ''
+    fault_push: ''
+    kind: 故障
+    source: user
+  note: 'PRD：启动清扫，轮子离地开关触发
+
+    （Q124）'
+  code_source: actual
+- qid: Q125
+  event: pickup
+  name: 离地检测异常
+  kind: 故障
+  voice: '125'
+  reuse_voice: ''
+  voice_text: 主机悬空异常
+  fault_code: '27'
+  fault_push: ''
+  led_home: red_slow_flick
+  led_home_text: 红灯慢闪
+  led_start: red_slow_flick
+  led_start_text: 红灯慢闪
+  voice_key: 工作中抱起设备或抱起状态下启动
+  source: verified
+  event_options:
+  - event: pickup
+    name: 离地检测异常
+    fault_code: ''
+    fault_push: ''
+    kind: 故障
+    source: verified
+  note: 'PRD：工作中抱起设备或抱起状态下启动
+
+    （Q125）'
+  code_source: actual
+- qid: Q126
+  event: clean_cannot_arrive
+  name: 清扫区域无法到达事件
+  kind: 提醒
+  voice: '126'
+  reuse_voice: ''
+  voice_text: 无法到达指定区域
+  fault_code: '79'
+  fault_push: ''
+  led_home: red_flick_3
+  led_home_text: 红灯快闪3次
+  led_start: red_flick_3
+  led_start_text: 红灯快闪3次
+  voice_key: 清洁区域无法到达
+  source: verified
+  event_options:
+  - event: clean_cannot_arrive
+    name: 清扫区域无法到达事件
+    fault_code: ''
+    fault_push: ''
+    kind: 提醒
+    source: verified
+  note: 'PRD：清洁区域无法到达
+
+    （Q126）'
+  code_source: actual
+- qid: Q127
+  event: start_form_forbid_area
+  name: 在禁区中无法启动工作事件
+  kind: 故障
+  voice: '127'
+  reuse_voice: ''
+  voice_text: 检测到禁区，请移动到新位置启动
+  fault_code: '85'
+  fault_push: ''
+  led_home: red_slow_flick
+  led_home_text: 红灯慢闪
+  led_start: red_slow_flick
+  led_start_text: 红灯慢闪
+  voice_key: 从禁区启动清洁
+  source: verified
+  event_options:
+  - event: start_form_forbid_area
+    name: 在禁区中无法启动工作事件
+    fault_code: ''
+    fault_push: ''
+    kind: 故障
+    source: verified
+  note: 'PRD：从禁区启动清洁
+
+    （Q127）'
+  code_source: actual
+- qid: Q128
+  event: battery_disconnect
+  name: 电池异常事件
+  kind: 故障
+  voice: '128'
+  reuse_voice: ''
+  voice_text: 电池受损或未安装
+  fault_code: '86'
+  fault_push: ''
+  led_home: red_slow_flick
+  led_home_text: 红灯慢闪
+  led_start: red_slow_flick
+  led_start_text: 红灯慢闪
+  voice_key: 充电中电池异常电池开短路
+  source: verified
+  event_options:
+  - event: battery_disconnect
+    name: 电池异常事件
+    fault_code: ''
+    fault_push: ''
+    kind: 故障
+    source: verified
+  note: 'PRD：充电中电池异常，电池开短路
+
+    （Q128）'
+  code_source: actual
+- qid: Q129
+  event: rug_start_error
+  name: 地毯启动报错事件
+  kind: 故障
+  voice: '129'
+  reuse_voice: ''
+  voice_text: 【不需要，机器自行退出地毯清洁】
+  fault_code: ''
+  fault_push: ''
+  led_home: red_slow_flick
+  led_home_text: 红灯慢闪
+  led_start: red_slow_flick
+  led_start_text: 红灯慢闪
+  voice_key: 规避地毯策略下地毯上启动拖地报错
+  source: verified
+  event_options:
+  - event: rug_start_error
+    name: 地毯启动报错事件
+    fault_code: ''
+    fault_push: ''
+    kind: 故障
+    source: verified
+  note: 'PRD：规避地毯策略下，地毯上启动拖地报错
+
+    （Q129）'
+- qid: Q130
+  event: error_kit_lidar_stuck
+  name: 雷达堵转事件
+  kind: 故障
+  voice: '130'
+  reuse_voice: ''
+  voice_text: 雷达卡住，请检查
+  fault_code: '12'
+  fault_push: ''
+  led_home: red_slow_flick
+  led_home_text: 红灯慢闪
+  led_start: red_slow_flick
+  led_start_text: 红灯慢闪
+  voice_key: 雷达堵转
+  source: verified
+  event_options:
+  - event: error_kit_lidar_stuck
+    name: 雷达堵转事件
+    fault_code: ''
+    fault_push: ''
+    kind: 故障
+    source: verified
+  note: 'PRD：雷达堵转
+
+    （Q130）'
+  code_source: actual
+- qid: Q131
+  event: error_kit_lidar_err
+  name: 雷达异常事件
+  kind: 故障
+  voice: '131'
+  reuse_voice: 028
+  voice_text: 雷达有效数据少或雷达无数据
+  fault_code: '12'
+  fault_push: ''
+  led_home: red_slow_flick
+  led_home_text: 红灯慢闪
+  led_start: red_slow_flick
+  led_start_text: 红灯慢闪
+  voice_key: 雷达有效数据少或雷达无数据
+  source: ai_review
+  event_options:
+  - event: error_kit_lidar_err
+    name: 雷达异常事件
+    fault_code: ''
+    fault_push: ''
+    kind: 故障
+    source: ai_review
+  - event: error_kit_lidar_obscured
+    name: 雷达被遮挡事件
+    fault_code: ''
+    fault_push: ''
+    kind: 故障
+    source: ap
+  note: 'PRD：雷达有效数据少或雷达无数据
+
+    （Q131）；复用语音Q028'
+  code_source: actual
+- qid: Q132
+  event: robot_battery_temperature_error
+  name: 电池包温度异常
+  kind: 故障
+  voice: '132'
+  reuse_voice: ''
+  voice_text: 主机电池温度异常，请检查
+  fault_code: '902'
+  fault_push: ''
+  led_home: ''
+  led_home_text: ''
+  led_start: ''
+  led_start_text: ''
+  voice_key: 电池温度异常
+  source: user
+  event_options:
+  - event: robot_battery_temperature_error
+    name: 电池包温度异常
+    fault_code: ''
+    fault_push: ''
+    kind: 故障
+    source: user
+  - event: error_battery_high_temperture
+    name: 电池充电高温报警
+    fault_code: ''
+    fault_push: ''
+    kind: 故障
+    source: ap
+  - event: error_battery_low_temperture
+    name: 电池充电低温报警
+    fault_code: ''
+    fault_push: ''
+    kind: 故障
+    source: ap
+  note: 'PRD：电池温度异常
+
+    （Q132）'
+  code_source: actual
+- qid: Q135
+  event: error_kit_middle_brush_err
+  name: 中刷开路或短路
+  kind: 故障
+  voice: '135'
+  reuse_voice: ''
+  voice_text: 滚刷异常，请检查
+  fault_code: '156'
+  fault_push: ''
+  led_home: red_slow_flick
+  led_home_text: 红灯慢闪
+  led_start: red_slow_flick
+  led_start_text: 红灯慢闪
+  voice_key: 主刷开路或短路
+  source: verified
+  event_options:
+  - event: error_kit_middle_brush_err
+    name: 中刷开路或短路
+    fault_code: ''
+    fault_push: ''
+    kind: 故障
+    source: verified
+  note: 'PRD：主刷开路或短路
+
+    （Q135）'
+  code_source: actual
+- qid: Q136
+  event: error_kit_right_wheel_err
+  name: 右轮开路或短路
+  kind: 故障
+  voice: '136'
+  reuse_voice: ''
+  voice_text: 轮组异常，请检查
+  fault_code: '3'
+  fault_push: ''
+  led_home: red_slow_flick
+  led_home_text: 红灯慢闪
+  led_start: red_slow_flick
+  led_start_text: 红灯慢闪
+  voice_key: 主轮开路或短路
+  source: verified
+  event_options:
+  - event: error_kit_right_wheel_err
+    name: 右轮开路或短路
+    fault_code: ''
+    fault_push: ''
+    kind: 故障
+    source: verified
+  - event: error_kit_left_wheel_err
+    name: 左轮开路或短路
+    fault_code: ''
+    fault_push: ''
+    kind: 故障
+    source: ap
+  note: 'PRD：主轮开路或短路
+
+    （Q136）'
+  code_source: actual
+- qid: Q137
+  event: error_kit_side_brush_err
+  name: 边刷开路或短路
+  kind: 提醒
+  voice: '137'
+  reuse_voice: ''
+  voice_text: 边刷异常，请检查
+  fault_code: ''
+  fault_push: ''
+  led_home: red_slow_flick
+  led_home_text: 红灯慢闪
+  led_start: red_slow_flick
+  led_start_text: 红灯慢闪
+  voice_key: 边刷开路或短路
+  source: verified
+  event_options:
+  - event: error_kit_side_brush_err
+    name: 边刷开路或短路
+    fault_code: ''
+    fault_push: ''
+    kind: 提醒
+    source: verified
+  note: 'PRD：边刷开路或短路
+
+    （Q137）'
+- qid: Q138
+  event: error_kit_fan_err
+  name: 风机开路或短路
+  kind: 故障
+  voice: '138'
+  reuse_voice: '066'
+  voice_text: 风机开路或短路
+  fault_code: '926'
+  fault_push: ''
+  led_home: red_slow_flick
+  led_home_text: 红灯慢闪
+  led_start: red_slow_flick
+  led_start_text: 红灯慢闪
+  voice_key: 风机开路或短路
+  source: verified
+  event_options:
+  - event: error_kit_fan_err
+    name: 风机开路或短路
+    fault_code: ''
+    fault_push: ''
+    kind: 故障
+    source: verified
+  note: 'PRD：风机开路或短路
+
+    （Q138）；复用语音Q066'
+  code_source: actual
+- qid: Q139
+  event: error_kit_lidar_err
+  name: 雷达异常事件
+  kind: 故障
+  voice: '139'
+  reuse_voice: ''
+  voice_text: 激光传感器异常，请检查
+  fault_code: '12'
+  fault_push: ''
+  led_home: red_slow_flick
+  led_home_text: 红灯慢闪
+  led_start: red_slow_flick
+  led_start_text: 红灯慢闪
+  voice_key: 雷达开路或转速异常
+  source: verified
+  event_options:
+  - event: error_kit_lidar_err
+    name: 雷达异常事件
+    fault_code: ''
+    fault_push: ''
+    kind: 故障
+    source: verified
+  - event: error_kit_lidar_speed
+    name: 雷达控速异常事件
+    fault_code: ''
+    fault_push: ''
+    kind: 故障
+    source: ap
+  note: 'PRD：雷达开路或转速异常
+
+    （Q139）'
+  code_source: actual
+- qid: Q140
+  event: error_kit_pwm_water_pump_err
+  name: 水泵电机开路或短路
+  kind: 提醒
+  voice: '140'
+  reuse_voice: ''
+  voice_text: 水泵异常，请检查
+  fault_code: '184'
+  fault_push: ''
+  led_home: red_flick_3
+  led_home_text: 红灯快闪3次
+  led_start: red_flick_3
+  led_start_text: 红灯快闪3次
+  voice_key: 水泵开路或短路
+  source: verified
+  event_options:
+  - event: error_kit_pwm_water_pump_err
+    name: 水泵电机开路或短路
+    fault_code: ''
+    fault_push: ''
+    kind: 提醒
+    source: verified
+  note: 'PRD：水泵开路或短路
+
+    （Q140）'
+  code_source: actual
+- qid: Q141
+  event: infrared_guidance_back_charger_fail
+  name: 回充失败，请移除集尘充电桩附近障碍物
+  kind: 故障
+  voice: '141'
+  reuse_voice: ''
+  voice_text: 上桩失败
+  fault_code: '244'
+  fault_push: ''
+  led_home: red_flick_3
+  led_home_text: 红灯快闪3次
+  led_start: red_flick_3
+  led_start_text: 红灯快闪3次
+  voice_key: 回充失败找到基站但是上桩失败或者超时
+  source: user
+  event_options:
+  - event: infrared_guidance_back_charger_fail
+    name: 回充失败，请移除集尘充电桩附近障碍物
+    fault_code: ''
+    fault_push: ''
+    kind: 故障
+    source: user
+  note: 'PRD：回充失败：找到基站，但是上桩失败或者超时
+
+    （Q141）'
+  code_source: actual
+- qid: Q154
+  event: error_double_rotate_rag_motor_open_short_circuit
+  name: 双旋转抹布电机开路或短路
+  kind: 故障
+  voice: '154'
+  reuse_voice: ''
+  voice_text: 拖布机械异常，请检查
+  fault_code: ''
+  fault_push: ''
+  led_home: red_slow_flick
+  led_home_text: 红灯慢闪
+  led_start: red_slow_flick
+  led_start_text: 红灯慢闪
+  voice_key: 旋转拖布开路或短路
+  source: verified
+  event_options:
+  - event: error_double_rotate_rag_motor_open_short_circuit
+    name: 双旋转抹布电机开路或短路
+    fault_code: ''
+    fault_push: ''
+    kind: 故障
+    source: verified
+  - event: error_kit_l_rotate_rag_motor_err
+    name: 左拖布开路或短路
+    fault_code: ''
+    fault_push: ''
+    kind: 故障
+    source: ap
+  - event: error_kit_r_rotate_rag_motor_err
+    name: 右拖布开路或短路
+    fault_code: ''
+    fault_push: ''
+    kind: 故障
+    source: ap
+  note: 'PRD：旋转拖布开路或短路
+
+    （Q154）'
+- qid: Q187
+  event: low_battery_to_clean_on_charger
+  name: 电量太低无法在充电桩上启动清扫事件
+  kind: 通用
+  voice: '187'
+  reuse_voice: '017'
+  voice_text: 电量太低无法在充电桩上启动清洁事件
+  fault_code: '928'
+  fault_push: ''
+  led_home: red_flick_3
+  led_home_text: 红灯快闪3次
+  led_start: red_flick_3
+  led_start_text: 红灯快闪3次
+  voice_key: 电量太低无法在充电桩上启动清洁事件
+  source: verified
+  event_options:
+  - event: low_battery_to_clean_on_charger
+    name: 电量太低无法在充电桩上启动清扫事件
+    fault_code: ''
+    fault_push: ''
+    kind: 通用
+    source: verified
+  note: 'PRD：电量太低无法在充电桩上启动清洁事件
+
+    （Q187）；复用语音Q017'
+  code_source: actual
+- qid: Q191
+  event: not_finish_dust_collect
+  name: 集尘失败事件
+  kind: 提醒
+  voice: '191'
+  reuse_voice: ''
+  voice_text: 暂时不提供语音
+  fault_code: ''
+  fault_push: ''
+  led_home: red_flick_3
+  led_home_text: 红灯快闪3次
+  led_start: red_flick_3
+  led_start_text: 红灯快闪3次
+  voice_key: 集尘中断
+  source: user
+  event_options:
+  - event: not_finish_dust_collect
+    name: 集尘失败事件
+    fault_code: ''
+    fault_push: ''
+    kind: 提醒
+    source: user
+  note: 'PRD：集尘中断
+
+    （Q191）'
+- qid: Q240
+  event: apply_voice_package_success
+  name: 切换语音包成功
+  kind: 通用
+  voice: '240'
+  reuse_voice: '045'
+  voice_text: 用户更换不同语音包设置
+  fault_code: ''
+  fault_push: ''
+  led_home: all_off
+  led_home_text: 关闭
+  led_start: white1_flick_3
+  led_start_text: 白灯1快闪3次
+  voice_key: 用户更换不同语音包设置
+  source: verified
+  event_options:
+  - event: apply_voice_package_success
+    name: 切换语音包成功
+    fault_code: ''
+    fault_push: ''
+    kind: 通用
+    source: verified
+  note: 'PRD：用户更换不同语音包设置
+
+    （Q240）；复用语音Q045'
+- qid: Q241
+  event: child_lock_on
+  name: 开启童锁事件
+  kind: 通用
+  voice: '241'
+  reuse_voice: ''
+  voice_text: 童锁已激活
+  fault_code: ''
+  fault_push: ''
+  led_home: ''
+  led_home_text: ''
+  led_start: ''
+  led_start_text: ''
+  voice_key: 触发童锁
+  source: user
+  event_options:
+  - event: child_lock_on
+    name: 开启童锁事件
+    fault_code: ''
+    fault_push: ''
+    kind: 通用
+    source: user
+  note: 'PRD：触发童锁
+
+    （Q241）'
+- qid: Q242
+  event: child_lock_off
+  name: 关闭童锁事件
+  kind: 通用
+  voice: '242'
+  reuse_voice: ''
+  voice_text: 童锁已解除
+  fault_code: ''
+  fault_push: ''
+  led_home: ''
+  led_home_text: ''
+  led_start: ''
+  led_start_text: ''
+  voice_key: 解除童锁
+  source: user
+  event_options:
+  - event: child_lock_off
+    name: 关闭童锁事件
+    fault_code: ''
+    fault_push: ''
+    kind: 通用
+    source: user
+  note: 'PRD：解除童锁
+
+    （Q242）'
+- qid: Q244
+  event: child_lock_is_on
+  name: 童锁已开启事件
+  kind: 通用
+  voice: '244'
+  reuse_voice: ''
+  voice_text: 按键已锁定，请解除童锁后再试
+  fault_code: ''
+  fault_push: ''
+  led_home: ''
+  led_home_text: ''
+  led_start: red_alt_3
+  led_start_text: 红灯交替闪3次
+  voice_key: 童锁打开后触发按键
+  source: verified
+  event_options:
+  - event: child_lock_is_on
+    name: 童锁已开启事件
+    fault_code: ''
+    fault_push: ''
+    kind: 通用
+    source: verified
+  note: 'PRD：童锁打开后，触发按键
+
+    （Q244）'
+- qid: Q251
+  event: station_clean_water_pump_short
+  name: 基站清水泵短路
+  kind: 故障
+  voice: '251'
+  reuse_voice: ''
+  voice_text: 基站清水泵短路(过流)异常
+  fault_code: '235'
+  fault_push: ''
+  led_home: red_flick_3
+  led_home_text: 红灯快闪3次
+  led_start: red_flick_3
+  led_start_text: 红灯快闪3次
+  voice_key: 基站清水泵短路过流异常
+  source: verified
+  event_options:
+  - event: station_clean_water_pump_short
+    name: 基站清水泵短路
+    fault_code: ''
+    fault_push: ''
+    kind: 故障
+    source: verified
+  note: 'PRD：基站清水泵短路(过流)异常
+
+    （Q251）'
+  code_source: actual
+- qid: Q252
+  event: station_sewage_pump_short
+  name: 基站污水泵短路
+  kind: 故障
+  voice: '252'
+  reuse_voice: ''
+  voice_text: 基站污水泵短路（过流）异常
+  fault_code: '235'
+  fault_push: ''
+  led_home: red_flick_3
+  led_home_text: 红灯快闪3次
+  led_start: red_flick_3
+  led_start_text: 红灯快闪3次
+  voice_key: 基站污水泵短路过流异常
+  source: verified
+  event_options:
+  - event: station_sewage_pump_short
+    name: 基站污水泵短路
+    fault_code: ''
+    fault_push: ''
+    kind: 故障
+    source: verified
+  note: 'PRD：基站污水泵短路（过流）异常
+
+    （Q252）'
+  code_source: actual
+- qid: Q255
+  event: explore_map_start
+  name: 开始探索建图事件
+  kind: 通用
+  voice: '255'
+  reuse_voice: ''
+  voice_text: 开始快速建图
+  fault_code: ''
+  fault_push: ''
+  led_home: all_off
+  led_home_text: 关闭
+  led_start: white1_on
+  led_start_text: 白灯1长亮
+  voice_key: 开始快速建图
+  source: verified
+  event_options:
+  - event: explore_map_start
+    name: 开始探索建图事件
+    fault_code: ''
+    fault_push: ''
+    kind: 通用
+    source: verified
+  note: 'PRD：开始快速建图
+
+    （Q255）'
+- qid: Q256
+  event: explore_map_paused
+  name: 暂停探索建图事件
+  kind: 通用
+  voice: '256'
+  reuse_voice: ''
+  voice_text: 暂停快速建图
+  fault_code: ''
+  fault_push: ''
+  led_home: all_off
+  led_home_text: 关闭
+  led_start: white1_breathing
+  led_start_text: 白灯1呼吸
+  voice_key: 暂停快速建图
+  source: verified
+  event_options:
+  - event: explore_map_paused
+    name: 暂停探索建图事件
+    fault_code: ''
+    fault_push: ''
+    kind: 通用
+    source: verified
+  - event: work_status_explore_map_pause
+    name: 探索建图暂停状态
+    fault_code: ''
+    fault_push: ''
+    kind: 通用
+    source: ap
+  note: 'PRD：暂停快速建图
+
+    （Q256）'
+- qid: Q257
+  event: explore_map_resume
+  name: 继续探索建图事件
+  kind: 通用
+  voice: '257'
+  reuse_voice: ''
+  voice_text: 继续快速建图
+  fault_code: ''
+  fault_push: ''
+  led_home: all_off
+  led_home_text: 关闭
+  led_start: white1_on
+  led_start_text: 白灯1长亮
+  voice_key: 继续快速建图
+  source: verified
+  event_options:
+  - event: explore_map_resume
+    name: 继续探索建图事件
+    fault_code: ''
+    fault_push: ''
+    kind: 通用
+    source: verified
+  note: 'PRD：继续快速建图
+
+    （Q257）'
+- qid: Q261
+  event: station_clean_water_pump_open
+  name: 基站清水泵开路
+  kind: 故障
+  voice: '261'
+  reuse_voice: ''
+  voice_text: 基站清水泵开路异常
+  fault_code: '235'
+  fault_push: ''
+  led_home: red_flick_3
+  led_home_text: 红灯快闪3次
+  led_start: red_flick_3
+  led_start_text: 红灯快闪3次
+  voice_key: 基站清水泵开路异常
+  source: verified
+  event_options:
+  - event: station_clean_water_pump_open
+    name: 基站清水泵开路
+    fault_code: ''
+    fault_push: ''
+    kind: 故障
+    source: verified
+  note: 'PRD：基站清水泵开路异常
+
+    （Q261）'
+  code_source: actual
+- qid: Q262
+  event: station_clean_tray_water_full
+  name: 清洗托盘水满
+  kind: 故障
+  voice: '262'
+  reuse_voice: ''
+  voice_text: 清洗盘未安装或水满，请检查
+  fault_code: '911'
+  fault_push: ''
+  led_home: ''
+  led_home_text: ''
+  led_start: ''
+  led_start_text: ''
+  voice_key: 抽水后仍触发清洗盘水满的检测清洗盘水满清洗盘未安装
+  source: user
+  event_options:
+  - event: station_clean_tray_water_full
+    name: 清洗托盘水满
+    fault_code: ''
+    fault_push: ''
+    kind: 故障
+    source: user
+  note: 'PRD：抽水后，仍触发清洗盘水满的检测/清洗盘水满/清洗盘未安装
+
+    （Q262）'
+  code_source: actual
+- qid: Q264
+  event: station_sewage_pump_open
+  name: 基站污水泵开路
+  kind: 故障
+  voice: '264'
+  reuse_voice: ''
+  voice_text: 基站污水泵开路异常
+  fault_code: '235'
+  fault_push: ''
+  led_home: red_flick_3
+  led_home_text: 红灯快闪3次
+  led_start: red_flick_3
+  led_start_text: 红灯快闪3次
+  voice_key: 基站污水泵开路异常
+  source: verified
+  event_options:
+  - event: station_sewage_pump_open
+    name: 基站污水泵开路
+    fault_code: ''
+    fault_push: ''
+    kind: 故障
+    source: verified
+  note: 'PRD：基站污水泵开路异常
+
+    （Q264）'
+  code_source: actual
+- qid: Q265
+  event: dry_mop_leave_charge
+  name: 烘干时，手动移出基站
+  kind: 通用
+  voice: '265'
+  reuse_voice: ''
+  voice_text: 烘干暂停
+  fault_code: ''
+  fault_push: ''
+  led_home: ''
+  led_home_text: ''
+  led_start: ''
+  led_start_text: ''
+  voice_key: 烘干时机器被手动移出基站
+  source: user
+  event_options:
+  - event: dry_mop_leave_charge
+    name: 烘干时，手动移出基站
+    fault_code: ''
+    fault_push: ''
+    kind: 通用
+    source: user
+  note: 'PRD：烘干时，机器被手动移出基站
+
+    （Q265）'
+- qid: Q266
+  event: dry_mop_start
+  name: 烘干拖布开始事件
+  kind: 通用
+  voice: '266'
+  reuse_voice: ''
+  voice_text: 开始烘干
+  fault_code: ''
+  fault_push: ''
+  led_home: ''
+  led_home_text: ''
+  led_start: ''
+  led_start_text: ''
+  voice_key: 手动启动烘干回洗完毕后自动启动烘干暂停后继续烘干
+  source: user
+  event_options:
+  - event: dry_mop_start
+    name: 烘干拖布开始事件
+    fault_code: ''
+    fault_push: ''
+    kind: 通用
+    source: user
+  note: 'PRD：手动启动烘干、回洗完毕后自动启动烘干、暂停后继续烘干
+
+    （Q266）'
+- qid: Q267
+  event: dry_mop_done
+  name: 烘干拖布完成事件
+  kind: 通用
+  voice: '267'
+  reuse_voice: ''
+  voice_text: 结束烘干
+  fault_code: ''
+  fault_push: ''
+  led_home: ''
+  led_home_text: ''
+  led_start: ''
+  led_start_text: ''
+  voice_key: 手动结束烘干
+  source: user
+  event_options:
+  - event: dry_mop_done
+    name: 烘干拖布完成事件
+    fault_code: ''
+    fault_push: ''
+    kind: 通用
+    source: user
+  note: 'PRD：手动结束烘干
+
+    （Q267）'
+- qid: Q270
+  event: error_double_rotate_rag_motor_stuck
+  name: 双旋转抹布电机卡住
+  kind: 故障
+  voice: '270'
+  reuse_voice: ''
+  voice_text: 拖布支架卡住，请检查
+  fault_code: '903'
+  fault_push: ''
+  led_home: red_slow_flick
+  led_home_text: 红灯慢闪
+  led_start: red_slow_flick
+  led_start_text: 红灯慢闪
+  voice_key: 双旋转拖布清扫卡住升降拖布卡住
+  source: verified
+  event_options:
+  - event: error_double_rotate_rag_motor_stuck
+    name: 双旋转抹布电机卡住
+    fault_code: ''
+    fault_push: ''
+    kind: 故障
+    source: verified
+  note: 'PRD：双旋转拖布清扫卡住/升降拖布卡住
+
+    （Q270）'
+  code_source: actual
+- qid: Q274
+  event: base_station_clean_water_tank_not_in
+  name: 基站清水箱不在位事件
+  kind: 故障
+  voice: '274'
+  reuse_voice: ''
+  voice_text: 清水箱水位较低或未安装
+  fault_code: '916'
+  fault_push: ''
+  led_home: red_flick_3
+  led_home_text: 红灯快闪3次
+  led_start: red_flick_3
+  led_start_text: 红灯快闪3次
+  voice_key: 基站清水箱未安装请检查取出清水箱时
+  source: verified
+  event_options:
+  - event: base_station_clean_water_tank_not_in
+    name: 基站清水箱不在位事件
+    fault_code: ''
+    fault_push: ''
+    kind: 故障
+    source: verified
+  - event: base_station_clean_water_tank_out
+    name: 基站清水箱取出
+    fault_code: ''
+    fault_push: ''
+    kind: 故障
+    source: ap
+  note: 'PRD：基站清水箱未安装，请检查；取出清水箱时
+
+    （Q274）'
+  code_source: actual
+- qid: Q275
+  event: base_station_sewage_tank_full
+  name: 基站污水箱满事件
+  kind: 故障
+  voice: '275'
+  reuse_voice: ''
+  voice_text: 污水箱满或未安装到位，请检查
+  fault_code: '917'
+  fault_push: ''
+  led_home: red_flick_3
+  led_home_text: 红灯快闪3次
+  led_start: red_flick_3
+  led_start_text: 红灯快闪3次
+  voice_key: 基站污水箱未安装请检查取出污水箱时污水桶满时
+  source: verified
+  event_options:
+  - event: base_station_sewage_tank_full
+    name: 基站污水箱满事件
+    fault_code: ''
+    fault_push: ''
+    kind: 故障
+    source: verified
+  note: 'PRD：基站污水箱未安装，请检查；取出污水箱时；污水桶满时
+
+    （Q275）'
+  code_source: actual
+- qid: Q289
+  event: station_detergent_bottle_not_install
+  name: 基站清洁液瓶未安装
+  kind: 故障
+  voice: '289'
+  reuse_voice: ''
+  voice_text: 清洁液未安装
+  fault_code: '915'
+  fault_push: ''
+  led_home: ''
+  led_home_text: ''
+  led_start: ''
+  led_start_text: ''
+  voice_key: 基站清洁液未安装
+  source: user
+  event_options:
+  - event: station_detergent_bottle_not_install
+    name: 基站清洁液瓶未安装
+    fault_code: ''
+    fault_push: ''
+    kind: 故障
+    source: user
+  note: 'PRD：基站清洁液未安装
+
+    （Q289）'
+  code_source: actual
+- qid: Q290
+  event: add_water_start
+  name: 加水开始事件
+  kind: 通用
+  voice: '290'
+  reuse_voice: ''
+  voice_text: 开始拖布清洗
+  fault_code: ''
+  fault_push: ''
+  led_home: white1_breathing
+  led_home_text: 白灯1呼吸
+  led_start: all_off
+  led_start_text: 关闭
+  voice_key: 基站开始拖布清洗
+  source: verified
+  event_options:
+  - event: add_water_start
+    name: 加水开始事件
+    fault_code: ''
+    fault_push: ''
+    kind: 通用
+    source: verified
+  note: 'PRD：基站开始拖布清洗
+
+    （Q290）'
+- qid: Q292
+  event: stop_wash_mop
+  name: 结束洗拖布
+  kind: 通用
+  voice: '292'
+  reuse_voice: ''
+  voice_text: 停止清洗拖布
+  fault_code: ''
+  fault_push: ''
+  led_home: ''
+  led_home_text: ''
+  led_start: ''
+  led_start_text: ''
+  voice_key: 基站洗拖布过程中手动停止清洗拖布
+  source: user
+  event_options:
+  - event: stop_wash_mop
+    name: 结束洗拖布
+    fault_code: ''
+    fault_push: ''
+    kind: 通用
+    source: user
+  note: 'PRD：基站洗拖布过程中，手动停止清洗拖布
+
+    （Q292）'
+- qid: Q294
+  event: do_not_operate_during_station_working
+  name: 基站工作中勿操作提醒事件
+  kind: 提醒
+  voice: '294'
+  reuse_voice: ''
+  voice_text: 基站正在执行其他任务，请稍后再试
+  fault_code: ''
+  fault_push: ''
+  led_home: red_flick_3
+  led_home_text: 红灯快闪3次
+  led_start: red_flick_3
+  led_start_text: 红灯快闪3次
+  voice_key: 基站正在执行其他任务请稍后再试
+  source: verified
+  event_options:
+  - event: do_not_operate_during_station_working
+    name: 基站工作中勿操作提醒事件
+    fault_code: ''
+    fault_push: ''
+    kind: 提醒
+    source: verified
+  note: 'PRD：基站正在执行其他任务，请稍后再试
+
+    （Q294）'
+- qid: Q297
+  event: explore_map_finish_back_charger
+  name: 探索建图完成后回充事件
+  kind: 通用
+  voice: '297'
+  reuse_voice: ''
+  voice_text: 建图完成
+  fault_code: '51'
+  fault_push: ''
+  led_home: white1_slow_flick
+  led_home_text: 白灯1慢闪
+  led_start: all_off
+  led_start_text: 关闭
+  voice_key: 建图完成
+  source: verified
+  event_options:
+  - event: explore_map_finish_back_charger
+    name: 探索建图完成后回充事件
+    fault_code: ''
+    fault_push: ''
+    kind: 通用
+    source: verified
+  - event: explore_map_finish_clean
+    name: 探索建图完成后清扫事件
+    fault_code: ''
+    fault_push: ''
+    kind: 通用
+    source: ap
+  note: 'PRD：建图完成
+
+    （Q297）'
+  code_source: actual
+- qid: Q301
+  event: station_water_valve_short
+  name: 基站电磁阀短路
+  kind: 故障
+  voice: '301'
+  reuse_voice: ''
+  voice_text: 电磁阀短路（过流）
+  fault_code: '922'
+  fault_push: ''
+  led_home: red_flick_3
+  led_home_text: 红灯快闪3次
+  led_start: red_flick_3
+  led_start_text: 红灯快闪3次
+  voice_key: 电磁阀短路过流
+  source: verified
+  event_options:
+  - event: station_water_valve_short
+    name: 基站电磁阀短路
+    fault_code: ''
+    fault_push: ''
+    kind: 故障
+    source: verified
+  note: 'PRD：电磁阀短路（过流）
+
+    （Q301）'
+  code_source: actual
+- qid: Q302
+  event: station_water_valve_open
+  name: 基站电磁阀开路
+  kind: 故障
+  voice: '302'
+  reuse_voice: ''
+  voice_text: 电磁阀开路
+  fault_code: '922'
+  fault_push: ''
+  led_home: red_flick_3
+  led_home_text: 红灯快闪3次
+  led_start: red_flick_3
+  led_start_text: 红灯快闪3次
+  voice_key: 电磁阀开路
+  source: verified
+  event_options:
+  - event: station_water_valve_open
+    name: 基站电磁阀开路
+    fault_code: ''
+    fault_push: ''
+    kind: 故障
+    source: verified
+  note: 'PRD：电磁阀开路
+
+    （Q302）'
+  code_source: actual
+- qid: Q303
+  event: dry_mop_fan_error
+  name: 烘干风机故障事件
+  kind: 故障
+  voice: '303'
+  reuse_voice: ''
+  voice_text: 基站烘干风扇过流异常
+  fault_code: '237'
+  fault_push: ''
+  led_home: red_flick_3
+  led_home_text: 红灯快闪3次
+  led_start: red_flick_3
+  led_start_text: 红灯快闪3次
+  voice_key: 基站烘干风扇过流异常
+  source: ai_review
+  event_options:
+  - event: dry_mop_fan_error
+    name: 烘干风机故障事件
+    fault_code: ''
+    fault_push: ''
+    kind: 故障
+    source: ai_review
+  - event: dry_mop_fan_short
+    name: 基站烘干风机短路
+    fault_code: ''
+    fault_push: ''
+    kind: 故障
+    source: ap
+  note: 'PRD：基站烘干风扇过流异常
+
+    （Q303）'
+  code_source: actual
+- qid: Q304
+  event: dry_mop_fan_error
+  name: 烘干风机故障事件
+  kind: 故障
+  voice: '304'
+  reuse_voice: ''
+  voice_text: 基站烘干风扇开路短路异常
+  fault_code: '237'
+  fault_push: ''
+  led_home: red_flick_3
+  led_home_text: 红灯快闪3次
+  led_start: red_flick_3
+  led_start_text: 红灯快闪3次
+  voice_key: 基站烘干风扇开路短路异常
+  source: ai_review
+  event_options:
+  - event: dry_mop_fan_error
+    name: 烘干风机故障事件
+    fault_code: ''
+    fault_push: ''
+    kind: 故障
+    source: ai_review
+  - event: dry_mop_fan_open
+    name: 基站烘干风机开路
+    fault_code: ''
+    fault_push: ''
+    kind: 故障
+    source: ap
+  note: 'PRD：基站烘干风扇开路短路异常
+
+    （Q304）'
+  code_source: actual
+- qid: Q305
+  event: station_detergent_not_enough
+  name: 基站清洁液不足
+  kind: 提醒
+  voice: '305'
+  reuse_voice: ''
+  voice_text: 清洁液余量不足5%（基站统计）时，语音播报一次
+  fault_code: ''
+  fault_push: ''
+  led_home: ''
+  led_home_text: ''
+  led_start: ''
+  led_start_text: ''
+  voice_key: 清洁液余量不足5%基站统计时语音播报一次
+  source: user
+  event_options:
+  - event: station_detergent_not_enough
+    name: 基站清洁液不足
+    fault_code: ''
+    fault_push: ''
+    kind: 提醒
+    source: user
+  note: 'PRD：清洁液余量不足5%（基站统计）时，语音播报一次
+
+    （Q305）'
+- qid: Q327
+  event: error_ultrasonic_carpet_err
+  name: 超声波故障
+  kind: 提醒
+  voice: '327'
+  reuse_voice: ''
+  voice_text: 超声波传感器异常，请检查
+  fault_code: '921'
+  fault_push: ''
+  led_home: red_slow_flick
+  led_home_text: 红灯慢闪
+  led_start: red_slow_flick
+  led_start_text: 红灯慢闪
+  voice_key: 超声波传感器开短路触发
+  source: verified
+  event_options:
+  - event: error_ultrasonic_carpet_err
+    name: 超声波故障
+    fault_code: ''
+    fault_push: ''
+    kind: 提醒
+    source: verified
+  note: 'PRD：超声波传感器开短路触发
+
+    （Q327）'
+  code_source: actual
+- qid: Q328
+  event: back_wash_paused
+  name: 暂停回洗拖布事件
+  kind: 通用
+  voice: '328'
+  reuse_voice: ''
+  voice_text: 停止回洗拖布
+  fault_code: ''
+  fault_push: ''
+  led_home: ''
+  led_home_text: ''
+  led_start: ''
+  led_start_text: ''
+  voice_key: 暂停回洗拖布指开始回基站但还没回去的阶段
+  source: user
+  event_options:
+  - event: back_wash_paused
+    name: 暂停回洗拖布事件
+    fault_code: ''
+    fault_push: ''
+    kind: 通用
+    source: user
+  note: 'PRD：暂停回洗拖布（指开始回基站但还没回去的阶段）
+
+    （Q328）'
+- qid: Q330
+  event: go_back_mop_after_clean
+  name: 清扫任务中回洗拖布
+  kind: 通用
+  voice: '330'
+  reuse_voice: ''
+  voice_text: 开始回洗拖布
+  fault_code: ''
+  fault_push: ''
+  led_home: ''
+  led_home_text: ''
+  led_start: ''
+  led_start_text: ''
+  voice_key: 任务中回洗拖布中途回洗以及手动下发回洗拖布
+  source: user
+  event_options:
+  - event: go_back_mop_after_clean
+    name: 清扫任务中回洗拖布
+    fault_code: ''
+    fault_push: ''
+    kind: 通用
+    source: user
+  note: 'PRD：任务中回洗拖布、中途回洗以及手动下发回洗拖布
+
+    （Q330）'
+- qid: Q361
+  event: location_start
+  name: 开始定位事件
+  kind: 通用
+  voice: '361'
+  reuse_voice: ''
+  voice_text: 定位中，请稍等
+  fault_code: ''
+  fault_push: ''
+  led_home: ''
+  led_home_text: ''
+  led_start: ''
+  led_start_text: ''
+  voice_key: 定位中请稍等
+  source: ai_review
+  event_options:
+  - event: location_start
+    name: 开始定位事件
+    fault_code: ''
+    fault_push: ''
+    kind: 通用
+    source: ai_review
+  note: 'PRD：定位中，请稍等
+
+    （Q361）'
+- qid: Q362
+  event: clean_location_success
+  name: 定位成功，继续清扫
+  kind: 通用
+  voice: '362'
+  reuse_voice: ''
+  voice_text: 定位成功，继续清洁
+  fault_code: ''
+  fault_push: ''
+  led_home: all_off
+  led_home_text: 关闭
+  led_start: white1_on
+  led_start_text: 白灯1长亮
+  voice_key: 定位成功继续清洁
+  source: verified
+  event_options:
+  - event: clean_location_success
+    name: 定位成功，继续清扫
+    fault_code: ''
+    fault_push: ''
+    kind: 通用
+    source: verified
+  note: 'PRD：定位成功，继续清洁
+
+    （Q362）'
+- qid: Q363
+  event: go_back_station_location_success
+  name: 定位成功，继续回充
+  kind: 通用
+  voice: '363'
+  reuse_voice: ''
+  voice_text: 定位成功，继续回充
+  fault_code: ''
+  fault_push: ''
+  led_home: ''
+  led_home_text: ''
+  led_start: ''
+  led_start_text: ''
+  voice_key: 定位成功继续回充
+  source: user
+  event_options:
+  - event: go_back_station_location_success
+    name: 定位成功，继续回充
+    fault_code: ''
+    fault_push: ''
+    kind: 通用
+    source: user
+  note: 'PRD：定位成功，继续回充
+
+    （Q363）'
+- qid: Q364
+  event: explore_map_location_success
+  name: 定位成功，继续建图
+  kind: 通用
+  voice: '364'
+  reuse_voice: ''
+  voice_text: 定位成功，继续建图
+  fault_code: ''
+  fault_push: ''
+  led_home: ''
+  led_home_text: ''
+  led_start: ''
+  led_start_text: ''
+  voice_key: 定位成功继续建图
+  source: user
+  event_options:
+  - event: explore_map_location_success
+    name: 定位成功，继续建图
+    fault_code: ''
+    fault_push: ''
+    kind: 通用
+    source: user
+  note: 'PRD：定位成功，继续建图
+
+    （Q364）'
+- qid: Q377
+  event: error_side_brush_telescoping
+  name: 伸缩边刷电机异常
+  kind: 故障
+  voice: '377'
+  reuse_voice: 038
+  voice_text: 边刷伸缩被卡住（外扩/收回）
+  fault_code: '211'
+  fault_push: ''
+  led_home: red_flick_3
+  led_home_text: 红灯快闪3次
+  led_start: red_flick_3
+  led_start_text: 红灯快闪3次
+  voice_key: 边刷伸缩被卡住外扩收回
+  source: verified
+  event_options:
+  - event: error_side_brush_telescoping
+    name: 伸缩边刷电机异常
+    fault_code: ''
+    fault_push: ''
+    kind: 故障
+    source: verified
+  note: 'PRD：边刷伸缩被卡住（外扩/收回）
+
+    （Q377）；复用语音Q038'
+  code_source: actual
+- qid: Q378
+  event: error_side_brush_telescoping
+  name: 伸缩边刷电机异常
+  kind: 故障
+  voice: '378'
+  reuse_voice: '137'
+  voice_text: 边刷摆臂开路或短路
+  fault_code: '211'
+  fault_push: ''
+  led_home: red_flick_3
+  led_home_text: 红灯快闪3次
+  led_start: red_flick_3
+  led_start_text: 红灯快闪3次
+  voice_key: 边刷摆臂开路或短路
+  source: user
+  event_options:
+  - event: error_side_brush_telescoping
+    name: 伸缩边刷电机异常
+    fault_code: ''
+    fault_push: ''
+    kind: 故障
+    source: user
+  note: 'PRD：边刷摆臂开路或短路
+
+    （Q378）；复用语音Q137'
+  code_source: actual

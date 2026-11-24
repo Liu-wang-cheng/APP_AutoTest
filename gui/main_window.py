@@ -235,6 +235,8 @@ class MainWindow(CaseFileMixin, QMainWindow):
 
     def _on_update_checked(self, result):
         """检查结果: 自动检查只在「有新版本」时打扰用户; 手动检查则任何结果都要回话"""
+        if getattr(self, "_closing", False):
+            return                      # 关窗后迟到的结果不再弹模态框
         manual = bool(getattr(self, "_update_manual", False))
         self._update_manual = False
         if hasattr(self, "update_btn"):
@@ -689,7 +691,7 @@ class MainWindow(CaseFileMixin, QMainWindow):
 
         # ── APP 设备(最前) ──
         lay.addWidget(QLabel("APP设备"))
-        self.device_combo = QComboBox()
+        self.device_combo = NoWheelComboBox()
         # 按最长项自适应宽度:设备标签「MuMu模拟器 (127.0.0.1:7555)」较长,
         # 默认策略会截断显示不全
         self.device_combo.setSizeAdjustPolicy(QComboBox.AdjustToContents)
@@ -1857,13 +1859,13 @@ class MainWindow(CaseFileMixin, QMainWindow):
         lay.addWidget(self.case_name_edit)
 
         # 多 case 文件的用例切换器(单 case 文件自动隐藏)
-        self.case_combo = QComboBox()
+        self.case_combo = NoWheelComboBox()
         self.case_combo.setToolTip("该文件包含多个用例,选择当前编辑的用例")
         self.case_combo.currentIndexChanged.connect(self._on_case_switched)
         self.case_combo.setVisible(False)
         lay.addWidget(self.case_combo)
         lay.addWidget(QLabel("优先级"))
-        self.priority_combo = QComboBox()
+        self.priority_combo = NoWheelComboBox()
         self.priority_combo.addItems(["P0", "P1", "P2"])
         self.priority_combo.setFixedWidth(64)
         self.priority_combo.currentTextChanged.connect(self._sync_header)
@@ -2925,6 +2927,7 @@ class MainWindow(CaseFileMixin, QMainWindow):
     def closeEvent(self, event):
         # ★ 留痕: 日志里出现这行 = **用户正常关窗**(不是崩溃/被杀)。下次排查"闪退"时,
         #   没有这行又有其它退出迹象, 就说明进程是被硬结束的(见 core/crashlog.py)。
+        self._closing = True; self._first_check_timer.stop()
         log.info("[退出] 收到关窗请求")
         # ★ 防抖中的编辑必须先落盘: 用户改完名字/步骤立刻关窗, 不能丢
         self._flush_pending_edit()
@@ -2955,7 +2958,7 @@ from gui.style import (
     _safe_relpath, CATEGORY_COLORS, QUICK_ACTIONS, STYLESHEET, _ASSETS,
 )
 from gui.widgets import (
-    ClickableLabel, ClickableFrame, FlowLayout, make_action_menu,
+    ClickableLabel, ClickableFrame, FlowLayout, make_action_menu, NoWheelComboBox, WrappedCombo, WrappedLineEdit,
     _HistComboDelegate, _FitCombo, _FitListView, _HistCombo, CaseListWidget,
     CaseItemDelegate, mouse_xy, StaticCheckBox, CompactSpin, build_hint_row,
     make_hint_label,
@@ -2986,7 +2989,7 @@ __all__ = [
     "_FIELD_LABEL_W", "_CHECK_MIN_H", "make_lamp_pixmap", "_LAMP_PIX",
     "lamp_pixmap", "lamp_icon", "_safe_relpath", "CATEGORY_COLORS",
     "QUICK_ACTIONS", "STYLESHEET", "_ASSETS",
-    "ClickableLabel", "ClickableFrame", "FlowLayout", "make_action_menu",
+    "ClickableLabel", "ClickableFrame", "FlowLayout", "make_action_menu", "WrappedCombo", "WrappedLineEdit",
     "_HistComboDelegate", "_FitCombo", "_FitListView",
     "_HistCombo", "CaseListWidget", "CaseItemDelegate", "mouse_xy",
     "_make_field_widget", "_int_of", "_float_of", "_int4_of", "StepCard",

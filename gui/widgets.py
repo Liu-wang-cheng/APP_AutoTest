@@ -4,19 +4,27 @@
 # ★ 拆分只为可读性 —— 这批类原先就在同一个模块里, 行为未改动。
 
 # 只导入本模块用到的名字(结构整理 2026-10-15)
-from PySide6.QtCore import QEvent, QPoint, QRect, QSize, QTimer, Qt, Signal
+from PySide6.QtCore import (QEvent, QPoint, QRect, QSize, QTimer, Qt,
+                            Signal)
 from PySide6.QtGui import (QAction, QColor, QFontMetrics, QKeySequence,
-                           QPainter, QPen)
+                           QPainter, QPen, QTextOption)
 from PySide6.QtWidgets import (QAbstractButton, QAbstractItemView, QComboBox,
                                 QFrame, QHBoxLayout, QLabel, QLayout, QListView,
                                 QListWidget, QMenu, QSizePolicy, QSpacerItem,
                                 QSpinBox, QStyle, QStyleOptionViewItem,
-                                QStyledItemDelegate, QWidget)
+                                QStyledItemDelegate, QTextEdit, QWidget)
 from core.logger import get_logger
 from gui import schema
 from gui.style import _ARROW_W
 
 log = get_logger()
+
+
+class NoWheelComboBox(QComboBox):
+    """全局下拉框: 滚轮不切换选项(避免滚动页面时误改), 只能点开选择。"""
+
+    def wheelEvent(self, event):
+        event.ignore()
 
 
 def mouse_xy(ev):
@@ -49,6 +57,221 @@ class ClickableFrame(QFrame):
         if event.button() == Qt.LeftButton:
             self.clicked.emit()
         super().mousePressEvent(event)
+
+
+class WrappedLineEdit(QTextEdit):
+    """只读“输入框”: 长路径在框内换行显示(用户 2026-11-12)。
+
+    保留 QLineEdit 常用的 text()/setText()/setPlaceholderText() 接口。
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setReadOnly(True)
+        self.setLineWrapMode(QTextEdit.WidgetWidth)
+        self.setWordWrapMode(QTextOption.WrapAtWordBoundaryOrAnywhere)
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        # 让布局优先压缩它, 保证同排按钮不被挤出窗口
+        self.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        self.setStyleSheet(
+            "QTextEdit{border:1px solid #cbd5e1;border-radius:4px;"
+            "background:#ffffff;color:#1e293b;font-size:12px;"
+            "padding:2px 4px;}")
+        self._adjusting = False
+        self._last_h = 0
+        self._adjust_height()
+
+    def _adjust_height(self):
+        """宽时一行显示, 窄时在框内换行并按行数增高(用户 2026-11-12)。"""
+        if self._adjusting:
+            return
+        self._adjusting = True
+        try:
+            doc = self.document()
+            doc.setTextWidth(max(80, self.viewport().width() - 4))
+            h = int(doc.size().height()) + 10
+            h = max(30, min(h, 110))
+            if abs(h - self._last_h) >= 2:
+                self._last_h = h
+                self.setFixedHeight(h)
+        finally:
+            self._adjusting = False
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._adjust_height()
+
+    def minimumSizeHint(self):
+        # 文档宽度不应把整行顶宽; 宽度交给布局压缩, 高度按换行行数
+        return QSize(80, self.height())
+
+    def text(self):
+        return self.toPlainText()
+
+    def setText(self, text):
+        self.setPlainText(str(text or ""))
+        self._adjust_height()
+
+
+class WrappedCombo(NoWheelComboBox):
+    """可编辑下拉框: 当前项太长时在框内换行显示(用户 2026-11-13)。
+
+    仍是标准 QComboBox: 手动输入关键字、候选弹窗、下拉选择都不变。
+    只在"没有编辑"时用一个多行 QLabel 盖住单行输入区, 按内容换行并把
+    下拉框撑高; 点击文字即进入编辑/搜索, 右侧箭头仍点开下拉列表。
+    """
+
+    _ARROW = 28            # 右侧箭头区域, 换行文字不能盖住它
+    _MAX_LINES = 3         # 最多三行, 避免极端长名把整行撑得过高
+
+    wrapHeightChanged = Signal()
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._wrap_busy = False
+        self._base_h = 0
+        self.setEditable(True)
+        self._wrap = QLabel(self)
+        self._wrap.setWordWrap(True)
+        self._wrap.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        self._wrap.setStyleSheet(
+            "QLabel{background:#ffffff;color:#1e293b;padding:0 4px;}")
+        self._wrap.hide()
+        self._wrap.installEventFilter(self)
+        le = self.lineEdit()
+        if le is not None:
+            le.installEventFilter(self)
+            le.textChanged.connect(self._sync_wrap)
+            # 手动输入完按回车后退出编辑态, 让多行显示层出现(用户 2026-11-13)
+            le.returnPressed.connect(self._finish_edit)
+        self.currentIndexChanged.connect(self._sync_wrap)
+        self.currentTextChanged.connect(self._sync_wrap)
+
+    def eventFilter(self, obj, ev):
+        if (obj is self._wrap and ev.type() == QEvent.MouseButtonPress
+                and ev.button() == Qt.LeftButton):
+            self._begin_edit()
+            return True
+        if obj is self.lineEdit():
+            if ev.type() == QEvent.FocusIn:
+                self._wrap.hide()
+            elif ev.type() == QEvent.FocusOut:
+                QTimer.singleShot(0, self._sync_wrap)
+        return super().eventFilter(obj, ev)
+
+    def set_text_alignment(self, align):
+        """设置显示/编辑文字对齐方式(表格事件列居中用)。"""
+        le = self.lineEdit()
+        if le is not None:
+            le.setAlignment(align)
+        self._wrap.setAlignment(align | Qt.AlignVCenter)
+        self._fit_wrap()
+
+    def _finish_edit(self):
+        le = self.lineEdit()
+        if le is not None:
+            le.clearFocus()
+        self.clearFocus()
+        self._wrap.show()
+        self._wrap.raise_()
+        QTimer.singleShot(0, self._sync_wrap)
+
+    def _begin_edit(self):
+        self._wrap.hide()
+        le = self.lineEdit()
+        if le is not None:
+            le.setFocus()
+            le.selectAll()
+
+    @staticmethod
+    def _breakable(text):
+        """给长英文标识符加零宽断点, QLabel 才能按字符换行(用户 2026-11-13)。
+
+        QLabel 只在单词边界换行, error_xxx 这种没有空格的长串会超出框宽;
+        在 _ / - / ( 等位置插入 U+200B(不可见) 提供断点。
+        """
+        marks = set("_-/()（）[]【】")
+        out = []
+        for ch in str(text or ""):
+            out.append(ch)
+            if ch in marks:
+                out.append("​")
+        return "".join(out)
+
+    def _tooltip_text(self):
+        """选中项优先用 ToolTipRole(如事件中文名), 否则用显示文本。"""
+        try:
+            tip = self.itemData(self.currentIndex(), Qt.ToolTipRole)
+        except Exception:
+            tip = None
+        return str(tip or self.currentText())
+
+    def _sync_wrap(self, *_):
+        try:
+            text = self.currentText()
+            tip = self._tooltip_text()
+            self._wrap.setText(self._breakable(text))
+            self._wrap.setToolTip(tip)
+            self.setToolTip(tip)
+            le = self.lineEdit()
+            if le is not None and le.hasFocus():
+                return
+            self._fit_wrap()
+        except RuntimeError:
+            # 表格重建/关窗时旧下拉可能已析构, 延迟定时器不应再访问它
+            pass
+
+    def _fit_wrap(self):
+        if self._wrap_busy:
+            return
+        self._wrap_busy = True
+        try:
+            try:
+                text = self.currentText()
+                tip = self._tooltip_text()
+                self._wrap.setText(self._breakable(text))
+                self._wrap.setToolTip(tip)
+                self.setToolTip(tip)
+                if not self.isVisible() or not text.strip():
+                    self._wrap.hide()
+                    return
+                if not self._base_h:
+                    # 只取自然高度; 不能用 self.height(), 否则第一次撑高后
+                    # 再也不会缩回去(文字变短时底部会露出单行输入框的重影)
+                    self._base_h = max(28, self.sizeHint().height())
+                w = max(40, self.width() - self._ARROW)
+                self._wrap.setFixedWidth(w)
+                fm = self.fontMetrics()
+                h = max(fm.height() + 6, self._wrap.heightForWidth(w))
+                h = min(h, fm.lineSpacing() * self._MAX_LINES + 8)
+                target = max(self._base_h, h)
+                # 覆盖整个输入区高度, 否则底部会露出 QLineEdit 的文字
+                self._wrap.setGeometry(1, 1, w, target - 2)
+                self._wrap.show()
+                self._wrap.raise_()
+                if self.height() != target:
+                    self.setFixedHeight(target)
+                    self.wrapHeightChanged.emit()
+            except RuntimeError:
+                pass
+        finally:
+            self._wrap_busy = False
+
+    def resizeEvent(self, ev):
+        super().resizeEvent(ev)
+        QTimer.singleShot(0, self._fit_wrap)
+
+    def showEvent(self, ev):
+        super().showEvent(ev)
+        QTimer.singleShot(0, self._fit_wrap)
+
+    def sizeHint(self):
+        # 放进表格单元格时, 行高要跟着多行输入框一起变高
+        s = super().sizeHint()
+        if self._base_h and self.height() > s.height():
+            return QSize(s.width(), self.height())
+        return s
 
 
 class FlowLayout(QLayout):
@@ -319,7 +542,7 @@ class _HistComboDelegate(QStyledItemDelegate):
         painter.restore()
 
 
-class _FitCombo(QComboBox):
+class _FitCombo(NoWheelComboBox):
     """内容自适应的下拉框基类(带/不带历史删除功能的下拉都用它)。
 
     ★ 解决三个 Qt 坑(2026-09-23 逐个实测):

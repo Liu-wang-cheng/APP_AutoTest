@@ -20,6 +20,26 @@ def _skip_tcp_preflight(monkeypatch):
                         staticmethod(lambda *a, **k: True))
 
 
+def test_post_event_negative_rc_is_not_reported_as_failure():
+    """厂商 SDK 返回负数但事件已送达时, 不能误报发送失败(用户 2026-11-13)."""
+    class Stream:
+        running = True
+
+        def post_event(self, _topic, _event):
+            return -12345
+
+    svc = ParamService(object(), [], stream=Stream())
+    assert svc.post_event("/event/onboard_ui", "error_kit_lidar_obscured") is True
+
+    class Down:
+        running = False
+
+        def post_event(self, _topic, _event):
+            return 0
+
+    assert ParamService(object(), [], stream=Down()).post_event("x", "y") is False
+
+
 # ── 上传流：构造/解析 ──
 def test_stream_start_without_dll_returns_false(tmp_path):
     stream = UploadStream(tmp_path, license_text="lic")
@@ -96,10 +116,11 @@ class _FakeStream:
     def running(self):
         return self._running
 
-    def start(self, ip, paths):
+    def start(self, ip, paths, preserve=False):
         self.started.append((ip, list(paths)))
         self._running = True
         return True
+
 
     def read(self, paths, timeout_ms=3000):
         return {p: 9 for p in paths}
@@ -271,6 +292,88 @@ def test_watchdog_does_nothing_when_pushes_fresh():
     svc = ParamService(_FakeClient(), ["/A"], stream=stream)
     svc._watch_stream()
     assert stream.stopped == 0
+
+
+def test_watchdog_recovers_stream_that_already_stopped():
+    """断流退回轮询后要定期重试恢复, 否则发事件永远报「推流未就绪」."""
+
+    class _DeadStream(_FakeStream):
+        def __init__(self):
+            super().__init__({}, ts=0.0, running=False)
+            self.restarted = 0
+
+        def restart(self):
+            self.restarted += 1
+            return True
+
+    stream = _DeadStream()
+    svc = ParamService(_FakeClient(), ["/A"], stream=stream)
+    svc._watch_stream()
+    assert stream.restarted == 1
+    svc._watch_stream()          # 15 秒内不重复空转
+    assert stream.restarted == 1
+    svc._watch_at = 0.0
+    svc._watch_stream()
+    assert stream.restarted == 2
+
+
+def test_watchdog_falls_back_to_polling_on_repeated_stalls():
+    """连续两次中断且重启后仍无推送 → 切 librpc 轮询, 避免界面一直很慢."""
+    class _NeverStream(_FakeStream):
+        def __init__(self):
+            super().__init__({}, ts=0.0)
+            self.restarted = 0
+            self.stopped = 0
+
+        def last_event(self):
+            return time.time() - 30
+
+        def restart(self):
+            self.restarted += 1
+            self._running = True
+            return True
+
+        def stop(self, clear=True):
+            self.stopped += 1
+            self._running = False
+
+    stream = _NeverStream()
+    svc = ParamService(_FakeClient(), ["/A"], stream=stream)
+    svc._watch_stream()
+    assert stream.restarted == 1 and svc._stream_fallback is False
+    svc._watch_at = 0.0
+    svc._watch_stream()
+    assert svc._stream_fallback is True
+    assert stream.stopped == 1
+    # 兜底期间读参数走 librpc(客户端), 不再等推送
+    assert svc._read(["/A"]) == {"/A": 7}
+
+    # 60 秒后再试恢复推送, 成功则切回推送优先
+    svc._stream_retry_at = 0.0
+    svc._watch_at = 0.0
+    svc._watch_stream()
+    assert svc._stream_fallback is False
+    assert stream.running is True
+
+
+def test_upload_stream_keeps_paths_after_failed_start(tmp_path, monkeypatch):
+    """初始化失败也要保留订阅路径, 让看门狗能 restart() 重试恢复."""
+    from core.apos.stream import UploadStream
+
+    stream = UploadStream(sdk_dir=tmp_path, license_text="lic")
+    calls = []
+
+    class _C:
+        @staticmethod
+        def AposSdkInit(lic, ip):
+            calls.append(ip)
+            return 0
+
+    monkeypatch.setattr(stream, "_load_api", lambda: (_C, object()))
+    assert stream.start("10.0.0.8", ["/A"]) is False
+    assert stream._paths == ["/A"]
+    assert stream.restart() is False        # 仍会再次尝试, 不会直接放弃
+    assert calls == [b"10.0.0.8", b"10.0.0.8"]
 
 
 def test_service_disconnect_stops_stream():
@@ -630,3 +733,51 @@ def test_empty_paths_still_does_keepalive_read():
     finally:
         svc.stop(timeout=2.0)
     assert st.calls and st.calls[0] == list(READ_ONLY_PATHS)
+
+
+def test_connect_resets_stream_fallback(monkeypatch):
+    """重连后旧的兜底状态必须清零, 新推流不能被当成已退轮询(用户 2026-11-17)."""
+    class S:
+        running = False
+
+        def start(self, ip, paths):
+            self.running = True
+            return True
+
+        def stop(self):
+            self.running = False
+
+    svc = ParamService(_FakeClient(), ["/A"], stream=S())
+    for name in ("stop", "_start_mcu", "_prime_system", "start",
+                 "start_stream"):
+        monkeypatch.setattr(svc, name, lambda *a, **k: None)
+    svc._stream_fallback = True
+    svc._stream_stalls = 3
+    svc._stream_retry_at = 123.0
+    assert svc.connect("1.2.3.4") is True
+    assert svc._stream_fallback is False
+    assert svc._stream_stalls == 0 and svc._stream_retry_at == 0.0
+
+
+def test_start_stream_failure_keeps_paths_for_restart():
+    """开流失败不能 stream.stop(): 否则看门狗 restart 无路径可用(用户 2026-11-17)."""
+    class Down:
+        running = False
+
+        def __init__(self):
+            self.stopped = False
+
+        def start(self, ip, paths):
+            return False
+
+        def stop(self):
+            self.stopped = True
+
+    stream = Down()
+    svc = ParamService(_FakeClient(), ["/A"], stream=stream)
+    svc._ip = "1.2.3.4"
+    svc._stream_paths = ["/A"]
+    assert svc.start_stream() is False
+    assert stream.stopped is False
+
+

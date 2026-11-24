@@ -55,8 +55,10 @@ OTHER_EXCLUDES = [
 # 随版本走的程序资源(用户数据一律不带)
 datas = [
     ("gui/assets", "gui/assets"),
+    ("models", "models"),                      # 本地中文向量模型(bge-small)
     ("config/locators.yaml", "config"),        # 定位器配置(可被更新覆盖)
     ("config/config.example.yaml", "config"),  # 配置模板: 首次运行据此生成 config.yaml
+    ("config/fault_events/seed_mappings.json", "config/fault_events"),  # 学习种子
     ("VERSION", "."),                          # 落在解压目录, 便于事后取证版本
     ("CHANGELOG.md", "."),
     ("README.md", "."),
@@ -126,6 +128,7 @@ a = Analysis(
         # ★ 7809 MCU 调试流是运行期按需 `import zmq`(mcu.py)，静态分析看不到，
         #   漏了会导致打包版设备参数页没有挡位/充电/地检触发等 MCU 数据。
         "zmq",
+        "paramiko",                  # 批量前 SSH 检查机器人语音包(按需导入)
     ],
     hookspath=[],
     runtime_hooks=[],

@@ -56,6 +56,8 @@ FIELDS = {
     "/Mcu/WallDistance": "墙距离",
     "/Mcu/OpticalFlowX": "光流x轴偏移量",
     "/Mcu/YawAngle": "偏航角度",
+    "/Mcu/PitchAngle": "俯仰角",
+    "/Mcu/RollAngle": "横滚角",
     "/Mcu/LeftOdometer": "左主动轮里程计",
     "/Mcu/RightOdometer": "右主动轮里程计",
     "/Mcu/Ultrasonic0": "超声波通道0",
@@ -105,7 +107,9 @@ class McuStream:
         self._ctrl = None          # PUSH -> 7813：唤醒/保活调试流
         self._hb_at = 0.0
         #: 设备日志行(类型 1001 文本帧): [(ts, line)]，故障模拟验证语音/灯显用
-        self._log_lines = collections.deque(maxlen=4000)
+        #: 机器人网络/状态切换时会瞬间刷大量日志, 队列太小会把事件行挤掉
+        #: (表现为"设备播报了但工具未捕获", 用户 2026-11-17)。
+        self._log_lines = collections.deque(maxlen=20000)
         # 文本帧是按字节流切块的, 一帧往往从一行中间开始; 这里拼回完整行,
         # 否则界面上会出现 ":5:11.103/SW D/..." 这种缺了开头时间的日志
         self._log_pending = ""
@@ -131,6 +135,12 @@ class McuStream:
             sub = ctx.socket(zmq.SUB)
             sub.setsockopt(zmq.SUBSCRIBE, b"")
             sub.setsockopt(zmq.RCVTIMEO, 500)
+            # 日志突发时不能丢帧: SUB 默认 HWM 较小, 消费稍慢就会被丢弃,
+            # 故障模拟会"实际播报了却解析不到"(用户 2026-11-17)。
+            try:
+                sub.setsockopt(zmq.RCVHWM, 200000)
+            except Exception:
+                pass
             sub.connect(f"tcp://{self._ip}:{PORT}")
             # ★ 关键：只订阅 7809 收不到任何帧 —— 机器人要收到 7813 的控制帧
             #   才开始推流（厂商工具连上后一直在发心跳）。先发一帧，之后在
@@ -294,11 +304,17 @@ class McuStream:
             }
         elif typ == 1008 and len(frame) == 94:
             u32 = lambda off: struct.unpack_from("<I", frame, off)[0]
+            f32 = lambda off: struct.unpack_from("<f", frame, off)[0]
+            # 俯仰/横滚在状态结构之后的两个 float, 单位毫弧度;
+            # AutopackDebugger 同样按 ×0.001×180/π 转成角度(用户 2026-11-18)
+            rad2deg = 0.001 * 57.2957795130823
             values = {
                 "/Mcu/YawAngle": u32(40),
                 "/Mcu/LeftOdometer": u32(44),
                 "/Mcu/RightOdometer": u32(48),
                 "/Mcu/OpticalFlowX": struct.unpack_from("<h", frame, 78)[0],
+                "/Mcu/PitchAngle": round(f32(86) * rad2deg, 2),
+                "/Mcu/RollAngle": round(f32(90) * rad2deg, 2),
             }
         if not values:
             return
