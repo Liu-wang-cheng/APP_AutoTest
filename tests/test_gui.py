@@ -1890,10 +1890,19 @@ def test_save_button_dirty_flow(qapp, monkeypatch, tmp_path):
         # 编辑产生修改 → 亮起
         w.add_step("click")
         from PySide6.QtTest import QTest
-        QTest.qWait(400)   # 防抖 300ms 后写盘
+        import time as _time
         import yaml as _y
-        back = _y.safe_load(open(w.case_path, encoding="utf-8").read())
-        assert len(back["cases"][0]["steps"]) == 1, "自动保存: 编辑应写盘"
+        # 自动保存有 300ms 防抖；CI 机器慢时固定 400ms 会偶发未落盘，
+        # 改为轮询等待（最多 5 秒），避免时序抖动。
+        steps = []
+        deadline = _time.time() + 5
+        while _time.time() < deadline:
+            QTest.qWait(100)
+            back = _y.safe_load(open(w.case_path, encoding="utf-8").read())
+            steps = back["cases"][0]["steps"]
+            if len(steps) == 1:
+                break
+        assert len(steps) == 1, "自动保存: 编辑应写盘"
         # 保存 → 写盘(含新增步骤)且置灰; mock 掉参数问题确认弹窗(离屏无人点击)
         # on_save 的参数校验可能弹确认框(离屏无人点击会卡死), mock 为 Yes
         monkeypatch.setattr(mw.QMessageBox, "question",
