@@ -91,7 +91,7 @@ def _fault_cn(event):
 def run_loop_clean(ip, combos, clean_battery=30, recharge_battery=20,
                    max_rounds=0, sample_interval=15.0,
                    out_dir=None, log_fn=None, stop_event=None,
-                   on_state=None):
+                   on_state=None, stream=None):
     """执行循环清扫，返回结果 dict。
 
     stop_event: threading.Event；GUI 点停止时置位，正常收尾。
@@ -123,17 +123,20 @@ def run_loop_clean(ip, combos, clean_battery=30, recharge_battery=20,
               "combos": combos, "rounds": [], "errors": [], "events": [],
               "completed": False, "start_time": _now(), "end_reason": ""}
 
-    st = UploadStream()
+    # ★ 共用推送会话(用户 2026-11-27): 设备页传入 stream 时直接用, 不另开会话
+    own_stream = stream is None
+    st = stream if stream is not None else UploadStream()
     paths = ["/BatteryBattery/BatteryLevel", "/BatteryBattery/BatteryVol",
              "/CleanTask/CleanAppStatus", "/MotorFan/Speed"]
-    connected = False
-    for _ in range(3):
-        if st.start(ip, paths):
-            connected = True
-            break
-        time.sleep(1.5)
-    if not connected:
-        raise RuntimeError("APOS 推送流连接失败: %s" % ip)
+    if own_stream or not getattr(st, "running", False):
+        connected = False
+        for _ in range(3):
+            if st.start(ip, paths):
+                connected = True
+                break
+            time.sleep(1.5)
+        if not connected:
+            raise RuntimeError("APOS 推送流连接失败: %s" % ip)
     mcu = McuStream()
     try:
         mcu.start(ip)
@@ -518,7 +521,8 @@ def run_loop_clean(ip, combos, clean_battery=30, recharge_battery=20,
             time.sleep(1)
     finally:
         cleanup()
-        st.stop()
+        if own_stream:
+            st.stop()          # 共享流不归本函数管, 交给设备页
         if mcu is not None:
             mcu.stop()
 

@@ -7,6 +7,7 @@
 """
 import logging
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -79,6 +80,9 @@ def test_exit_breadcrumbs_exist():
     main = (root / "gui" / "main.py").read_text(encoding="utf-8")
     assert "[退出] 收到关窗请求" in mw, "关窗没留痕"
     assert "应用更新: 已启动替换脚本" in dialogs, "更新重启(os._exit)之前没留痕"
-    assert "os._exit(0)" in dialogs, "更新重启不在 dialogs 里? 留痕与退出必须同处"
+    # 锚定真实代码行(不能只搜子串: 注释里也有 os._exit(0) 字样)
+    assert re.search(r"^    os\._exit\(0\)$", dialogs, re.M),         "更新重启不在 dialogs 里? 留痕与退出必须同处"
+    # main_window 必须仍委托 dialogs 实现(调用链断了守护就落空)
+    assert "apply_update_and_restart(self)" in mw, "主窗口没有委托 dialogs 重启"
     assert "界面主循环结束" in main, "主循环结束没留痕"
     assert "crashlog" in main, "启动没装崩溃取证"

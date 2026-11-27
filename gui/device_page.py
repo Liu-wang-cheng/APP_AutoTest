@@ -5948,6 +5948,16 @@ class DevicePage(QWidget):
         if btn.text() != text:
             btn.setText(text)
 
+    def shared_stream(self):
+        """全局唯一的设备推送会话(用户 2026-11-27)。
+
+        后续所有需要设备参数/数据流的地方(续航、循环清扫、未来的功能)都从
+        这里拿同一条 UploadStream, 不许再自建 —— 多个 libapos 推送会话会互相
+        挤掉订阅。未连接时返回 None, 调用方自行回退自建流(离线场景)。
+        """
+        svc = self._service
+        return svc.stream if svc is not None else None
+
     def pause_param_stream(self):
         """续航测试运行期间让出机器人推送会话，返回是否成功暂停。"""
         svc = self._service

@@ -619,25 +619,32 @@ class ParamService:
 
     # ── 推流借用（续航测试独占） ──
     def pause_stream(self):
-        """暂停推送、让出机器人推送会话（续航测试运行期间用）。
+        """测试独占期间挂起本服务（用户 2026-11-27: 全局共用同一条推送会话）。
 
-        只停流不退回轮询：librpc 读和续航自己的 libapos 推流同时跑会互卡。
-        值保留（clear=False），恢复后界面不闪空。
+        ★ 不再停流 —— 会话是全局唯一的, 测试直接复用这条流; 这里只挂起
+          本服务的采集/看门狗, 避免和测试的 keepalive 抢着重启会话。
+          推送还在进, 设备页数值继续刷新(_stream_snapshot 不受暂停影响)。
         """
         self._stream_paused = True
-        stream = self.stream
-        if stream is not None:
-            try:
-                stream.stop(clear=False)
-            except Exception:
-                pass
-        self._stream_only = False
         self._wake.set()
 
     def resume_stream(self):
-        """恢复推送（续航测试结束后调用）。"""
+        """恢复本服务（测试结束后调用）；测试若改窄了订阅, 重订回全量路径。"""
         was_paused = self._stream_paused
         self._stream_paused = False
+        self._stream_only = bool(getattr(self.stream, "running", False))
+        target = list(self._stream_paths or self._paths)
+        stream = self.stream
+        if stream is not None:
+            subscribed = getattr(stream, "_paths", None)
+            running = getattr(stream, "running", False)
+            if (not running or subscribed is None
+                    or set(subscribed) != set(target)):
+                # 测试期间 keepalive 可能把订阅改窄成它的 4 条 —— 恢复宽订阅
+                try:
+                    stream.start(self._ip, target, preserve=True)
+                except Exception:
+                    pass
         #: 固定参数(SN/固件/型号等): 读到一次后缓存, 之后不再参与轮询/推送覆盖,
         #: 重新连接时清空（用户 2026-11-27）。
         self._static_values = {}

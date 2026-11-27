@@ -770,7 +770,7 @@ def parse_combos(text):
 def run_endurance_suite(ip, combos=None, out_dir=None, stop_on_fail=False,
                         report=True, shutdown_after=False, shutdown_kwargs=None,
                         log_fn=None, stop_event=None, on_state=None,
-                        max_duration=8 * 3600, **run_kwargs):
+                        max_duration=8 * 3600, stream=None, **run_kwargs):
     """连续跑多个模式/挡位组合，每个组合等满电后开始，结束生成汇总 Excel。
 
     shutdown_after=True 时，最后一个组合低电回充后不再充电，直接转入
@@ -823,7 +823,7 @@ def run_endurance_suite(ip, combos=None, out_dir=None, stop_on_fail=False,
                                   log_fn=_log, stop_event=stop_event,
                                   on_state=on_state,
                                   max_duration=min(max_duration, remaining),
-                                  **run_kwargs)
+                                  stream=stream, **run_kwargs)
         dirs.append(d)
         entries.append({"mode": mode, "fan": fan, "water": water,
                         "dir": d, "completed": bool(result.get("completed")),
@@ -1099,7 +1099,7 @@ def run_endurance(ip, mode="sweepOnly", fan_level=4, water_level=0,
                   low_battery=20, sample_interval=15.0,
                   wait_full_timeout=4 * 3600, max_duration=8 * 3600,
                   out_dir=None, log_fn=None, stop_event=None,
-                  on_state=None):
+                  on_state=None, stream=None):
     """执行一次完整续航测试，返回结果 dict 并落盘报告。
 
     stop_event: threading.Event；GUI 点停止时置位，正常收尾并写部分报告。
@@ -1124,17 +1124,22 @@ def run_endurance(ip, mode="sweepOnly", fan_level=4, water_level=0,
     on_log = log_fn
     log_fn = _log
 
-    st = UploadStream()
+    # ★ 共用推送会话(用户 2026-11-27): 传入 stream=设备页的流就直接用,
+    #   不再另开会话 —— 多个 libapos 推送会话会互相挤掉订阅。
+    #   设备页的宽订阅本来就包含下面 4 条路径, 会话活着时无需重订。
+    own_stream = stream is None
+    st = stream if stream is not None else UploadStream()
     paths = ["/BatteryBattery/BatteryLevel", "/BatteryBattery/BatteryVol",
              "/CleanTask/CleanAppStatus", "/MotorFan/Speed"]
-    connected = False
-    for _ in range(3):
-        if st.start(ip, paths):
-            connected = True
-            break
-        time.sleep(1.5)
-    if not connected:
-        raise RuntimeError("APOS 推送流连接失败: %s" % ip)
+    if own_stream or not getattr(st, "running", False):
+        connected = False
+        for _ in range(3):
+            if st.start(ip, paths):
+                connected = True
+                break
+            time.sleep(1.5)
+        if not connected:
+            raise RuntimeError("APOS 推送流连接失败: %s" % ip)
     mcu = McuStream()
     try:
         mcu.start(ip)
@@ -1904,7 +1909,8 @@ def run_endurance(ip, mode="sweepOnly", fan_level=4, water_level=0,
                 log_fn("[清理] 已停止并清除当前清扫任务（防断点续扫）")
             except Exception as e:
                 log_fn("[清理] 清除任务失败: %s" % e)
-        st.stop()
+        if own_stream:
+            st.stop()          # 共享流不归本函数管, 交给设备页
         if mcu is not None:
             mcu.stop()
 

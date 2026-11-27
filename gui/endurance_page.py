@@ -40,13 +40,14 @@ class EnduranceWorker(QThread):
     finished_run = Signal(bool, str, str, str)   # 完成/原因/结果目录/Excel
 
     def __init__(self, ip, combos, low_battery, sample_interval,
-                 parent=None, peer=None):
+                 parent=None, peer=None, stream=None):
         super().__init__(parent)
         self._ip = ip
         self._combos = list(combos)
         self._low = low_battery
         self._interval = sample_interval
         self._peer = peer
+        self._stream = stream      # 共用设备页的推送会话(可为 None)
         self._stop = threading.Event()
 
     def stop(self):
@@ -67,7 +68,8 @@ class EnduranceWorker(QThread):
                 self._ip, combos=self._combos, log_fn=self.log_line.emit,
                 stop_event=self._stop, on_state=self.state.emit,
                 low_battery=self._low,
-                sample_interval=self._interval)
+                sample_interval=self._interval,
+                stream=self._stream)
             ok = bool(entries) and all(e.get("completed") for e in entries)
             done = sum(1 for e in entries if e.get("completed"))
             msg = "完成 %d/%d 个组合" % (done, len(entries))
@@ -712,7 +714,9 @@ class EndurancePage(QWidget):
         self._append("[启动] %s，%d 个组合" % (ip, len(combos)))
         self.worker = EnduranceWorker(
             ip, combos, self.low_spin.value(),
-            float(self.sample_spin.value()), self, peer=self.device)
+            float(self.sample_spin.value()), self, peer=self.device,
+            stream=(self.device.shared_stream()
+                    if self.device is not None else None))
         self.worker.log_line.connect(self._append)
         self.worker.state.connect(self._on_state)
         self.worker.finished_run.connect(self._on_finished)

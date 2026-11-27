@@ -891,14 +891,18 @@ def test_set_fan_level_sends_runtime_and_user_setting():
     ]
 
 
-def test_pause_resume_stream_keeps_values_and_blocks_restart():
-    """续航占用推流期间: 设备页不重建推送、不读属性，恢复后重开（2026-11-26）。"""
+def test_pause_resume_shared_stream_not_stopped():
+    """共用会话(2026-11-27): 暂停不再停流 —— 测试直接复用同一条推送会话。
+
+    暂停只挂起本服务的采集/看门狗; 订阅没变时恢复不做任何重启。
+    """
     class FakeStream:
         running = True
 
         def __init__(self):
             self.stop_calls = []
             self.start_calls = []
+            self._paths = ["/BatteryBattery/BatteryLevel"]
 
         def stop(self, clear=True):
             self.stop_calls.append(clear)
@@ -906,6 +910,7 @@ def test_pause_resume_stream_keeps_values_and_blocks_restart():
 
         def start(self, ip, paths, preserve=False):
             self.start_calls.append((ip, list(paths), preserve))
+            self._paths = list(paths)
             self.running = True
             return True
 
@@ -916,16 +921,41 @@ def test_pause_resume_stream_keeps_values_and_blocks_restart():
     svc._stream_paths = ["/BatteryBattery/BatteryLevel"]
 
     svc.pause_stream()
-    assert stream.running is False
-    assert stream.stop_calls == [False]       # clear=False → 保留最后的值
+    assert stream.running is True             # 共用会话: 暂停不停流
+    assert stream.stop_calls == []
     assert svc._stream_paused is True
     assert svc.start_stream() is False        # 暂停期间不允许重建
 
     assert svc.resume_stream() is True
-    assert stream.running is True
-    assert stream.start_calls[-1] == (
-        "1.2.3.4", ["/BatteryBattery/BatteryLevel"], False)
     assert svc._stream_paused is False
+    assert stream.start_calls == []           # 订阅没被改窄 → 无需重订
+
+
+def test_resume_resubscribes_wide_paths_after_test_narrowed():
+    """测试期间 keepalive 把订阅改窄成 4 条 → 恢复时重订回全量路径。"""
+    wide = ["/BatteryBattery/BatteryLevel", "/MotorFan/Speed"]
+    class FakeStream:
+        running = True
+
+        def __init__(self):
+            self.start_calls = []
+            self._paths = ["/BatteryBattery/BatteryLevel"]   # 被测试改窄了
+
+        def start(self, ip, paths, preserve=False):
+            self.start_calls.append((ip, list(paths), preserve))
+            self._paths = list(paths)
+            self.running = True
+            return True
+
+    stream = FakeStream()
+    svc = ParamService(object(), wide, stream=stream)
+    svc._connected = True
+    svc._ip = "1.2.3.4"
+    svc._stream_paths = list(wide)
+    svc._stream_paused = True
+
+    assert svc.resume_stream() is True
+    assert stream.start_calls == [("1.2.3.4", wide, True)]
 
 
 def test_fill_system_from_files_overrides_empty_binpack_value():
