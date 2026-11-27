@@ -74,8 +74,11 @@ def test_exit_breadcrumbs_exist():
     """
     root = Path(__file__).resolve().parent.parent
     mw = (root / "gui" / "main_window.py").read_text(encoding="utf-8")
+    # 更新重启的实现(含 os._exit 与留痕行)在 gui/dialogs.py(2026-11-27 挪出)
+    dialogs = (root / "gui" / "dialogs.py").read_text(encoding="utf-8")
     main = (root / "gui" / "main.py").read_text(encoding="utf-8")
     assert "[退出] 收到关窗请求" in mw, "关窗没留痕"
-    assert "应用更新: 已启动替换脚本" in mw, "更新重启(os._exit)之前没留痕"
+    assert "应用更新: 已启动替换脚本" in dialogs, "更新重启(os._exit)之前没留痕"
+    assert "os._exit(0)" in dialogs, "更新重启不在 dialogs 里? 留痕与退出必须同处"
     assert "界面主循环结束" in main, "主循环结束没留痕"
     assert "crashlog" in main, "启动没装崩溃取证"
