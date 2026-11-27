@@ -6,7 +6,6 @@ tools.endurance_report，命令行与计划任务共用同一套实现。
 """
 import json
 import os
-import re
 import threading
 import time
 

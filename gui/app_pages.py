@@ -9,9 +9,9 @@ import re
 import time
 
 from PySide6.QtCore import QEvent, Qt, QTimer
-from PySide6.QtWidgets import (QComboBox, QFrame, QHBoxLayout, QLabel,
-                                QListWidget, QMessageBox, QPushButton,
-                                QStackedWidget, QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (QFrame, QHBoxLayout, QLabel, QListWidget,
+                                QMessageBox, QPushButton, QStackedWidget,
+                                QVBoxLayout, QWidget)
 
 from gui.ai_config_page import AiConfigPage
 from gui.device_page import DevicePage
@@ -304,10 +304,6 @@ def bind_robot_ip(window, device):
     def _sync_btns(*_):
         connecting = bool(getattr(device, "connecting", False))
         connected = bool(getattr(device, "connected", False))
-        combo = nav.robot_ip_combo
-        text = combo.currentText().strip()
-        m = __import__("re").search(r"(\d{1,3}(?:\.\d{1,3}){3})", text)
-        selected = m.group(1) if m else text
         nav.robot_connect_btn.setText(
             "连接中…" if connecting else ("断开" if connected else "连接"))
         nav.robot_connect_btn.setEnabled(not connecting)
