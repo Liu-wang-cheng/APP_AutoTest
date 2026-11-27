@@ -1,8 +1,8 @@
 {
-  "version": "2.0.43",
-  "sha256": "b0060937523a6e9cf3b214bc8d4c77adbbbaae1b74d9a993758be6b4b091d771",
-  "download_url": "https://github.com/Liu-wang-cheng/APP_AutoTest/releases/download/v2.0.43/AutoTest_v2.0.43.zip",
+  "version": "2.0.44",
+  "sha256": "0b8613b8ef57d0a71d6356e45c04377c23d3754307b83bb48fc219d0b9b1656b",
+  "download_url": "https://github.com/Liu-wang-cheng/APP_AutoTest/releases/download/v2.0.44/AutoTest_v2.0.44.zip",
   "release_date": "2026-11-27",
-  "release_notes": "### 修复\n\n- **APOS SDK 默认内置**: 新版 AutopackDebugger 的 `AposSdkHelp.py` 已加密,\n  无法再从中提取 license, 新装机器也不再有旧的 `apos\\license.dat` 可复用。\n  安装包现内置已验证可用的 APOS SDK(DLL + license), 首次启动自动铺到\n  exe 同级 `apos\\`, 不再要求选择上位机目录。",
+  "release_notes": "### 修复\n\n- **测试 IP 跟随工具连接**: 续航/循环清扫不再写死 `192.168.10.21`; 工具连接\n  设备后测试页自动跟随当前 IP, 未连接时使用设备页当前/上次使用的 IP。启动测试\n  也会记住本次 IP, 下次启动继续使用。\n- **断开实时反馈**: 参数链路连续 15 秒读不到数据时自动判定断开, 界面与各测试页\n  的连接状态立即切换为未连接, 不再一直显示“已连接”。\n- **挡位下发时机**: 续航/循环清扫改为只先下发清扫模式; 收到设备事件\n  `clean_location_success`（定位成功，继续清扫）后再下发吸力/水量; 旧固件\n  无该事件时 15 秒后兜底下发。\n- **深色系统勾选框不可见**: 强制使用浅色配色, 修复 Windows 深色模式下原生\n  勾选标记变浅色、在浅色界面上“消失”的问题。\n- **OTA 重复下载**: 已下载并点过「稍后」的更新包再次检查到同一版本时直接提示\n  重启, 不再重新下载。\n- **设备参数表格**: 去掉选中单元格的蓝色背景与外围虚线焦点框。\n\n### 优化\n\n- **固定参数只读一次**: 型号、固件版本、镜像版本、MCU 版本、构建时间、\n  自定义 SN、主板 SN 每个连接/IP 只获取一次, 重新连接或换 IP 后才刷新。\n- 移除自动备份功能, 不再生成 `backups\\` 目录及占用磁盘空间。\n- 充电器类别恢复实时获取。",
   "min_version": "1.0"
 }
