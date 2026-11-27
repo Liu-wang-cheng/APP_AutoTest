@@ -490,8 +490,8 @@ def test_verify_package_ocr_gate(tmp_path):
     import verify_package as vp
 
     app = tmp_path / "dist" / "AutoTest"
-    (app / "reports").mkdir(parents=True)
-    log = app / "reports" / "test.log"
+    (app / "reports" / "log").mkdir(parents=True)
+    log = app / "reports" / "log" / "test.log"
 
     log.write_text("13:00:00 [INFO] [OCR] RapidOCR 已加载(文本兜底识别)\n"
                    "13:00:01 [INFO] [OCR] 自检通过(文本兜底可用)\n", encoding="utf-8")
@@ -506,7 +506,7 @@ def test_verify_package_ocr_gate(tmp_path):
     errs = vp._check_ocr_selfcheck(str(app))
     assert errs and "自检结论" in errs[0], errs
 
-    (app / "reports" / "test.log").unlink()
+    (app / "reports" / "log" / "test.log").unlink()
     errs = vp._check_ocr_selfcheck(str(app))
     assert errs and "读不到程序日志" in errs[0], errs
 

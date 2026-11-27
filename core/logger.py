@@ -43,9 +43,9 @@ class RotatingLogHandler(logging.StreamHandler):
 
 
 def _default_log_path():
-    """默认日志路径: 用户数据目录下的 reports/test.log(**绝对路径**)。
+    """默认日志路径: 用户数据目录下的 reports/log/test.log(**绝对路径**)。
 
-    ★ 不能用相对路径 "reports/test.log" —— 它依赖**当前工作目录**, 而打包后启动的
+    ★ 不能用相对路径 "reports/log/test.log" —— 它依赖**当前工作目录**, 而打包后启动的
       CWD 可能是任意位置(资源管理器双击、快捷方式的工作目录设置等), 日志会落到
       莫名其妙的地方, 排查问题时反而找不到。
       延迟导入 core.driver: logger 是底层模块, 顶层导入容易卷进循环依赖。
@@ -58,7 +58,7 @@ def _default_log_path():
 def setup_logger(log_path=None, level=logging.INFO):
     """控制台 + 5MB 环形文件。重复调用幂等。
 
-    log_path 缺省 = 用户数据目录下的 reports/test.log(绝对路径, 见 _default_log_path)
+    log_path 缺省 = 用户数据目录下的 reports/log/test.log(绝对路径, 见 _default_log_path)
 
     ★ pythonw.exe 启动时 sys.stderr 是 None —— 此时挂 StreamHandler 会让
     第一次写日志就抛异常。GUI 用 pythonw 启动(为了不弹控制台窗口),所以这里

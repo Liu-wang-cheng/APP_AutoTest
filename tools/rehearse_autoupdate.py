@@ -231,7 +231,7 @@ def main(argv=None):
     check(not os.path.isfile(os.path.join(app, "_update_download.zip")), "下载包已清理")
     # ⑥ 新版本能启动吗
     exe = os.path.join(app, args.exe_name)
-    log = os.path.join(app, "reports", "test.log")
+    log = os.path.join(app, "reports", "log", "test.log")
     before = os.path.getsize(log) if os.path.isfile(log) else 0
     t0 = time.perf_counter()
     p = subprocess.Popen([exe], cwd=app, env=dict(os.environ, QT_QPA_PLATFORM="offscreen"),

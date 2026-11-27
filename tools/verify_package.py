@@ -171,7 +171,7 @@ def _clean_mei_leftovers(before):
 def _check_ocr_selfcheck(app_dir):
     """读打包程序自己写的日志, 确认 OCR 兜底**在冻结环境里真的能跑**。
 
-    判据(程序启动 3 秒后自检, 结论写进 <程序目录>/reports/test.log):
+    判据(程序启动 3 秒后自检, 结论写进 <程序目录>/reports/log/test.log):
       · 有 "[OCR] 自检通过"      → 通过
       · 有 "[OCR] 不可用"        → 失败(附上程序写的原因)
       · 一行都没有               → 失败(自检没跑起来 / 日志没落盘)
@@ -179,7 +179,7 @@ def _check_ocr_selfcheck(app_dir):
     ★ 这是本项目唯一能证明"打包后 OCR 能用"的手段: 开发环境装了依赖, 怎么测都是好的;
       之前两次(缺 ch_ppocr_v3_det、缺 pyclipper)都是**只有打包版才暴露**。
     """
-    log_path = os.path.join(app_dir, "reports", "test.log")
+    log_path = os.path.join(app_dir, "reports", "log", "test.log")
     try:
         text = open(log_path, encoding="utf-8", errors="replace").read()
     except OSError:
