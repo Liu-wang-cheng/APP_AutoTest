@@ -5729,10 +5729,16 @@ class DevicePage(QWidget):
             self.connect_finished.emit(False, ip, msg)
             self._flush_pending_connect()
             self._sync_connect_btn()
+            if getattr(self, "_relink_left", 0) > 0:
+                QTimer.singleShot(self.RELINK_DELAY_MS, self._relink_once)
             return
         self._connected = True
         self._connected_ip = ip
         self._remember_ip(ip)
+        # ★ 重连成功后清掉「连接已断开(长时间无数据)」旧提示(用户 2026-11-27)
+        self._relink_left = 0
+        self.status_label.setText(f"已连接 {ip}")
+        self.status_label.setStyleSheet("color:#16a34a;font-size:11px;")
         self.disconnect_btn.setEnabled(True)
         # ★ 换设备后清掉上一台机器的曲线历史/表格值（用户 2026-11-09）
         self._last_snapshot = {"ok": {}, "failed": {}, "ts": 0}
@@ -5825,10 +5831,15 @@ class DevicePage(QWidget):
             f"SN {show('sn')}    ·    固件版本 {show('firmware_version')}"
             f"    ·    基站版本 {show('base_station_version')}")
 
-    def disconnect_device(self):
-        """断开连接（后台线程；ParamService.stop 最多 join 5 秒，不能卡 UI）。"""
+    def disconnect_device(self, auto=False):
+        """断开连接（后台线程；ParamService.stop 最多 join 5 秒，不能卡 UI）。
+
+        auto=True: 断链触发的断开 —— 保留自动重连预算; 用户手动断开则清零。
+        """
         if self._connecting or self._disconnecting:
             return
+        if not auto:
+            self._relink_left = 0
         # ★ 用户主动断开: 取消排队中的切换 IP, 否则断开后又会自动连回去
         self._pending_connect_ip = ""
         self._pending_connect_retries = 0
@@ -5859,6 +5870,9 @@ class DevicePage(QWidget):
         self.connectionChanged.emit(False, "")
         self._flush_pending_connect()
         self._sync_connect_btn()
+        # 断链触发的断开: 延时后自动重连(网络恢复后无需手动点连接)
+        if getattr(self, "_relink_left", 0) > 0:
+            QTimer.singleShot(self.RELINK_DELAY_MS, self._relink_once)
 
     def _sync_connect_btn(self):
         """连接按钮文案跟随真实状态: 连接中… / 已连接 / 连接（用户 2026-11-26）。
@@ -6026,14 +6040,33 @@ class DevicePage(QWidget):
                 return None
         return None
 
+    #: 断链后自动重连的剩余次数(用户 2026-11-27)
+    RELINK_MAX_TRIES = 3
+    RELINK_DELAY_MS = 20000
+
     def _on_link_lost(self):
-        """设备侧断链(断网/机器人重启): 不再显示「已连接」。"""
+        """设备侧断链(断网/机器人重启): 切未连接, 并按计划自动重连。"""
         if not self._connected:
             return
         log.warning("[连接] 参数链路已断开, 界面切换为未连接")
         self.status_label.setText("连接已断开（长时间无数据）")
         self.status_label.setStyleSheet("color:#dc2626;")
-        self.disconnect_device()
+        self._relink_left = self.RELINK_MAX_TRIES
+        self.disconnect_device(auto=True)
+
+    def _relink_once(self):
+        """断链后的自动重连尝试; 成功在 _connect_done 里清零。"""
+        if (self._connected or self._connecting or self._relink_left <= 0):
+            return
+        ip = self._selected_ip() or self._connected_ip
+        if not ip:
+            return
+        self._relink_left -= 1
+        self.status_label.setText(
+            f"正在自动重连（第 {self.RELINK_MAX_TRIES - self._relink_left}"
+            f"/{self.RELINK_MAX_TRIES} 次）…")
+        self.status_label.setStyleSheet("color:#b45309;font-size:11px;")
+        self.connect_device()
 
     def _poll(self):
         if not self._connected or self._service is None:

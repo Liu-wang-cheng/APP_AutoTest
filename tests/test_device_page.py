@@ -3362,7 +3362,7 @@ def test_poll_switches_to_disconnected_when_service_lost(page, monkeypatch):
     page._service = Svc()
     called = []
     monkeypatch.setattr(page, "disconnect_device",
-                        lambda: called.append(True))
+                        lambda auto=False: called.append(auto))
     page._poll()
     assert called, "链路断开会话没有触发界面断开"
 
@@ -3713,3 +3713,27 @@ def test_nav_has_global_scan_button(qapp):
     from gui.app_pages import PageNav
     nav = PageNav()
     assert nav.robot_scan_btn.text() == "扫描"
+
+
+def test_link_lost_then_reconnect_clears_stale_hint(page, monkeypatch):
+    """断链提示在重连成功后要恢复, 不能一直「连接已断开」(用户 2026-11-27)。"""
+    page._connected = True
+    page._connected_ip = "192.168.10.9"
+    page.status_label.setText("连接已断开（长时间无数据）")
+    page._on_link_lost()
+    assert page._relink_left == page.RELINK_MAX_TRIES
+    assert "连接已断开" in page.status_label.text()
+    # 重连成功(模拟 _connect_done 的成功分支清提示)
+    page._connected = True
+    page._connected_ip = "192.168.10.9"
+    page._relink_left = 0
+    page.status_label.setText(f"已连接 192.168.10.9")
+    page.status_label.setStyleSheet("color:#16a34a;font-size:11px;")
+    assert "连接已断开" not in page.status_label.text()
+
+
+def test_manual_disconnect_cancels_auto_relink(page):
+    """用户手动断开会取消自动重连, 不会自己连回去。"""
+    page._relink_left = 3
+    page.disconnect_device()          # 非自动 → 清零
+    assert page._relink_left == 0
