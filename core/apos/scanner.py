@@ -15,6 +15,7 @@ import base64
 import ipaddress
 import json
 import locale
+import os
 import re
 import socket
 import subprocess
@@ -90,9 +91,15 @@ def parse_response(raw):
 
 
 def _decode_ipconfig():
-    """读取 ipconfig 输出（中英文 Windows 都能解析）。"""
+    """读取 ipconfig 输出（中英文 Windows 都能解析）。
+
+    ★ CREATE_NO_WINDOW(用户 2026-11-27): 打包版是无控制台程序, 直接拉起
+      ipconfig.exe 会让 Windows 新分配一个控制台 —— 每次点扫描就闪黑框。
+    """
     try:
-        raw = subprocess.run(["ipconfig"], capture_output=True, timeout=10).stdout
+        flags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+        raw = subprocess.run(["ipconfig"], capture_output=True, timeout=10,
+                             creationflags=flags).stdout
     except Exception:
         return ""
     for enc in (locale.getpreferredencoding(False), "gbk", "utf-8"):

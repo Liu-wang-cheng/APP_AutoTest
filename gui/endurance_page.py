@@ -139,16 +139,7 @@ class EndurancePage(QWidget):
         if self._persist:
             self._load_settings()
         self._loading = False
-        self._refresh_ips()
-        self._refresh_conn()
         self._refresh_latest()
-        if device is not None:
-            try:
-                device.devicesChanged.connect(self._refresh_ips)
-                device.connectionChanged.connect(self._on_conn_changed)
-                device.connectingChanged.connect(self._on_connecting)
-            except Exception:
-                pass
 
     # ── UI ──
     def _build_ui(self):
@@ -170,28 +161,7 @@ class EndurancePage(QWidget):
         head.addStretch(1)
         root.addLayout(head)
 
-        ip_row = QHBoxLayout()
-        ip_row.addWidget(QLabel("设备IP"))
-        self.ip_combo = NoWheelComboBox()
-        self.ip_combo.setEditable(True)
-        self.ip_combo.setMinimumWidth(220)
-        self.ip_combo.setPlaceholderText("机器人 IP")
-        self.ip_combo.currentTextChanged.connect(
-            lambda *_: self._sync_conn_ui())
-        ip_row.addWidget(self.ip_combo)
-        self.connect_btn = QPushButton("连接")
-        self.connect_btn.setObjectName("runBtn")
-        self.connect_btn.clicked.connect(self._connect)
-        self.disconnect_btn = QPushButton("断开")
-        self.disconnect_btn.setObjectName("chipBtn")
-        self.disconnect_btn.clicked.connect(self._disconnect)
-        ip_row.addWidget(self.connect_btn)
-        ip_row.addWidget(self.disconnect_btn)
-        self.conn_label = QLabel("● 未连接")
-        self.conn_label.setStyleSheet("color:#94a3b8;font-size:11px;")
-        ip_row.addWidget(self.conn_label)
-        ip_row.addStretch(1)
-        root.addLayout(ip_row)
+        # ★ 扫地机IP连接统一在右上角导航条(用户 2026-11-27), 本页不再放 IP 行
 
         # 低电阈值 / 采样单独一行（用户 2026-11-26）：原来挤在 IP 行右侧会被窗口裁掉
         opt_row = QHBoxLayout()
@@ -224,7 +194,7 @@ class EndurancePage(QWidget):
         add_btn = QPushButton("添加组合")
         add_btn.setObjectName("chipBtn")
         add_btn.clicked.connect(lambda: self._add_row())
-        del_btn = QPushButton("删除选中")
+        del_btn = QPushButton("删除勾选")
         del_btn.setObjectName("chipBtn")
         del_btn.clicked.connect(self._delete_selected)
         reset_btn = QPushButton("恢复默认")
@@ -416,9 +386,20 @@ class EndurancePage(QWidget):
             self._set_row_checked(r, not self._row_checked(r))
 
     def _delete_selected(self):
-        rows = sorted({i.row() for i in self.table.selectedIndexes()},
-                      reverse=True)
-        for r in rows:
+        """删除**勾选**的组合(不是表格选中行), 删除前确认(用户 2026-11-27)。"""
+        rows = [r for r in range(self.table.rowCount())
+                if self._row_checked(r)]
+        if not rows:
+            QMessageBox.information(
+                self, "没有勾选组合",
+                "请先勾选要删除的组合（勾选框在最左侧「启用」列）。")
+            return
+        if QMessageBox.question(
+                self, "确认删除",
+                "确定删除已勾选的 %d 个组合？\n删除后不可恢复。"
+                % len(rows)) != QMessageBox.Yes:
+            return
+        for r in reversed(rows):
             self.table.removeRow(r)
         self._save_settings()
 
@@ -504,176 +485,24 @@ class EndurancePage(QWidget):
             combos.append((mode, fan, water))
         return combos
 
-    # ── 设备连接 ──
-    def _refresh_ips(self):
-        """刷新 IP 下拉：显示「型号-SN-IP」（与设备参数页/测试页一致）。"""
-        current = self.ip_combo.currentText().strip()
-        devs = []
-        connected_ip = ""
-        info = {}
-        if self.device is not None:
-            try:
-                devs = list(self.device._known_devices())
-            except Exception:
-                devs = []
-            try:
-                connected_ip = str(self.device.connected_ip or "")
-            except Exception:
-                connected_ip = ""
-            try:
-                info = getattr(self.device, "_device_info", None) or {}
-            except Exception:
-                info = {}
-        self.ip_combo.blockSignals(True)
-        self.ip_combo.clear()
-        seen = set()
-        for dev in devs:
-            ip = str(dev.get("ip") or "").strip()
-            if not ip or ip in seen:
-                continue
-            seen.add(ip)
-            model = dev.get("model") or (info.get("model", "")
-                                         if ip == connected_ip else "")
-            sn = dev.get("sn") or (info.get("sn", "")
-                                   if ip == connected_ip else "")
-            label = "-".join(x for x in (model, sn, ip) if x)
-            self.ip_combo.addItem(label, ip)
-        if connected_ip and connected_ip not in seen:
-            model = info.get("model", "")
-            sn = info.get("sn", "")
-            label = "-".join(x for x in (model, sn, connected_ip) if x)
-            self.ip_combo.addItem(label, connected_ip)
-        # 连接成功后优先选中「已连接那台」（显示型号-SN）；只有用户手动输入了
-        # 别的 IP（下拉里没有的原始 IP）时才保留他的输入。
-        labels = {self.ip_combo.itemText(i): self.ip_combo.itemData(i)
-                  for i in range(self.ip_combo.count())}
-        cur_is_item = bool(current and labels.get(current))
-        # ★ 自动填入的默认 IP 不算"用户选择": 工具连上设备后要跟随过去,
-        #   否则新用户会一直用 192.168.10.21 去订阅推流(用户 2026-11-27)。
-        is_auto = (not current) or (current == self._auto_ip)
-        prefer = connected_ip if (connected_ip and (
-            is_auto or current == connected_ip or cur_is_item)) else ""
-        if not prefer and is_auto:
-            # 还没连接时，优先用设备页当前输入/上次使用的 IP，而不是写死 10.21
-            try:
-                prefer = str(getattr(self.device, "_connect_ip", "") or
-                             self.device._selected_ip() or "")
-            except Exception:
-                prefer = ""
-        target = prefer or current
-        idx = self.ip_combo.findData(target)
-        if idx < 0:
-            idx = self.ip_combo.findText(target)
-        if idx >= 0:
-            self.ip_combo.setCurrentIndex(idx)
-        elif target:
-            self.ip_combo.setEditText(target)
-        elif self.ip_combo.count():
-            self.ip_combo.setCurrentIndex(0)
-        else:
-            self.ip_combo.setEditText("192.168.10.21")
-        self._auto_ip = self.ip_combo.currentText().strip()
-        self.ip_combo.blockSignals(False)
-        self._fit_ip_combo()
-
-    def _fit_ip_combo(self):
-        """下拉宽度按最长「型号-SN-IP」自适应，避免被截断。"""
-        fm = self.ip_combo.fontMetrics()
-        texts = [self.ip_combo.itemText(i)
-                 for i in range(self.ip_combo.count())]
-        cur = self.ip_combo.currentText().strip()
-        if cur:
-            texts.append(cur)
-        longest = max((fm.horizontalAdvance(t) for t in texts), default=0)
-        width = max(220, min(longest + 56, 460))
-        if self.ip_combo.width() != width:
-            self.ip_combo.setFixedWidth(width)
-
+    # ── 设备连接(统一走右上角导航条, 用户 2026-11-27) ──
     def _ip(self):
-        text = self.ip_combo.currentText().strip()
-        idx = self.ip_combo.currentIndex()
-        if idx >= 0 and text == self.ip_combo.itemText(idx):
-            data = self.ip_combo.itemData(idx)
-            if data:
-                return str(data)
-        m = re.search(r"(\d{1,3}(?:\.\d{1,3}){3})", text)
-        return m.group(1) if m else text
-
-    def _connect(self):
-        ip = self._ip()
-        if not ip or self.device is None:
-            return
-        # ★ 已连接同一台设备时不重复连接（用户 2026-11-26）：只有换了 IP 才重连
-        if (getattr(self.device, "connected", False)
-                and ip == (getattr(self.device, "connected_ip", "") or "")):
-            self._append("[连接] 已连接 %s，无需重复连接" % ip)
-            self._sync_conn_ui()
-            return
+        """当前目标 IP: 设备页已连接的优先, 其次设备页选中/上次使用的。"""
+        dev = self.device
+        if dev is not None:
+            ip = str(getattr(dev, "connected_ip", "") or "").strip()
+            if ip:
+                return ip
+            try:
+                ip = str(dev._selected_ip() or "").strip()
+            except Exception:
+                ip = ""
+            if ip:
+                return ip
         try:
-            started = self.device.connect_to(ip)
-        except Exception as e:
-            self._append("[连接] 失败: %s" % e)
-            return
-        if not started:
-            QMessageBox.warning(self, "连接扫地机失败",
-                                "无法连接 %s，请检查 IP 和网络。" % ip)
-        else:
-            self._append("[连接] 正在连接 %s…" % ip)
-        self._sync_conn_ui()
-
-    def _disconnect(self):
-        if self.device is None:
-            return
-        try:
-            self.device.disconnect_device()
-        except Exception as e:
-            self._append("[断开] 失败: %s" % e)
-        self._sync_conn_ui()
-
-    def _on_conn_changed(self, connected, label):
-        if connected:
-            self._refresh_ips()
-            self.conn_label.setText("● 已连接" + (" · " + label if label
-                                                  else ""))
-            self.conn_label.setStyleSheet("color:#16a34a;font-size:11px;")
-            self._sync_conn_ui()
-        else:
-            self._refresh_conn()
-
-    def _on_connecting(self, connecting, ip):
-        if connecting:
-            self.conn_label.setText("● 连接中" + (" · " + ip if ip else ""))
-            self.conn_label.setStyleSheet("color:#d97706;font-size:11px;")
-        self._sync_conn_ui()
-
-    def _refresh_conn(self):
-        connected = getattr(self.device, "connected", False)
-        label = getattr(self.device, "connected_ip", "") if connected else ""
-        if connected:
-            self.conn_label.setText("● 已连接" + (" · " + label if label
-                                                  else ""))
-            self.conn_label.setStyleSheet("color:#16a34a;font-size:11px;")
-        else:
-            self.conn_label.setText("● 未连接")
-            self.conn_label.setStyleSheet("color:#94a3b8;font-size:11px;")
-        self._sync_conn_ui()
-
-    def _sync_conn_ui(self):
-        """连接按钮文案跟随真实状态: 连接中… / 已连接 / 连接（用户 2026-11-26）。
-
-        只有「当前填的 IP == 已连接的 IP」才显示已连接；填了别的 IP 时回到
-        「连接」，表示这一次是切换设备。
-        """
-        connecting = bool(getattr(self.device, "connecting", False))
-        connected = bool(getattr(self.device, "connected", False))
-        same = (connected
-                and self._ip() == (getattr(self.device, "connected_ip", "")
-                                   or ""))
-        text = "连接中…" if connecting else ("已连接" if same else "连接")
-        if self.connect_btn.text() != text:
-            self.connect_btn.setText(text)
-        self.connect_btn.setEnabled(not connecting)
-        self.disconnect_btn.setEnabled(connected and not connecting)
+            return str(self.settings.value("apos/last_ip", "") or "").strip()
+        except Exception:
+            return ""
 
     # ── 测试 ──
     def start(self):
@@ -724,7 +553,14 @@ class EndurancePage(QWidget):
         self.runningChanged.emit(True)
 
     def stop(self):
-        if self.is_running():
+        if not self.is_running():
+            return
+        if QMessageBox.question(
+                self, "确认停止",
+                "确定要停止当前续航测试？\n已产生的数据会保留并生成部分报告。"
+                ) != QMessageBox.Yes:
+            return
+        if True:
             self._append("[停止] 正在结束当前测试…")
             self.stop_btn.setEnabled(False)
             self.state_label.setText("● 停止中…")

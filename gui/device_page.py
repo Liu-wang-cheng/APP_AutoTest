@@ -38,8 +38,7 @@ from core.logger import get_logger
 from gui.ai_review import AiReviewWorker
 from gui.curve_view import CurveView
 from gui.sdk_setup import ensure_sdk
-from gui.widgets import (FlowLayout, NoWheelComboBox, WrappedCombo,
-                         WrappedLineEdit)
+from gui.widgets import FlowLayout, NoWheelComboBox, WrappedCombo
 
 log = get_logger()
 
@@ -547,6 +546,16 @@ class _WrapItemEditor(QTextEdit):
         super().keyPressEvent(ev)
 
 
+class _BilingualPopupDelegate(QStyledItemDelegate):
+    """下拉弹层显示「中文（英文事件名）」, 输入框只显示中文(用户 2026-11-27)。"""
+
+    def initStyleOption(self, option, index):
+        super().initStyleOption(option, index)
+        ident = str(index.data(Qt.UserRole) or "")
+        if ident and f"（{ident}）" not in option.text:
+            option.text = f"{option.text}（{ident}）"
+
+
 class _WrapAnywhereDelegate(QStyledItemDelegate):
     """事件列专用: 长英文标识符按任意字符换行, 行高按实际行数计算。
 
@@ -763,12 +772,10 @@ class DevicePage(QWidget):
         v.setSpacing(8)
 
         head = QHBoxLayout()
-        left = QVBoxLayout()
+        head.setSpacing(12)                 # 与续航/循环/灯显页一致
         title = QLabel("设备参数")
         title.setStyleSheet("font-size:16px;font-weight:700;color:#1e293b;")
-        left.addWidget(title)
-        head.addLayout(left)
-        head.addSpacing(18)
+        head.addWidget(title)
 
         # ★ 顶部控件用流式布局(2026-11-06): 窗口窄时自动换行, 不把页面的
         #   最小宽度顶大 —— 否则切到本页会把整个窗口自动撑宽(用户要求界面
@@ -798,28 +805,22 @@ class DevicePage(QWidget):
         self.disconnect_btn = QPushButton("断开")
         self.disconnect_btn.clicked.connect(self.disconnect_device)
         bar.addWidget(self.disconnect_btn)
-        self.interval_combo = NoWheelComboBox()
-        for s in ("1", "2", "5", "10"):
-            self.interval_combo.addItem(f"刷新 {s} 秒", int(s))
-        self.interval_combo.currentIndexChanged.connect(self._interval_changed)
-        bar.addWidget(self.interval_combo)
-        head.addWidget(bar_host, 1)
-        v.addLayout(head)
+        # ★ 扫地机 IP/连接统一在右上角导航条(用户 2026-11-27), 本页不再显示;
+        #   控件保留给扫描/连接内部逻辑使用(不加入布局, 不占空间)。
+        self._ip_bar_host = bar_host
+        bar_host.hide()
 
-        # ★ 说明 + 扫描/连接状态单独一行(用户 2026-11-06): 不和 IP/按钮/刷新挤在一起。
-        #   这两段都是短提示, 不换行(换行会变成两行, 用户反馈)。
-        hint_row = QHBoxLayout()
-        hint_row.setSpacing(14)
+        # 说明与扫描/连接状态放在标题右侧(用户 2026-11-27), 不再单独占一行
         sub = QLabel("实时读取扫地机内部属性（只读）")
         sub.setStyleSheet("color:#94a3b8;font-size:11px;")
         sub.setWordWrap(False)
-        hint_row.addWidget(sub)
+        head.addWidget(sub)
         self.status_label = QLabel("")     # 只放扫描提示; 连接状态统一在右上角导航
         self.status_label.setStyleSheet("color:#94a3b8;font-size:11px;")
         self.status_label.setWordWrap(False)
-        hint_row.addWidget(self.status_label)
-        hint_row.addStretch(1)
-        v.addLayout(hint_row)
+        head.addWidget(self.status_label)
+        head.addStretch(1)
+        v.addLayout(head)
 
         self.sdk_line = QFrame()
         self.sdk_line.setStyleSheet(
@@ -829,26 +830,23 @@ class DevicePage(QWidget):
         sl.setSpacing(8)
         self.sdk_label = QLabel()
         self.sdk_label.setStyleSheet("color:#475569;font-size:11px;")
-        self.sdk_label.setWordWrap(True)
-        sl.addWidget(self.sdk_label, 1)
+        self.sdk_label.setWordWrap(False)
+        sl.addWidget(self.sdk_label)
         self.sdk_btn = QPushButton("更换 SDK")
         self.sdk_btn.setObjectName("chipBtn")
         self.sdk_btn.clicked.connect(self._change_sdk)
         sl.addWidget(self.sdk_btn)
-        v.addWidget(self.sdk_line)
-
-        self.info_line = QFrame()
-        self.info_line.setStyleSheet(
-            "QFrame{background:#f8fafc;border:1px solid #e4e8ee;border-radius:6px;}")
-        il = QHBoxLayout(self.info_line)
-        il.setContentsMargins(8, 5, 8, 5)
-        il.setSpacing(8)
+        # ★ SDK 与 SN/固件并排一行, 给下方参数表腾高度(用户 2026-11-27)
+        sl.addSpacing(12)
         self.info_label = QLabel()
         self.info_label.setStyleSheet("color:#475569;font-size:11px;")
         self.info_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        self.info_label.setWordWrap(True)
-        il.addWidget(self.info_label, 1)
-        v.addWidget(self.info_line)
+        self.info_label.setWordWrap(False)
+        self.info_label.setToolTip("SN / 固件版本 / 基站版本")
+        sl.addWidget(self.info_label, 1)
+        self.sdk_line.setToolTip("SDK 目录与设备信息")
+        v.addWidget(self.sdk_line)
+        self.info_line = self.sdk_line      # 兼容旧引用
         self._update_info_label()
 
         self.tabs = QTabWidget()
@@ -883,6 +881,11 @@ class DevicePage(QWidget):
         self.only_changed = QCheckBox("只看变化")
         self.only_changed.toggled.connect(self._rebuild_table)
         bar.addWidget(self.only_changed)
+        self.interval_combo = NoWheelComboBox()
+        for sec in ("1", "2", "5", "10"):
+            self.interval_combo.addItem(f"刷新 {sec} 秒", int(sec))
+        self.interval_combo.currentIndexChanged.connect(self._interval_changed)
+        bar.addWidget(self.interval_combo)
         self.count_label = QLabel("")
         self.count_label.setStyleSheet("color:#94a3b8;font-size:11px;")
         bar.addWidget(self.count_label)
@@ -974,30 +977,25 @@ class DevicePage(QWidget):
         # 与设备参数页保持同样的左右留白, 否则文字/表格贴在窗口边缘像被裁掉
         v.setContentsMargins(14, 8, 14, 0)
         v.setSpacing(7)
+        # 与续航/循环清扫页一致的大标题(用户 2026-11-27)
+        head = QHBoxLayout()
+        head.setSpacing(12)
+        title = QLabel("灯显语音测试")
+        title.setStyleSheet("font-size:16px;font-weight:700;color:#1e293b;")
+        head.addWidget(title)
         tip = QLabel("触发故障事件后，等约 3 秒从设备日志解析语音序号、灯显和故障码。")
         tip.setStyleSheet("color:#94a3b8;font-size:11px;")
-        tip.setWordWrap(True)
-        v.addWidget(tip)
-        # 最上方: 扫地机 IP 连接 + 常用故障触发(用户 2026-11-12)
-        ip_host = QWidget()
-        ip_row = FlowLayout(ip_host, margin=0, spacing=6)
-        ip_row.addWidget(QLabel("扫地机IP"))
-        self.fault_ip_combo = NoWheelComboBox()
-        self.fault_ip_combo.setEditable(True)
-        self.fault_ip_combo.setMinimumContentsLength(12)
-        self.fault_ip_combo.lineEdit().setPlaceholderText("扫描或输入 IP")
-        self.fault_ip_combo.activated.connect(self._fault_connect)
-        self.fault_ip_combo.lineEdit().returnPressed.connect(
-            self._fault_connect)
-        self.fault_ip_combo.lineEdit().textChanged.connect(
-            lambda *_: self._fit_editable_combo_width(self.fault_ip_combo))
-        self._fit_editable_combo_width(self.fault_ip_combo)
-        ip_row.addWidget(self.fault_ip_combo)
-        self.fault_connect_btn = QPushButton("连接")
-        self.fault_connect_btn.setObjectName("chipBtn")
-        self.fault_connect_btn.clicked.connect(self._fault_connect)
-        ip_row.addWidget(self.fault_connect_btn)
-        ip_row.addWidget(QLabel("常用故障"))
+        tip.setWordWrap(False)          # 右侧还有空间, 一行显示(用户 2026-11-27)
+        tip.setToolTip(tip.text())
+        head.addWidget(tip)
+        head.addStretch(1)
+        v.addLayout(head)
+        # ★ 扫地机IP连接统一在右上角导航条(用户 2026-11-27), 本页不再放 IP 行;
+        #   连接状态只看导航条, fault_status 只放触发/业务提示。
+        # 常用故障 + 触发故障(原与 IP 同一行, IP 上移后单独一行)
+        pick_host = QWidget()
+        pick_row = FlowLayout(pick_host, margin=0, spacing=6)
+        pick_row.addWidget(QLabel("常用故障"))
         # 常用故障也支持手动输入, 长名称在框内换行显示
         self.fault_pick_combo = WrappedCombo()
         self.fault_pick_combo.setInsertPolicy(QComboBox.NoInsert)
@@ -1007,14 +1005,13 @@ class DevicePage(QWidget):
         self.fault_pick_combo.setCompleter(
             self._make_event_completer(self.fault_pick_combo, []))
         self._fit_combo_width(self.fault_pick_combo, 220, 480)
-        ip_row.addWidget(self.fault_pick_combo)
+        pick_row.addWidget(self.fault_pick_combo)
         pick_btn = QPushButton("触发故障")
         pick_btn.setObjectName("chipBtn")
         pick_btn.clicked.connect(self._simulate_picked_fault)
-        ip_row.addWidget(pick_btn)
-        for b in (self.fault_connect_btn, pick_btn):
-            b.setMinimumWidth(b.sizeHint().width())
-        v.addWidget(ip_host)
+        pick_row.addWidget(pick_btn)
+        pick_btn.setMinimumWidth(pick_btn.sizeHint().width())
+        v.addWidget(pick_host)
 
         # AP 方案配置 + 触发所选事件
         top_host = QWidget()
@@ -1022,26 +1019,31 @@ class DevicePage(QWidget):
         top_row.setContentsMargins(0, 0, 0, 0)
         top_row.setSpacing(6)
         top_row.addWidget(QLabel("AP 方案"))
-        self.fault_cfg_label = WrappedLineEdit()
-        self.fault_cfg_label.setPlaceholderText(
-            "选择 AP 平台方案配置（可选）")
-        self.fault_cfg_label.setToolTip("AP 平台方案配置文件路径")
-        self.fault_cfg_label.setMinimumWidth(100)
-        top_row.addWidget(self.fault_cfg_label, 1)
         cfg_btn = QPushButton("选择 AP 配置…")
         cfg_btn.setObjectName("chipBtn")
         cfg_btn.clicked.connect(self._choose_fault_config)
         top_row.addWidget(cfg_btn)
-        top_row.addWidget(QLabel("事件"))
+        # 只显示文件名(完整路径放 tooltip), 重开程序沿用上次选择(用户 2026-11-27)
+        self.fault_cfg_label = QLabel("未选择")
+        self.fault_cfg_label.setStyleSheet(
+            "color:#64748b;font-size:11px;padding:0 6px;")
+        self.fault_cfg_label.setMinimumWidth(80)
+        self.fault_cfg_label.setMaximumWidth(300)
+        self.fault_cfg_label.setToolTip("AP 平台方案配置文件")
+        top_row.addWidget(self.fault_cfg_label)
+        # 「事件」文字标签已去掉, 下拉框直接跟在 AP 配置后(用户 2026-11-27)
         self.fault_event_combo = WrappedCombo()
         self.fault_event_combo.setMinimumWidth(120)
         self.fault_event_combo.setInsertPolicy(QComboBox.NoInsert)
         self.fault_event_combo.setCompleter(
             self._make_event_completer(self.fault_event_combo, []))
+        # 弹层中英对照, 关掉后输入框只显示中文(用户 2026-11-27)
+        self.fault_event_combo.view().setItemDelegate(
+            _BilingualPopupDelegate(self.fault_event_combo.view()))
         if self.fault_event_combo.lineEdit() is not None:
             self.fault_event_combo.lineEdit().setPlaceholderText(
                 "搜索事件…")
-        self._fit_combo_width(self.fault_event_combo, 120, 300)
+        self._fit_combo_width(self.fault_event_combo, 90, 200)
         top_row.addWidget(self.fault_event_combo)
         trig_btn = QPushButton("触发所选事件")
         trig_btn.setObjectName("chipBtn")
@@ -1050,6 +1052,7 @@ class DevicePage(QWidget):
         top_row.addWidget(trig_btn)
         for b in (cfg_btn, trig_btn):
             b.setMinimumWidth(b.sizeHint().width())
+        top_row.addStretch(1)      # 全部靠左(用户 2026-11-27)
         v.addWidget(top_host)
 
         # PRD 解析单独一行(用户 2026-11-12)
@@ -1058,16 +1061,18 @@ class DevicePage(QWidget):
         prd_row.setContentsMargins(0, 0, 0, 0)
         prd_row.setSpacing(6)
         prd_row.addWidget(QLabel("PRD"))
-        self.fault_prd_label = WrappedLineEdit()
-        self.fault_prd_label.setPlaceholderText(
-            "选择 PRD（xlsx/docx/pdf/txt）")
-        self.fault_prd_label.setToolTip("PRD 文件路径")
-        self.fault_prd_label.setMinimumWidth(100)
-        prd_row.addWidget(self.fault_prd_label, 1)
         prd_btn = QPushButton("选择 PRD…")
         prd_btn.setObjectName("chipBtn")
         prd_btn.clicked.connect(self._choose_prd)
         prd_row.addWidget(prd_btn)
+        # 只显示文件名(完整路径放 tooltip), 重开程序沿用上次选择(用户 2026-11-27)
+        self.fault_prd_label = QLabel("未选择")
+        self.fault_prd_label.setStyleSheet(
+            "color:#64748b;font-size:11px;padding:0 6px;")
+        self.fault_prd_label.setMinimumWidth(80)
+        self.fault_prd_label.setMaximumWidth(300)
+        self.fault_prd_label.setToolTip("PRD 文档")
+        prd_row.addWidget(self.fault_prd_label)
         self.fault_prd_parse_btn = QPushButton("解析")
         self.fault_prd_parse_btn.setObjectName("chipBtn")
         self.fault_prd_parse_btn.setToolTip(
@@ -1083,6 +1088,7 @@ class DevicePage(QWidget):
         for b in (prd_btn, self.fault_prd_parse_btn,
                   self.fault_prd_ai_btn):
             b.setMinimumWidth(b.sizeHint().width())
+        prd_row.addStretch(1)      # 全部靠左(用户 2026-11-27)
         v.addWidget(prd_host)
 
         # 操作行: 批量测试 / 导出报告放在一起(用户 2026-11-12)
@@ -1124,6 +1130,7 @@ class DevicePage(QWidget):
         v.addWidget(act_host)
         self._fault_expect = {}
         self._fault_cfg_path = ""
+        self._prd_path = ""
         self._hs4 = None
         self._fault_rows = []
         self._fault_report_started = ""
@@ -1267,8 +1274,6 @@ class DevicePage(QWidget):
             self._load_fault_config(path, quiet=True)
         self._load_prd_rows()
         self._refresh_fault_picks()
-        self._refresh_fault_ips()
-        self.devicesChanged.connect(self._refresh_fault_ips)
         self.connectionChanged.connect(self._on_connection_changed)
         self.connectingChanged.connect(self._on_connecting_changed)
 
@@ -1278,7 +1283,6 @@ class DevicePage(QWidget):
         ★ 用户 2026-11-16: 「无法连接…（正在切换或未就绪）」在连上后不消失。
         只覆盖连接类提示, 不能把「PRD 解析中…」等业务状态冲掉。
         """
-        self._refresh_fault_ips()
         if not connected:
             return
         text = self.fault_status.text().strip()
@@ -1289,7 +1293,6 @@ class DevicePage(QWidget):
         self.fault_status.setStyleSheet("color:#16a34a;font-size:12px;")
 
     def _on_connecting_changed(self, connecting, ip):
-        self._refresh_fault_ips()
         if not (connecting and ip):
             return
         text = self.fault_status.text().strip()
@@ -1302,96 +1305,6 @@ class DevicePage(QWidget):
     def _is_connect_status(text):
         return (text.startswith(("已连接", "正在连接 ", "正在切换：",
                                  "无法连接 ", "请选择或输入扫地机 IP")))
-
-    def _refresh_fault_ips(self, *_):
-        """故障页的扫地机 IP 下拉: 与设备页使用同一份设备列表。"""
-        if not hasattr(self, "fault_ip_combo"):
-            return
-        combo = self.fault_ip_combo
-        current = self._connected_ip or combo.currentData()
-        if not current:
-            text = combo.currentText().strip()
-            if re.fullmatch(r"\d{1,3}(?:\.\d{1,3}){3}", text):
-                current = text
-        if not current:
-            # ★ 未连接时也跟随设备页当前/上次使用的 IP，而不是只挑扫描列表第一台
-            try:
-                current = (self._selected_ip()
-                           or str(self.settings.value("apos/last_ip", "")
-                                  or "").strip())
-            except Exception:
-                current = ""
-        combo.blockSignals(True)
-        combo.clear()
-        for dev in self._known_devices():
-            ip = str(dev.get("ip") or "").strip()
-            if not ip:
-                continue
-            label = "-".join(x for x in (dev.get("model", ""),
-                                         dev.get("sn", ""), ip) if x)
-            combo.addItem(label, ip)
-        idx = combo.findData(current)
-        if idx >= 0:
-            combo.setCurrentIndex(idx)
-        elif current:
-            combo.setEditText(current)
-        elif combo.count():
-            combo.setCurrentIndex(0)
-        combo.blockSignals(False)
-        self._fit_editable_combo_width(combo)
-        if self._connecting:
-            text, enabled = "连接中…", False
-        elif self.connected:
-            text, enabled = "已连接", True
-        else:
-            text, enabled = "连接", True
-        self.fault_connect_btn.setText(text)
-        self.fault_connect_btn.setEnabled(enabled)
-
-    def _fault_selected_ip(self):
-        combo = self.fault_ip_combo
-        idx = combo.currentIndex()
-        text = combo.currentText().strip()
-        if idx >= 0 and combo.itemText(idx) == text:
-            ip = combo.itemData(idx)
-            if ip:
-                return str(ip)
-        m = re.search(r"(\d{1,3}(?:\.\d{1,3}){3})", text)
-        return m.group(1) if m else text
-
-    def _fault_connect(self):
-        ip = self._fault_selected_ip()
-        if not ip:
-            self.fault_status.setText("请选择或输入扫地机 IP")
-            self.fault_status.setStyleSheet(
-                "color:#dc2626;font-size:12px;")
-            return
-        started = self.connect_to(ip)
-        if started:
-            if self.connected and ip == self._connected_ip:
-                self.fault_status.setText(f"已连接 {ip}")
-                self.fault_status.setStyleSheet(
-                    "color:#16a34a;font-size:12px;")
-            elif self._pending_connect_ip == ip and self._connecting:
-                # 正在连别的 IP: 已排队, 本次结束后立刻改连
-                self.fault_status.setText(
-                    f"正在切换：{self._connect_ip or '上一台'} 结束后连接 {ip}")
-                self.fault_status.setStyleSheet(
-                    "color:#b45309;font-size:12px;")
-            else:
-                self.fault_status.setText(f"正在连接 {ip}…")
-                self.fault_status.setStyleSheet(
-                    "color:#b45309;font-size:12px;")
-            return
-        if self.connecting and ip == self._connect_ip:
-            # 正在连的目标就是这台: 提示进行中, 不能报「无法连接」
-            self.fault_status.setText(f"正在连接 {ip}…")
-            self.fault_status.setStyleSheet(
-                "color:#b45309;font-size:12px;")
-            return
-        self.fault_status.setText(f"无法连接 {ip}（正在切换或未就绪）")
-        self.fault_status.setStyleSheet(
-            "color:#dc2626;font-size:12px;")
 
     def _choose_fault_config(self):
         path, _ = QFileDialog.getOpenFileName(
@@ -1418,15 +1331,23 @@ class DevicePage(QWidget):
         self._hs4 = project
 
     # ── PRD: AI 解析 事件→语音/灯显/故障码, 表格展示并按它验证 ──
+    @staticmethod
+    def _show_file_hint(label, path):
+        """文件名提示: 只显示 basename, 完整路径放 tooltip(用户 2026-11-27)。"""
+        path = str(path or "").strip()
+        name = os.path.basename(path) if path else "未选择"
+        label.setText(name)
+        label.setToolTip(path or "未选择文件")
+
     def _choose_prd(self):
         path, _ = QFileDialog.getOpenFileName(
-            self, "选择 PRD", self.fault_prd_label.text() or "",
+            self, "选择 PRD", getattr(self, "_prd_path", "") or "",
             "PRD 文档 (*.xlsx *.xlsm *.docx *.pdf *.txt *.md *.csv);;"
             "所有文件 (*)")
         if not path:
             return
-        self.fault_prd_label.setText(path)
-        self.fault_prd_label.setToolTip(path)
+        self._prd_path = path
+        self._show_file_hint(self.fault_prd_label, path)
         self.settings.setValue("apos/prd_path", path)
         self._load_hs4_project(path)
 
@@ -1765,7 +1686,7 @@ class DevicePage(QWidget):
 
     def _parse_prd(self, force_ai=False):
         """解析 PRD。默认优先学习库, 缺的/首次才用 AI; force_ai 直接全用 AI。"""
-        path = self.fault_prd_label.text().strip()
+        path = str(getattr(self, "_prd_path", "") or "").strip()
         if not path or not os.path.exists(path):
             self.fault_status.setText("请先选择 PRD 文件")
             self.fault_status.setStyleSheet("color:#dc2626;font-size:12px;")
@@ -3753,9 +3674,9 @@ class DevicePage(QWidget):
 
     def _load_prd_rows(self):
         path = str(self.settings.value("apos/prd_path", "") or "")
-        self.fault_prd_label.setText(path)
+        self._prd_path = path
+        self._show_file_hint(self.fault_prd_label, path)
         if path:
-            self.fault_prd_label.setToolTip(path)
             self._load_hs4_project(path)
         ver = self.settings.value("apos/prd_parsed_ver", 0, type=int)
         if ver != PRD_ROWS_VERSION:
@@ -3853,7 +3774,7 @@ class DevicePage(QWidget):
         labels = self._labels_from_catalog(catalog)
         if labels:
             return labels
-        path = self.fault_prd_label.text().strip()
+        path = str(getattr(self, "_prd_path", "") or "").strip()
         if not path or not os.path.exists(path):
             return {}
         try:
@@ -3936,7 +3857,7 @@ class DevicePage(QWidget):
                 "apos/prd_parsed",
                 json.dumps(self._prd_rows, ensure_ascii=False))
             self.settings.setValue("apos/prd_path",
-                                   self.fault_prd_label.text().strip())
+                                   getattr(self, "_prd_path", ""))
             self.settings.setValue("apos/prd_parsed_ver", PRD_ROWS_VERSION)
         except Exception:
             pass
@@ -4099,8 +4020,7 @@ class DevicePage(QWidget):
         self._fault_expect = expect
         self._fault_cfg_path = path
         # 输入框只显示文件名, 完整路径放 tooltip, 避免长路径换行(用户 2026-11-13)
-        self.fault_cfg_label.setText(os.path.basename(path))
-        self.fault_cfg_label.setToolTip(path)
+        self._show_file_hint(self.fault_cfg_label, path)
         self.settings.setValue("apos/fault_event_config", path)
         # 配置里的全部事件都可以手动选/改后触发
         if hasattr(self, "fault_event_combo"):
@@ -4108,20 +4028,23 @@ class DevicePage(QWidget):
             self.fault_event_combo.clear()
             for ident, info in sorted(expect.items()):
                 name = faults.event_name(ident, expect)
-                # 显示中文名, 触发时用 itemData 里的 identifier
-                label = f"{name}（{ident}）"
-                self.fault_event_combo.addItem(label, ident)
+                # 输入框只显示中文, 弹层由 delegate 补英文标识(用户 2026-11-27)
+                self.fault_event_combo.addItem(name, ident)
                 self.fault_event_combo.setItemData(
-                    self.fault_event_combo.count() - 1, label,
-                    Qt.ToolTipRole)
+                    self.fault_event_combo.count() - 1,
+                    f"{name}（{ident}）", Qt.ToolTipRole)
             self.fault_event_combo.blockSignals(False)
             if self.fault_event_combo.count():
                 self.fault_event_combo.setCurrentIndex(0)
-            self.fault_event_combo.setCompleter(self._make_event_completer(
-                self.fault_event_combo,
-                [self.fault_event_combo.itemText(i)
-                 for i in range(self.fault_event_combo.count())]))
-            self._fit_combo_width(self.fault_event_combo, 120, 300)
+            items = []
+            for i in range(self.fault_event_combo.count()):
+                items.append(self.fault_event_combo.itemText(i))
+                ident = str(self.fault_event_combo.itemData(i) or "")
+                if ident:
+                    items.append(ident)      # 中英文都能搜到
+            self.fault_event_combo.setCompleter(
+                self._make_event_completer(self.fault_event_combo, items))
+            self._fit_combo_width(self.fault_event_combo, 90, 200)
         if hasattr(self, "fault_pick_combo"):
             self._refresh_fault_picks()
         if not quiet:
@@ -4147,10 +4070,13 @@ class DevicePage(QWidget):
         combo = self.fault_event_combo
         text = combo.currentText().strip()
         for i in range(combo.count()):
-            if combo.itemText(i) == text:
-                data = combo.itemData(i)
-                if data:
-                    return str(data)
+            data = combo.itemData(i)
+            if data and (combo.itemText(i) == text or str(data) == text):
+                return str(data)
+        # 手动粘贴「中文（error_x）」/ 只输入英文标识时也能还原
+        m = re.search(r"（([a-zA-Z][a-zA-Z0-9_]*)）", text)
+        if m:
+            return m.group(1)
         return text
 
     def _trigger_custom_event(self):
@@ -4773,7 +4699,7 @@ class DevicePage(QWidget):
         info = self._device_info or {}
         model = str(info.get("model") or "").strip()
         if not model:
-            prd = self.fault_prd_label.text().strip()
+            prd = str(getattr(self, "_prd_path", "") or "").strip()
             model = os.path.splitext(os.path.basename(prd))[0] or "未知项目"
         # ★ 名称 = 项目 + 固件版本 + 时间(用户 2026-11-13: 只用固件版本)
         fw = str(info.get("firmware_version") or "").strip()
@@ -4850,7 +4776,7 @@ class DevicePage(QWidget):
             path += ".yaml"
         data = {
             "version": 1,
-            "prd": self.fault_prd_label.text().strip(),
+            "prd": getattr(self, "_prd_path", ""),
             "device": dict(self._device_info or {}),
             "saved_at": time.strftime("%Y-%m-%d %H:%M:%S"),
             "events": [dict(r) for r in self._prd_rows],
@@ -4897,7 +4823,8 @@ class DevicePage(QWidget):
             self.fault_status.setStyleSheet("color:#dc2626;font-size:12px;")
             return
         if isinstance(data, dict) and data.get("prd"):
-            self.fault_prd_label.setText(str(data["prd"]))
+            self._prd_path = str(data["prd"])
+            self._show_file_hint(self.fault_prd_label, self._prd_path)
         self._prd_rows = rows
         self._sort_prd_rows()
         self._fill_prd_table()
@@ -5826,7 +5753,8 @@ class DevicePage(QWidget):
         self._device_info["model"] = model
         self._update_info_label()
         self._set_paths_for_tab()
-        self.connectionChanged.emit(True, f"{model} · {ip}" if model else ip)
+        conn_label = "-".join(x for x in (model, sn) if x)
+        self.connectionChanged.emit(True, conn_label or ip)
         self.connect_finished.emit(True, ip, "")
         self._flush_pending_connect()
         self._sync_connect_btn()

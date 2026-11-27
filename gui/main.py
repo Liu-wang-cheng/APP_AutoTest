@@ -167,6 +167,12 @@ def main():
     _install_crashlog()
     app = QApplication(sys.argv)
     _force_light_theme(app)
+    # 全局字体兜底: 主窗口 QSS 覆盖不到**顶层弹层**(IP 下拉、补全弹窗等),
+    # 显式设置应用字体, 保证所有界面都是微软雅黑(用户 2026-11-27)。
+    from PySide6.QtGui import QFont
+    _f = QFont("Microsoft YaHei UI")
+    _f.setPixelSize(12)
+    app.setFont(_f)
     # 应用图标(任务栏/窗口):自绘 乐动品牌融合(O传感器+对勾);ico 含 16~256 多尺寸
     # ★ 不要在 main() 里再 `import os` —— 函数内 import 会把 os 变成**整个函数**
     #   的局部变量, 上面 cleanup_update_leftovers(os.path...) 那行就会

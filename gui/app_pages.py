@@ -6,11 +6,12 @@
 """
 import os
 import re
+import time
 
-from PySide6.QtCore import QTimer
+from PySide6.QtCore import QEvent, Qt, QTimer
 from PySide6.QtWidgets import (QComboBox, QFrame, QHBoxLayout, QLabel,
-                                QMessageBox, QPushButton, QStackedWidget,
-                                QVBoxLayout, QWidget)
+                                QListWidget, QMessageBox, QPushButton,
+                                QStackedWidget, QVBoxLayout, QWidget)
 
 from gui.ai_config_page import AiConfigPage
 from gui.device_page import DevicePage
@@ -29,6 +30,119 @@ QPushButton#pageTab:checked {
 }
 QLabel#navStatus { color: #475569; font-size: 11px; padding-left: 14px; }
 """
+
+
+class _RobotIpCombo(NoWheelComboBox):
+    """导航条 IP 下拉: 自绘弹层, 右边缘与输入框对齐、一次定位(用户 2026-11-27)。
+
+    原生 QComboBox 弹层在 show 之后还会重定位, 无论怎么挪都会看到"右→左"的
+    位移; 这里不用原生弹层, 直接建一个 Qt.Popup 列表, 位置只算一次。
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._popup = None
+        self._popup_closed_at = 0.0
+
+    def eventFilter(self, obj, ev):
+        # Qt.Popup 点击外部会自己隐藏(不经过 hidePopup), 这里补记关闭时间,
+        # 否则紧接着的 showPopup 会把它重新打开 → 闪动(用户 2026-11-27)。
+        if (obj is self._popup and ev.type() in (QEvent.Hide, QEvent.Close)
+                and self._popup is not None):
+            self._popup = None
+            self._popup_closed_at = time.monotonic()
+        return super().eventFilter(obj, ev)
+
+    def mousePressEvent(self, ev):
+        """已展开时点下拉按钮 = 关闭; 下次点击才重新打开(用户 2026-11-27)。"""
+        if self._popup is not None and self._popup.isVisible():
+            self._hide_custom_popup()
+            ev.accept()
+            return
+        super().mousePressEvent(ev)
+
+    def showPopup(self):
+        # ★ 再次点击下拉框本意是"关掉": Qt.Popup 会在点击时先自动关闭,
+        #   随后又走到 showPopup —— 200ms 内刚关过就直接返回, 否则会闪一下。
+        if self._popup is not None and self._popup.isVisible():
+            self._hide_custom_popup()
+            return
+        if time.monotonic() - self._popup_closed_at < 0.2:
+            return
+        self._hide_custom_popup()
+        n = self.count()
+        if n <= 0:
+            return
+        pop = QFrame(None, Qt.Popup)
+        pop.setObjectName("robotIpPopup")
+        pop.setStyleSheet(
+            "QFrame#robotIpPopup{background:#ffffff;border:1px solid #d9dee6;"
+            "border-radius:6px;}"
+            "QListWidget{border:none;background:#ffffff;outline:none;"
+            "font-size:12px;}"
+            "QListWidget::item{padding:5px 8px;}"
+            "QListWidget::item:selected{background:#eef4ff;color:#2563eb;}")
+        lay = QVBoxLayout(pop)
+        lay.setContentsMargins(2, 2, 2, 2)
+        lst = QListWidget()
+        lst.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        lst.setUniformItemSizes(True)
+        for i in range(n):
+            lst.addItem(self.itemText(i))
+        lst.setCurrentRow(max(0, self.currentIndex()))
+        lay.addWidget(lst)
+        fm = self.fontMetrics()
+        width = max(self.width(), min(
+            max(fm.horizontalAdvance(self.itemText(i)) for i in range(n)) + 24,
+            620))
+        rows = min(n, 12)
+        pop.resize(width, rows * (fm.height() + 10) + 8)
+        lst.itemClicked.connect(lambda it: self._pick_row(lst.row(it), pop))
+        lst.itemActivated.connect(lambda it: self._pick_row(lst.row(it), pop))
+        pop.installEventFilter(self)
+        self._popup = pop
+        # ★ 先不显示内容 → show() 让 Qt 完成它自己的定位 → 下一拍按
+        #   输入框右边缘重排 → 再打开绘制。用户只看到最终位置, 不会滑动。
+        pop.setUpdatesEnabled(False)
+        pop.show()
+        QTimer.singleShot(0, lambda p=pop, w=width: self._place_custom_popup(p, w))
+        lst.setFocus()
+
+    def _place_custom_popup(self, pop, width):
+        if pop is not self._popup:
+            return
+        try:
+            right = self.mapToGlobal(self.rect().topRight()).x()
+            screen = self.screen().availableGeometry()
+            x = max(screen.left() + 4, right - width)
+            y = self.mapToGlobal(self.rect().bottomLeft()).y() + 2
+            pop.move(x, y)
+        finally:
+            pop.setUpdatesEnabled(True)
+            pop.update()
+
+    def _pick_row(self, row, pop):
+        if row < 0:
+            return
+        self.setCurrentIndex(row)
+        ip = self.itemData(row)
+        if ip:
+            self.setEditText(str(ip))
+        pop.close()
+        self.activated.emit(row)
+
+    def _hide_custom_popup(self):
+        if self._popup is not None:
+            try:
+                self._popup.close()
+                self._popup.deleteLater()
+            except Exception:
+                pass
+            self._popup = None
+        self._popup_closed_at = time.monotonic()
+
+    def hidePopup(self):
+        self._hide_custom_popup()
 
 
 class PageNav(QWidget):
@@ -51,12 +165,46 @@ class PageNav(QWidget):
             b.setAutoExclusive(True)
             h.addWidget(b)
         h.addStretch(1)
+        # ★ 扫地机连接全局控件(用户 2026-11-27): 全工具只有这一份 IP 下拉 +
+        #   连接/断开按钮。右上角分两行(用户 2026-11-27): 上=IP 与连接按钮,
+        #   下=运行/连接状态指示灯。
+        right = QWidget()
+        rv = QVBoxLayout(right)
+        rv.setContentsMargins(0, 3, 0, 3)
+        rv.setSpacing(2)
+        ip_line = QHBoxLayout()
+        ip_line.setContentsMargins(0, 0, 0, 0)
+        ip_line.setSpacing(6)
+        ip_line.addStretch(1)
+        self.robot_ip_combo = _RobotIpCombo()
+        self.robot_ip_combo.setEditable(True)
+        self.robot_ip_combo.setMinimumWidth(200)
+        self.robot_ip_combo.lineEdit().setPlaceholderText("扫描或输入 IP")
+        self.robot_ip_combo.setToolTip("扫描或输入扫地机 IP, 选定后自动连接")
+        ip_line.addWidget(self.robot_ip_combo)
+        self.robot_scan_btn = QPushButton("扫描")
+        self.robot_scan_btn.setObjectName("chipBtn")
+        ip_line.addWidget(self.robot_scan_btn)
+        # 一个按钮: 未连接=连接, 已连接=断开(用户 2026-11-27)
+        self.robot_connect_btn = QPushButton("连接")
+        self.robot_connect_btn.setObjectName("chipBtn")
+        ip_line.addWidget(self.robot_connect_btn)
+        status_line = QHBoxLayout()
+        status_line.setContentsMargins(0, 0, 0, 0)
+        status_line.setSpacing(10)
+        status_line.addStretch(1)
         self.run_status = QLabel("● 空闲")
         self.run_status.setObjectName("navStatus")
-        self.dev_status = QLabel("● 设备未连接")
+        self.dev_status = QLabel("● 扫地机未连接")
         self.dev_status.setObjectName("navStatus")
-        h.addWidget(self.run_status)
-        h.addWidget(self.dev_status)
+        status_line.addWidget(self.run_status)
+        status_line.addWidget(self.dev_status)
+        rv.addLayout(ip_line)
+        rv.addLayout(status_line)
+        h.addWidget(right)
+        self._nav_combo_floor = 200
+        self._nav_combo_cap = 520
+        self._compact = False
         #: 正在跑的任务来源（自动化/续航…）——任何一个在跑都显示「运行中」
         self._active = set()
         self.btn_test.setChecked(True)
@@ -85,14 +233,14 @@ class PageNav(QWidget):
 
     def set_device(self, connected, label=""):
         if connected:
-            # 导航栏空间有限：只显示型号（完整 label 放 tooltip，避免挤掉页签）
-            short = str(label).split(" · ")[0] if label else ""
+            # label = 型号-SN(IP 已在左侧输入框), 完整值放 tooltip
+            short = str(label or "")
             self.dev_status.setText(
-                "● 设备 已连接" + (f" · {short}" if short else ""))
+                "● 已连接" + (f" · {short}" if short else ""))
             self.dev_status.setToolTip(str(label) or "已连接")
             self.dev_status.setStyleSheet("color:#16a34a;font-size:11px;")
         else:
-            self.dev_status.setText("● 设备未连接")
+            self.dev_status.setText("● 扫地机未连接")
             self.dev_status.setToolTip("")
             self.dev_status.setStyleSheet("color:#475569;font-size:11px;")
 
@@ -100,20 +248,78 @@ class PageNav(QWidget):
         """切换/连接中: 右上角先显示「连接中 · IP」，结束后再由 set_device 定稿。"""
         if not connecting:
             return
-        self.dev_status.setText("● 设备 连接中" + (f" · {ip}" if ip else ""))
+        self.dev_status.setText("● 连接中" + (f" · {ip}" if ip else ""))
         self.dev_status.setStyleSheet("color:#d97706;font-size:11px;")
+
+    def resizeEvent(self, ev):
+        """窄窗口自适应(用户 2026-11-27): 收窄 IP 框, 未连接时藏「断开」。"""
+        super().resizeEvent(ev)
+        compact = self.width() < 1250
+        if compact != self._compact:
+            self._compact = compact
+            self._nav_combo_floor = 130 if compact else 200
+            self._nav_combo_cap = 260 if compact else 520
+        self.fit_robot_combo()
+
+    def fit_robot_combo(self):
+        """输入框只按 IP 定宽(选中后只显示 IP); 下拉弹层仍按最长项放宽。
+
+        ★ 用户 2026-11-27: 输入框原来按 型号-SN-IP 定宽, 选中后只显示 IP 时
+          显得过长。宽度按当前显示内容算, 弹层由 view 单独撑开。
+        """
+        combo = self.robot_ip_combo
+        fm = combo.fontMetrics()
+        current = combo.currentText().strip()
+        width = max(150, min(fm.horizontalAdvance(current) + 34, 240))
+        if combo.width() != width:
+            combo.setFixedWidth(width)
+        # 下拉列表保持 型号-SN-IP 的完整宽度, 但绝不能超出当前窗口
+        items = [combo.itemText(i) for i in range(combo.count())]
+        longest = max((fm.horizontalAdvance(t) for t in items), default=0)
+        view = combo.view()
+        want = max(width, min(longest + 18, 620))
+        if view.minimumWidth() != want:
+            view.setMinimumWidth(want)
 
 
 def bind_robot_ip(window, device):
-    """测试页顶部「扫地机IP」下拉框接到设备参数页的连接逻辑。"""
+    """右上角导航条的全局「扫地机IP」接到设备参数页的连接逻辑。"""
     window._robot_device = device
-    window.robot_ip_combo.activated.connect(
-        lambda *_: select_robot_ip(window, device))
-    window.robot_ip_combo.lineEdit().returnPressed.connect(
+    nav = window.nav
+    def _toggle_robot(*_):
+        if getattr(device, "connected", False):
+            device.disconnect_device()
+        else:
+            select_robot_ip(window, device)
+    nav.robot_connect_btn.clicked.connect(_toggle_robot)
+    nav.robot_scan_btn.clicked.connect(device.scan)
+    nav.robot_ip_combo.lineEdit().returnPressed.connect(
         lambda: select_robot_ip(window, device))
+    nav.robot_ip_combo.activated.connect(
+        lambda *_: select_robot_ip(window, device))
     device.devicesChanged.connect(lambda: refresh_robot_ips(window, device))
     device.connectionChanged.connect(
         lambda *_: refresh_robot_ips(window, device, auto=False))
+    # 连接按钮文案跟随: 选中 IP == 已连接 IP → 「已连接」; 其余 → 「连接」
+    def _sync_btns(*_):
+        connecting = bool(getattr(device, "connecting", False))
+        connected = bool(getattr(device, "connected", False))
+        combo = nav.robot_ip_combo
+        text = combo.currentText().strip()
+        m = __import__("re").search(r"(\d{1,3}(?:\.\d{1,3}){3})", text)
+        selected = m.group(1) if m else text
+        nav.robot_connect_btn.setText(
+            "连接中…" if connecting else ("断开" if connected else "连接"))
+        nav.robot_connect_btn.setEnabled(not connecting)
+        nav.fit_robot_combo()
+    device.connectionChanged.connect(_sync_btns)
+    device.connectingChanged.connect(_sync_btns)
+    nav.robot_ip_combo.lineEdit().textChanged.connect(_sync_btns)
+    nav.robot_ip_combo.activated.connect(_sync_btns)
+    device.connect_finished.connect(
+        lambda ok, ip, msg: window._set_status(
+            f"扫地机已连接: {ip}" if ok else
+            f"扫地机连接失败: {ip}" + (f"（{msg}）" if msg else "")))
     # 连接是后台线程完成的：结果回来再更新提示(避免"正在连接"被误当成已连接)
     device.connect_finished.connect(
         lambda ok, ip, msg: window._set_status(
@@ -139,7 +345,7 @@ def auto_connect_robot(window, device):
 
 
 def _fit_robot_combo(combo, floor=240, cap=560, extra=72):
-    """扫地机IP下拉按最长内容定宽（型号-SN-IP 很长时不能截断）。"""
+    """扫地机IP下拉按最长内容定宽；导航条的走 PageNav.fit_robot_combo。"""
     fm = combo.fontMetrics()
     texts = [combo.itemText(i) for i in range(combo.count())]
     current = combo.currentText().strip()
@@ -189,14 +395,23 @@ def refresh_robot_ips(window, device, auto=True):
                                if ip == connected_ip else "")
         label = "-".join(x for x in (model, sn, ip) if x)
         combo.addItem(label, ip)
-    target = current or str(device.settings.value("apos/last_ip", "") or "")
+    target = (current
+              or str(getattr(device, "settings", None)
+                     and device.settings.value("apos/last_ip", "")
+                     or ""))
     idx = combo.findData(target)
     if idx >= 0:
         combo.setCurrentIndex(idx)
+        # 选中后输入框只显示 IP; 下拉列表里仍是 型号-SN-IP(用户 2026-11-27)
+        combo.setEditText(str(target))
     elif target:
         combo.setEditText(target)
     combo.blockSignals(False)
-    _fit_robot_combo(combo)
+    nav = getattr(getattr(window, "nav", None), "fit_robot_combo", None)
+    if nav is not None and combo is getattr(window, "robot_ip_combo", None):
+        nav()
+    else:
+        _fit_robot_combo(combo)
     if (auto and combo.count() and not device.connected
             and not getattr(device, "connecting", False)
             and not os.environ.get("PYTEST_CURRENT_TEST")):
@@ -213,6 +428,9 @@ def select_robot_ip(window, device, warn=True):
         ip = m.group(1) if m else text
     if not ip:
         return
+    # 选中后输入框只显示 IP(下拉项仍是 型号-SN-IP; 用户 2026-11-27)
+    if combo.isEditable() and combo.currentText().strip() != ip:
+        combo.setEditText(ip)
     started = device.connect_to(ip)
     if started:
         # 后台连接：已连着就提示已连接，否则先提示"正在连接"，结果由 connect_finished 更新
@@ -243,6 +461,7 @@ def install_pages(window, test_page):
     stack.addWidget(fault_page)
     stack.addWidget(ai_page)
     nav = PageNav()
+    window.nav = nav
     pages = {"test": 0, "device": 1, "endurance": 2, "loop": 3,
              "fault": 4, "ai": 5}
 
@@ -284,31 +503,9 @@ def install_pages(window, test_page):
     window._show_page = show
     # 自动化测试页是默认页；只有用户点击顶部「设备参数」才切过去
     show("test")
-    # 扫地机 IP 单独一行(不和 APP 设备挤在同一行)
-    robot_row = QFrame()
-    robot_row.setObjectName("chipStrip")
-    rh = QHBoxLayout(robot_row)
-    rh.setContentsMargins(5, 4, 5, 4)
-    rh.setSpacing(6)
-    rh.addWidget(QLabel("扫地机IP"))
-    robot_combo = NoWheelComboBox()
-    robot_combo.setEditable(True)
-    robot_combo.setSizeAdjustPolicy(QComboBox.AdjustToContents)
-    robot_combo.setMinimumContentsLength(16)
-    robot_combo.lineEdit().textChanged.connect(
-        lambda *_: _fit_robot_combo(robot_combo))
-    robot_combo.setToolTip("连接扫地机后可读取电量/电压/温度；选择或输入 IP 后自动连接")
-    rh.addWidget(robot_combo)
-    rh.addStretch(1)
-    window.robot_ip_combo = robot_combo
-    layout = test_page.layout()
-    layout.insertWidget(3, robot_row)
-    # ★ 提示行(未选中用例/就绪/环境提示)放到扫地机IP下面(用户 2026-11-06):
-    #   固定头部顺序 = 工具栏 / APP设备 / 扫地机IP / 提示行。
-    hint = getattr(window, "hint_row", None)
-    if hint is not None:
-        layout.removeWidget(hint)
-        layout.insertWidget(3, hint)
+    # ★ 扫地机IP连接已统一到右上角导航条(用户 2026-11-27), 测试页不再放
+    #   自己的 IP 行; robot_ip_combo 指向导航条上的全局控件(旧引用兼容)。
+    window.robot_ip_combo = nav.robot_ip_combo
     bind_robot_ip(window, device)
 
     root = QWidget()

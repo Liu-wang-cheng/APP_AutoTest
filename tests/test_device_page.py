@@ -219,8 +219,9 @@ def test_robot_ip_combo_shows_model_sn_ip_from_device_info(qapp):
                                 _robot_auto_connecting=True)
     win.robot_ip_combo.setEditable(True)
     ap.refresh_robot_ips(win, Dev(), auto=False)
-    assert (win.robot_ip_combo.currentText()
-            == "CLA_ZY2L-LDTest0012-192.168.10.21")
+    # 选中后输入框只显示 IP; 下拉项仍是 型号-SN-IP(用户 2026-11-27)
+    assert win.robot_ip_combo.currentText() == "192.168.10.21"
+    assert win.robot_ip_combo.itemText(0) == "CLA_ZY2L-LDTest0012-192.168.10.21"
 
 
 def test_fit_robot_combo_follows_long_label(qapp):
@@ -252,21 +253,6 @@ def test_ip_combo_widens_for_long_labels(page):
     assert page.device_combo.maximumWidth() >= first
     assert page.device_combo.maximumWidth() <= 680
 
-
-def test_fault_ip_editable_width_matches_content(page):
-    """故障页 IP 输入框本身也要按内容自适应, 不是只放大下拉列表."""
-    page._save_devices([
-        {"model": "CLL_PE3C", "sn": "uuid79c29b5e6258dd70",
-         "ip": "192.168.10.71"},
-    ])
-    page._refresh_fault_ips()
-    widest = "CLL_PE3C-uuid79c29b5e6258dd70-192.168.10.71"
-    need = page.fault_ip_combo.fontMetrics().horizontalAdvance(widest) + 40
-    assert page.fault_ip_combo.width() >= need
-    assert page.fault_ip_combo.minimumWidth() == page.fault_ip_combo.width()
-    assert page.fault_ip_combo.maximumWidth() == page.fault_ip_combo.width()
-    page.fault_ip_combo.setEditText("10.1.2.3")
-    assert page.fault_ip_combo.width() < 680
 
 
 def test_selected_ip_prefers_typed_text(page):
@@ -836,25 +822,6 @@ def test_queued_ip_connects_after_previous_attempt(page, monkeypatch):
     assert page._pending_connect_ip == ""
     assert page.device_combo.currentText() == "192.168.10.70"
 
-
-def test_fault_connect_reports_switch_in_progress(page, monkeypatch):
-    page._connecting = True
-    page._connect_ip = "192.168.10.63"
-    try:
-        monkeypatch.setattr(page, "_fault_selected_ip",
-                            lambda: "192.168.10.70")
-        page._fault_connect()
-        assert "正在切换" in page.fault_status.text()
-        assert page._pending_connect_ip == "192.168.10.70"
-        # 已在对同一台发起连接: 不能报「无法连接」
-        monkeypatch.setattr(page, "_fault_selected_ip",
-                            lambda: "192.168.10.63")
-        page._fault_connect()
-        assert page.fault_status.text() == "正在连接 192.168.10.63…"
-        assert "无法连接" not in page.fault_status.text()
-    finally:
-        page._connecting = False
-        page._pending_connect_ip = ""
 
 
 def test_connected_clears_stale_fault_status(page):
@@ -2712,6 +2679,7 @@ def test_fault_config_saves_under_tool_dir(page, tmp_path, monkeypatch):
     page._device_info = {}
     page._connected_ip = ""
     page.fault_prd_label.setText(str(tmp_path / "CLA_HS4_PRD.xlsx"))
+    page._prd_path = str(tmp_path / "CLA_HS4_PRD.xlsx")
     page._save_prd_config_file()
     assert os.path.basename(captured["default"]).startswith(
         "CLA_HS4_PRD_故障模拟配置_")
@@ -3382,15 +3350,6 @@ def test_robot_ip_combo_defaults_to_device_page_ip(qapp):
     assert win.robot_ip_combo.currentText() == "10.7.7.7"
 
 
-def test_fault_ip_defaults_to_device_page_ip(page):
-    """故障模拟页未连接时也跟随设备页 IP, 不只挑扫描列表第一台。"""
-    page._connected = False
-    page._connecting = False
-    page._connected_ip = ""
-    page.device_combo.setEditText("10.7.7.7")
-    page._refresh_fault_ips()
-    assert page._fault_selected_ip() == "10.7.7.7"
-
 
 def test_poll_switches_to_disconnected_when_service_lost(page, monkeypatch):
     """设备侧断链(长时间无数据): 轮询要立刻把界面切到未连接(用户 2026-11-27)。"""
@@ -3423,22 +3382,6 @@ def test_poll_keeps_connected_while_service_alive(page):
     page._poll()          # 不得抛异常/不得改连接状态
     assert page._connected
 
-
-def test_fault_ip_auto_connect_and_button_state(page):
-    """故障页 IP 切换自动连接; 连接按钮状态随实际连接变化(用户 2026-11-12)。"""
-    page._service = object()
-    page._connected = False
-    page._connecting = False
-    page._refresh_fault_ips()
-    assert page.fault_connect_btn.text() == "连接"
-    page._connected = True
-    page._connected_ip = "10.0.0.9"
-    page._refresh_fault_ips()
-    assert page.fault_connect_btn.text() == "已连接"
-    page._connecting = True
-    page._refresh_fault_ips()
-    assert page.fault_connect_btn.text() == "连接中…"
-    assert page.fault_connect_btn.isEnabled() is False
 
 
 def test_main_connect_button_text_follows_state(page):
@@ -3475,51 +3418,6 @@ def test_connect_same_ip_does_not_reconnect(page):
     assert "无需重复连接" in page.status_label.text()
 
 
-def test_endurance_connect_button_text_follows_state(qapp, page):
-    """续航测试页连接按钮文案/可用态随状态变化(用户 2026-11-26)。"""
-    from gui.endurance_page import EndurancePage
-    ep = EndurancePage(device=page)
-    page._service = object()
-    page._connected = False
-    page._connecting = False
-    ep.ip_combo.setEditText("10.0.0.9")
-    ep._sync_conn_ui()
-    assert ep.connect_btn.text() == "连接"
-    assert not ep.disconnect_btn.isEnabled()
-    page._connected = True
-    page._connected_ip = "10.0.0.9"
-    ep._sync_conn_ui()
-    assert ep.connect_btn.text() == "已连接"
-    assert ep.disconnect_btn.isEnabled()
-    # 已连接同一 IP 再点连接：不发新连接，只提示
-    ep._connect()
-    assert "无需重复连接" in ep.log.toPlainText()
-    # 换了 IP → 按钮回到「连接」
-    ep.ip_combo.setEditText("10.0.0.10")
-    ep._sync_conn_ui()
-    assert ep.connect_btn.text() == "连接"
-    page._connecting = True
-    ep._sync_conn_ui()
-    assert ep.connect_btn.text() == "连接中…"
-    assert not ep.connect_btn.isEnabled()
-
-
-def test_endurance_ip_combo_shows_model_sn_ip(qapp):
-    """续航页 IP 下拉与设备页/测试页一致: 型号-SN-IP(用户 2026-11-26)。"""
-    from gui.endurance_page import EndurancePage
-
-    class Dev:
-        connected = False
-        connecting = False
-        connected_ip = ""
-
-        def _known_devices(self):
-            return [{"model": "CLA_HS4", "sn": "SN1", "ip": "10.0.0.9"}]
-
-    ep = EndurancePage(device=Dev())
-    assert ep.ip_combo.itemText(0) == "CLA_HS4-SN1-10.0.0.9"
-    assert ep.ip_combo.itemData(0) == "10.0.0.9"
-    assert ep._ip() == "10.0.0.9"
 
 
 def test_nav_running_state_tracks_sources(qapp):
@@ -3583,26 +3481,6 @@ def test_loop_clean_page_combos_and_thresholds(qapp):
     p.all_btn.click()          # 第二次反选
     assert not p._row_checked(0)
 
-
-def test_loop_clean_ip_follows_tool_connection(qapp):
-    """新用户默认 IP 不能写死 10.21: 工具连上后循环清扫要跟随当前连接 IP。"""
-    from gui.loop_clean_page import LoopCleanPage
-
-    class Dev:
-        connected_ip = ""
-
-        def _known_devices(self):
-            return [{"ip": self.connected_ip}] if self.connected_ip else []
-
-        def _selected_ip(self):
-            return self.connected_ip
-
-    dev = Dev()
-    p = LoopCleanPage(device=dev)
-    assert p._ip() == "192.168.10.21"      # 无设备时仍给默认
-    dev.connected_ip = "192.168.10.30"
-    p._refresh_ips()
-    assert p._ip() == "192.168.10.30"     # 跟随工具当前连接的 IP
 
 
 def test_endurance_ip_uses_device_page_ip_before_connect(qapp):
@@ -3672,3 +3550,61 @@ def test_loop_clean_page_restores_combos_and_thresholds(qapp, tmp_path):
     assert p2.target_spin.value() == 25
     assert p2.rounds_spin.value() == 7
     assert p2.sample_spin.value() == 20
+
+
+def test_page_nav_hosts_global_robot_connection(qapp):
+    """扫地机连接全局只有一份: 右上角导航条(用户 2026-11-27)。"""
+    from gui.app_pages import PageNav
+    nav = PageNav()
+    assert nav.robot_ip_combo.isEditable()
+    assert nav.robot_connect_btn.text() == "连接"
+    assert not hasattr(nav, "robot_disconnect_btn"), "连接/断开应合并为一个按钮"
+    nav.robot_ip_combo.addItem("CLA_HS4-SN1-192.168.10.9", "192.168.10.9")
+    nav.robot_ip_combo.setCurrentIndex(0)
+    nav.fit_robot_combo()
+    assert nav.robot_ip_combo.width() >= nav._nav_combo_floor
+
+
+def test_endurance_ip_prefers_connected_then_selected(qapp):
+    """续航页不再有自己的 IP 框: 目标 IP 跟随设备页连接/选中(2026-11-27)。"""
+    from gui.endurance_page import EndurancePage
+
+    class Dev:
+        connected_ip = "192.168.10.30"
+
+        def _selected_ip(self):
+            return "192.168.10.88"
+
+    ep = EndurancePage(device=Dev())
+    assert ep._ip() == "192.168.10.30"      # 已连接优先
+    Dev.connected_ip = ""
+    assert ep._ip() == "192.168.10.88"      # 未连接用设备页当前 IP
+
+
+def test_loop_clean_ip_prefers_connected_then_selected(qapp):
+    """循环清扫页同样只跟随设备页的 IP, 没有自己的 IP 框(2026-11-27)。"""
+    from gui.loop_clean_page import LoopCleanPage
+
+    class Dev:
+        connected_ip = ""
+
+        def _selected_ip(self):
+            return "192.168.10.88"
+
+    p = LoopCleanPage(device=Dev())
+    assert p._ip() == "192.168.10.88"
+    Dev.connected_ip = "192.168.10.30"
+    assert p._ip() == "192.168.10.30"
+
+
+def test_robot_ip_popup_second_click_does_not_flicker(qapp):
+    """再次点击下拉框是"关闭", 不能在 200ms 内又重开(用户 2026-11-27)。"""
+    from gui.app_pages import PageNav
+    nav = PageNav()
+    c = nav.robot_ip_combo
+    c.addItem("CLA-SN-10.0.0.9", "10.0.0.9")
+    c.showPopup()
+    assert c._popup is not None and c._popup.isVisible()
+    c.hidePopup()
+    c.showPopup()                     # 立即再触发 = 第二次点击
+    assert c._popup is None, "刚关闭就重开, 会闪动"
