@@ -63,6 +63,12 @@ datas = [
     ("CHANGELOG.md", "."),
     ("README.md", "."),
 ]
+# ★ APOS SDK 随包默认携带(用户 2026-11-27): 厂商新版 AposSdkHelp.py 已 TSD 加密,
+#   无法再提取 license; 新装用户也没有旧的 apos\license.dat 可复用。把仓库里已验证
+#   可用的 apos\(DLL + license.dat) 打进 _internal\apos\，首启由 bootstrap 铺到
+#   exe 同级 apos\ —— 之后不再依赖 AutopackDebugger 目录。
+if os.path.isdir(os.path.join(ROOT, "apos")):
+    datas.append(("apos", "apos"))
 # 运行期要读的数据文件: PyInstaller 没有这几个包的现成 hook, 不显式收集就会
 # **打包后到某一步才炸**(能启动、能跑用例列表, 只是那个功能用不了) —— 最容易漏的一处。
 #   rapidocr_onnxruntime / ddddocr: 模型文件, 不收则 OCR 静默失效

@@ -1,0 +1,9 @@
+{
+  "source": "D:\\1766627997244_AutopackDebugger_4.3.4",
+  "installed_at": "2026-11-05 18:00:50",
+  "files": {
+    "librpc_base.dll": "124df7c13a096f2934ff7febec7bbe427d5c81524c1382a226247aae59ae0fc3",
+    "libapos_client.dll": "e835eb4790f434b7a9eddb583674a4311d705c27cd70368220cd51f318ec4d8f",
+    "libzmq-v141-mt-4_3_5.dll": "043e7019980dc9f01e79288c705ba662da6808b888b3e83e09d906d08ae5172a"
+  }
+}

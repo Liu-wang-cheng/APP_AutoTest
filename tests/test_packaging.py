@@ -544,6 +544,27 @@ def test_bootstrap_never_raises(tmp_path, monkeypatch):
     bootstrap.ensure_data_dirs(app_dir=str(src), data_dir=str(dst))   # 不得抛
 
 
+def test_bootstrap_seeds_apos_sdk_only_when_missing(tmp_path):
+    """APOS SDK 随包默认携带: 首次运行铺到 exe 旁 apos\\, 已有 license 不覆盖。"""
+    from core import bootstrap
+    src, dst = tmp_path / "pkg", tmp_path / "data"
+    _seed_src(src)
+    (src / "apos").mkdir()
+    (src / "apos" / "libapos_client.dll").write_bytes(b"dll")
+    (src / "apos" / "license.dat").write_text("lic-from-package\n",
+                                              encoding="utf-8")
+    (dst / "apos").mkdir(parents=True)
+    (dst / "apos" / "license.dat").write_text("用户已有 license\n",
+                                              encoding="utf-8")
+
+    bootstrap.ensure_data_dirs(app_dir=str(src), data_dir=str(dst))
+
+    assert (dst / "apos" / "libapos_client.dll").read_bytes() == b"dll"
+    # 已有 license 绝不覆盖(用户换过厂商目录时保留自己的)
+    assert (dst / "apos" / "license.dat").read_text(
+        encoding="utf-8") == "用户已有 license\n"
+
+
 def test_config_gets_update_section_when_missing(tmp_path):
     """★ 老 config.yaml 没有 update 段时要补上 —— 否则"检查更新"静默报"未启用",
     用户以为功能坏了(实测遇到: 源码版的 config 是 update 段之前生成的)。

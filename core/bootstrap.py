@@ -48,7 +48,9 @@ _SEED_FILES = (
 #: ★ Test_preconditions 也是**默认值**(用户 2026-10-15: "这里是真实配置也是示例"):
 #:   它既是用户真实在用的前置配置, 也是新装用户的开箱默认; 与 Test_cases 同待遇
 #:   (进包 + 首启铺到用户目录 + OTA 更新不碰, 见 core/driver.USER_DATA_PATHS)。
-_SEED_DIRS = ("Test_cases", "Test_preconditions")
+#: ★ apos 也是默认资源(用户 2026-11-27): 新版厂商 AposSdkHelp.py 已加密, 无法提取
+#:   license, 所以把可用的 SDK + license.dat 随包携带; 本地已有的文件不覆盖。
+_SEED_DIRS = ("Test_cases", "Test_preconditions", "apos")
 #: 用户配置的模板(只生成, 之后由用户在 GUI 里改)
 _CONFIG_TEMPLATE = "config/config.example.yaml"
 _CONFIG_TARGET = "config/config.yaml"

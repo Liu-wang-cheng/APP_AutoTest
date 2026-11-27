@@ -95,6 +95,11 @@ _REQUIRED_RESOURCES = (
     ("pypinyin/pinyin_dict.json", "拼音词典"),
     ("config/locators.yaml", "定位器配置"),
     ("config/config.example.yaml", "配置模板"),
+    # ★ APOS SDK 随包默认携带(用户 2026-11-27): 少了它首次连设备会弹 SDK 配置,
+    #   而厂商新版 AposSdkHelp.py 已加密, 现场无法再提取 license。
+    ("apos/libapos_client.dll", "APOS 客户端 DLL"),
+    ("apos/librpc_base.dll", "APOS RPC DLL"),
+    ("apos/license.dat", "APOS license"),
     ("gui/assets/app_icon.ico", "程序图标"),
     ("VERSION", "版本号(更新脚本读它取证)"),
     # 推理/视觉的关键二进制: 缺了会"能启动、一跑用例就崩"(本轮排查一并钉住)

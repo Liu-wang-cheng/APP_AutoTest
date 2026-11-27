@@ -2,6 +2,15 @@
 
 所有对外可见的变更记录于此。版本号与 git tag 对应(如 `v1.0`)。
 
+## [2.0.43] - 2026-11-27
+
+### 修复
+
+- **APOS SDK 默认内置**: 新版 AutopackDebugger 的 `AposSdkHelp.py` 已加密,
+  无法再从中提取 license, 新装机器也不再有旧的 `apos\license.dat` 可复用。
+  安装包现内置已验证可用的 APOS SDK(DLL + license), 首次启动自动铺到
+  exe 同级 `apos\`, 不再要求选择上位机目录。
+
 ## [2.0.42] - 2026-11-27
 
 ### 新增
