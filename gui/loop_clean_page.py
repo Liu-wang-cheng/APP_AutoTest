@@ -96,6 +96,7 @@ class LoopCleanPage(QWidget):
         self.worker = None
         self._result_dir = ""
         self._select_all_next = True
+        self._auto_ip = ""          # 自动填入的默认 IP(用户手动改过就不再跟随)
         self.settings = settings
         self._persist = (settings is not None
                          or not os.environ.get("PYTEST_CURRENT_TEST"))
@@ -501,8 +502,18 @@ class LoopCleanPage(QWidget):
         labels = {self.ip_combo.itemText(i): self.ip_combo.itemData(i)
                   for i in range(self.ip_combo.count())}
         cur_is_item = bool(current and labels.get(current))
+        # ★ 自动填入的默认 IP 不算"用户选择": 工具连上设备后要跟随过去,
+        #   否则新用户会一直用 192.168.10.21 去订阅推流(用户 2026-11-27)。
+        is_auto = (not current) or (current == self._auto_ip)
         prefer = connected_ip if (connected_ip and (
-            not current or current == connected_ip or cur_is_item)) else ""
+            is_auto or current == connected_ip or cur_is_item)) else ""
+        if not prefer and is_auto:
+            # 还没连接时，优先用设备页当前输入/上次使用的 IP，而不是写死 10.21
+            try:
+                prefer = str(getattr(self.device, "_connect_ip", "") or
+                             self.device._selected_ip() or "")
+            except Exception:
+                prefer = ""
         target = prefer or current
         idx = self.ip_combo.findData(target)
         if idx < 0:
@@ -515,6 +526,7 @@ class LoopCleanPage(QWidget):
             self.ip_combo.setCurrentIndex(0)
         else:
             self.ip_combo.setEditText("192.168.10.21")
+        self._auto_ip = self.ip_combo.currentText().strip()
         self.ip_combo.blockSignals(False)
         self._fit_ip_combo()
 
@@ -643,6 +655,11 @@ class LoopCleanPage(QWidget):
                 "开始后会自行尝试连接该 IP，是否继续？")
             if ok != QMessageBox.Yes:
                 return
+        if self.device is not None:
+            try:
+                self.device._remember_ip(ip)   # 下次启动保留本次测试 IP
+            except Exception:
+                pass
         self.start_btn.setEnabled(False)
         self.stop_btn.setEnabled(True)
         self.state_label.setText("● 启动中…")

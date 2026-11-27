@@ -7,6 +7,7 @@ import json
 import threading
 import time
 
+from core.apos.catalog import STATIC_PATHS
 from core.apos.client import (BASE_STATION_EVENT, BASE_STATION_FILES,
                               BINARY_PATHS, COMPOSITE_PATHS, AposClient)
 from core.logger import get_logger
@@ -89,6 +90,12 @@ class ParamService:
         #: 外部（续航测试）独占推流时置位: 不再建流/读属性，让出机器人
         #  推送会话, 避免同一台机器人上两条推送会话互相挤掉（用户 2026-11-26）
         self._stream_paused = False
+        #: 固定参数(SN/固件/型号等): 读到一次后缓存, 之后不再参与轮询/推送覆盖,
+        #: 重新连接时清空（用户 2026-11-27）。
+        self._static_values = {}
+        self._static_done = set()
+        #: 最后一次成功从设备读到数据的时间 —— 长时间没有数据判定为断连
+        self._last_live = time.time()
 
     # ── 生命周期 ──
     def connect(self, ip):
@@ -136,7 +143,10 @@ class ParamService:
             log.info(f"[参数] {self._ip} 上传流不可用, 退回 librpc 轮询")
         self._connected = ok
         if ok:
-            # ★ 换设备后旧快照不能带过去（否则界面会先显示上一台机器的值）
+            # ★ 换设备后旧快照/固定参数缓存不能带过去
+            self._static_values = {}
+            self._static_done = set()
+            self._last_live = time.time()
             with self._lock:
                 self._snapshot = {"ok": {}, "failed": {}, "ts": 0}
             self._start_mcu()
@@ -534,6 +544,10 @@ class ParamService:
         except Exception:
             data = {}
         if data:
+            for path, value in data.items():
+                if path in STATIC_PATHS and str(value or "").strip():
+                    self._static_values[path] = value
+                    self._static_done.add(path)
             with self._lock:
                 self._snapshot = {"ok": dict(data), "failed": {},
                                   "ts": time.time()}
@@ -624,6 +638,12 @@ class ParamService:
         """恢复推送（续航测试结束后调用）。"""
         was_paused = self._stream_paused
         self._stream_paused = False
+        #: 固定参数(SN/固件/型号等): 读到一次后缓存, 之后不再参与轮询/推送覆盖,
+        #: 重新连接时清空（用户 2026-11-27）。
+        self._static_values = {}
+        self._static_done = set()
+        #: 最后一次成功从设备读到数据的时间 —— 长时间没有数据判定为断连
+        self._last_live = time.time()
         if not was_paused:
             return bool(getattr(self.stream, "running", False))
         self._watch_at = 0.0
@@ -684,6 +704,24 @@ class ParamService:
         with self._lock:
             return list(self._paths)
 
+    def is_connected(self):
+        """链路是否还有数据: GUI 用它实时把"已连接"改成"未连接"。"""
+        return bool(self._connected)
+
+    def _cache_static(self, ok):
+        """固定参数只认第一次读到的值, 之后不再更新(重连时清空)。
+
+        ok 会被原地补上缓存值 —— 后续轮询不再读这些路径, 界面仍能拿到。
+        """
+        for path in STATIC_PATHS:
+            value = ok.get(path)
+            if (path not in self._static_values
+                    and str(value or "").strip()):
+                self._static_values[path] = value
+                self._static_done.add(path)
+            if path in self._static_values:
+                ok[path] = self._static_values[path]
+
     # ── 数据 ──
     def latest(self):
         with self._lock:
@@ -692,6 +730,9 @@ class ParamService:
             ts = self._snapshot["ts"]
         pushed, pushed_ts = self._stream_snapshot()
         if pushed:
+            # 固定参数一旦缓存, 推送里的新值也不覆盖(直到重连/换 IP)
+            pushed = {p: v for p, v in pushed.items()
+                      if p not in self._static_values}
             ok.update(pushed)
             for path in pushed:
                 failed.pop(path, None)
@@ -852,7 +893,11 @@ class ParamService:
                 if not only:
                     # 曲线页只订阅曲线路径, 这里没有可读项 —— 但仍要在这个句柄上
                     # 周期性做一次读，否则机器人推送约 35 秒后会自己停掉(实测)。
-                    only = list(READ_ONLY_PATHS)
+                    # 固定参数已缓存后不要再读它们，用一条廉价的属性做保活即可。
+                    only = [p for p in READ_ONLY_PATHS
+                            if p not in self._static_done]
+                    if not only:
+                        only = ["/BatteryBattery/BatteryLevel"]
                 return self.stream.read(only) or {}
             return self.client.read(paths) or {}
         finally:
@@ -904,6 +949,9 @@ class ParamService:
         except Exception as e:
             log.debug(f"[参数] 单次读取失败: {e}")
             return {}
+        for p in paths:
+            if p in self._static_values:
+                data.setdefault(p, self._static_values[p])
         return {p: data[p] for p in paths if p in data}
 
     # ── 线程 ──
@@ -928,7 +976,7 @@ class ParamService:
             if self._stream_paused:
                 # 续航测试独占推流期间: 不读属性、不刷快照，恢复后自动继续
                 continue
-            paths = self.paths()
+            paths = [p for p in self.paths() if p not in self._static_done]
             stream_on = (self.stream is not None
                          and getattr(self.stream, "running", False)
                          and not self._stream_fallback)
@@ -946,6 +994,9 @@ class ParamService:
                     self._stop.wait(0.2)
                     data = self._read(paths)
                     ok = {p: data[p] for p in paths if p in data}
+                if data:
+                    self._last_live = time.time()
+                self._cache_static(ok)
                 if stream_on:
                     # 推送是"变化才发", 这一轮没推到的路径沿用上一次的值,
                     # 避免界面在两次推送之间闪成空白/0。
@@ -960,6 +1011,10 @@ class ParamService:
                     self._snapshot = {"ok": ok, "failed": failed,
                                       "ts": time.time()}
                 failures = 0
+                if (self._connected and not self._stream_paused
+                        and time.time() - self._last_live > 15.0):
+                    self._connected = False
+                    log.warning("[参数] 长时间没有读到设备数据, 判定连接已断开")
             except Exception as e:
                 with self._lock:
                     self._snapshot = {

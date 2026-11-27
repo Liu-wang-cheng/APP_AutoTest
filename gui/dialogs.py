@@ -1043,3 +1043,53 @@ class TemplateCropDialog(QDialog):
         self.saved_name = fname
         log.info("[裁剪模板] 已保存 %s (%dx%d)", path, self._box[2], self._box[3])
         self.accept()
+
+
+def apply_update_and_restart(win):
+    """启动 OTA 替换脚本并立刻退出本进程（实现从 main_window 挪出，2026-11-27）。
+
+    ★ 必须 os._exit 而不是正常退出: 单文件 exe 内已释放的 Qt/opencv DLL 句柄若
+      不立刻释放, bat 里的改名/复制会因文件被锁而失败(参考项目实战踩过)。
+    ★ 下载期间用户可能又点了「运行」—— 带着正在执行的用例退出会毁掉这一轮,
+      必须拦下(下次定时器到点再提示)。
+    """
+    if getattr(win, "worker", None):
+        win._update_message(
+            "现在不能重启更新",
+            "用例正在执行中。等这一轮跑完，再点工具栏的「检查更新」重新操作即可。",
+            kind="warn")
+        return
+    bat = getattr(win, "_update_bat_path", "")
+    if not bat or not os.path.exists(bat):
+        win._update_message("更新失败", "替换脚本不存在，请重新检查更新。",
+                            kind="error")
+        return
+    # ★ 留痕: 这行之后本进程会 os._exit(0)(静默退出) —— 有这行才说明是**更新重启**,
+    #   而不是崩溃(见 core/crashlog.py)。
+    log.info("[退出] 应用更新: 已启动替换脚本, 本进程即将退出并自动重启")
+    import subprocess
+    subprocess.Popen(
+        ["cmd", "/c", bat],
+        creationflags=subprocess.CREATE_NEW_CONSOLE | subprocess.CREATE_NEW_PROCESS_GROUP,
+        cwd=os.path.dirname(bat),
+    )
+    os._exit(0)
+
+
+def prompt_ready_update(win, version):
+    """已下载好、点过「稍后」的更新包: 再查到同版本时只提示重启(2026-11-27)。
+
+    返回 True = 已处理（弹过窗），调用方应直接 return，不要再走下载。
+    """
+    bat = getattr(win, "_update_bat_path", "")
+    if not (getattr(win, "_update_ready_version", "") == version
+            and bat and os.path.exists(bat)):
+        return False
+    picked = win._update_message(
+        "更新包已下载",
+        f"v{version} 更新包已经下载并通过校验，无需重新下载。\n\n"
+        "点「立即重启」即可完成替换并重新启动。",
+        buttons=["立即重启", "稍后"], default=0)
+    if picked == "立即重启":
+        apply_update_and_restart(win)
+    return True

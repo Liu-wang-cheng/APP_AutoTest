@@ -152,6 +152,7 @@ def run_loop_clean(ip, combos, clean_battery=30, recharge_battery=20,
     last_charge_try = 0.0
     last_wait_note = 0.0
     last_status = ""
+    location_ok = False      # 本轮是否收到「定位成功，继续清扫」事件
 
     def _rebuild_if_stale():
         if _stream_fresh(st):
@@ -164,9 +165,9 @@ def run_loop_clean(ip, combos, clean_battery=30, recharge_battery=20,
         ka["next_try"] = 0.0
         _log("[推送] 数据流%s" % ("已重建" if ok else "不可用"))
 
-    def apply(combo, force=False):
+    def apply(combo, force=False, only=None):
         mode, fan, water = combo
-        plan = plan_settings(applied, mode, fan, water)
+        plan = plan_settings(applied, mode, fan, water, only)
         if force and not plan:
             plan = {"mode": mode, "fan": fan, "water": water}
         if not plan:
@@ -204,11 +205,13 @@ def run_loop_clean(ip, combos, clean_battery=30, recharge_battery=20,
         return item
 
     def capture_faults(round_no):
-        nonlocal last_mcu_ts
+        nonlocal last_mcu_ts, location_ok
         if mcu is None:
             return
         now = time.time()
         for _t, line in mcu.log_since(last_mcu_ts):
+            if "clean_location_success" in line:
+                location_ok = True
             m = re.search(
                 r"(?:Recv event_id\s+|tpc:/hardware/error id:"
                 r"|event_id:\s*|event:)([a-z][a-z0-9_]+)", line)
@@ -240,9 +243,11 @@ def run_loop_clean(ip, combos, clean_battery=30, recharge_battery=20,
 
     def start_round(combo):
         mode, fan, water = combo
-        apply(combo, force=True)
+        # ★ 启动前只下发模式(决定清扫类型)；吸力/水量必须等机器人定位成功、
+        #   真正进入清扫后再下发（用户 2026-11-27：提前下发会被启动流程覆盖）。
+        if svc.set_clean_mode(mode):
+            applied["mode"] = mode
         _log("[清扫] 启动 %s 吸力%s 水量%s" % (mode, fan, water))
-        svc.set_clean_mode(mode)
         svc.start_total_clean()
         end = time.time() + 30
         while time.time() < end:
@@ -345,6 +350,12 @@ def run_loop_clean(ip, combos, clean_battery=30, recharge_battery=20,
             if current is not None and cleaning:
                 error_streak = 0
                 current["cleaned_once"] = True
+                if (not current.get("settings_sent")
+                        and (location_ok
+                             or now - current["start_ts"] > 15)):
+                    current["settings_sent"] = True
+                    apply(current["combo"])
+                    _log("[设置] 已定位成功并开始清扫，下发吸力/水量")
                 current["clean_seconds"] = (current.get("clean_seconds", 0)
                                             + (now - current["last_ts"]))
                 current["last_ts"] = now
@@ -479,11 +490,12 @@ def run_loop_clean(ip, combos, clean_battery=30, recharge_battery=20,
                 time.sleep(1)
                 continue
             # 开始新的一轮
+            location_ok = False
             current = {"no": len(result["rounds"]) + 1, "combo": combo,
                        "start_ts": time.time(), "start_time": _now(),
                        "last_ts": time.time(), "start_battery": battery,
                        "clean_seconds": 0.0, "return_sent": False,
-                       "cleaned_once": False}
+                       "cleaned_once": False, "settings_sent": False}
             _log("[轮次 %d] 开始：电量 %s，组合 %s 吸力%s 水量%s"
                  % (current["no"], _pct_text(battery), combo[0], combo[1],
                     combo[2]))

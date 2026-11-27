@@ -3351,6 +3351,79 @@ def test_combo_width_adapts_to_long_option(page):
     assert combo.maximumWidth() > 320
 
 
+def test_robot_ip_combo_defaults_to_device_page_ip(qapp):
+    """未连接时自动化测试页也跟随设备页当前/上次 IP(用户 2026-11-27)。"""
+    import types
+    from PySide6.QtWidgets import QComboBox
+    import gui.app_pages as ap
+
+    class Dev:
+        connected = False
+        connecting = False
+        connected_ip = ""
+
+        class settings:
+            @staticmethod
+            def value(key, default=None):
+                return ""
+
+        @staticmethod
+        def _known_devices():
+            return []
+
+        @staticmethod
+        def _selected_ip():
+            return "10.7.7.7"
+
+    win = types.SimpleNamespace(robot_ip_combo=QComboBox(),
+                                _robot_auto_connecting=True)
+    win.robot_ip_combo.setEditable(True)
+    ap.refresh_robot_ips(win, Dev(), auto=False)
+    assert win.robot_ip_combo.currentText() == "10.7.7.7"
+
+
+def test_fault_ip_defaults_to_device_page_ip(page):
+    """故障模拟页未连接时也跟随设备页 IP, 不只挑扫描列表第一台。"""
+    page._connected = False
+    page._connecting = False
+    page._connected_ip = ""
+    page.device_combo.setEditText("10.7.7.7")
+    page._refresh_fault_ips()
+    assert page._fault_selected_ip() == "10.7.7.7"
+
+
+def test_poll_switches_to_disconnected_when_service_lost(page, monkeypatch):
+    """设备侧断链(长时间无数据): 轮询要立刻把界面切到未连接(用户 2026-11-27)。"""
+    class Svc:
+        @staticmethod
+        def is_connected():
+            return False
+
+    page._connected = True
+    page._service = Svc()
+    called = []
+    monkeypatch.setattr(page, "disconnect_device",
+                        lambda: called.append(True))
+    page._poll()
+    assert called, "链路断开会话没有触发界面断开"
+
+
+def test_poll_keeps_connected_while_service_alive(page):
+    class Svc:
+        @staticmethod
+        def is_connected():
+            return True
+
+        @staticmethod
+        def latest():
+            return {"ok": {}, "failed": {}, "ts": 0}
+
+    page._connected = True
+    page._service = Svc()
+    page._poll()          # 不得抛异常/不得改连接状态
+    assert page._connected
+
+
 def test_fault_ip_auto_connect_and_button_state(page):
     """故障页 IP 切换自动连接; 连接按钮状态随实际连接变化(用户 2026-11-12)。"""
     page._service = object()
@@ -3509,6 +3582,44 @@ def test_loop_clean_page_combos_and_thresholds(qapp):
     assert p._row_checked(0)
     p.all_btn.click()          # 第二次反选
     assert not p._row_checked(0)
+
+
+def test_loop_clean_ip_follows_tool_connection(qapp):
+    """新用户默认 IP 不能写死 10.21: 工具连上后循环清扫要跟随当前连接 IP。"""
+    from gui.loop_clean_page import LoopCleanPage
+
+    class Dev:
+        connected_ip = ""
+
+        def _known_devices(self):
+            return [{"ip": self.connected_ip}] if self.connected_ip else []
+
+        def _selected_ip(self):
+            return self.connected_ip
+
+    dev = Dev()
+    p = LoopCleanPage(device=dev)
+    assert p._ip() == "192.168.10.21"      # 无设备时仍给默认
+    dev.connected_ip = "192.168.10.30"
+    p._refresh_ips()
+    assert p._ip() == "192.168.10.30"     # 跟随工具当前连接的 IP
+
+
+def test_endurance_ip_uses_device_page_ip_before_connect(qapp):
+    """未连接时也用设备页当前 IP, 不再固定 10.21。"""
+    from gui.endurance_page import EndurancePage
+
+    class Dev:
+        connected_ip = ""
+
+        def _known_devices(self):
+            return []
+
+        def _selected_ip(self):
+            return "192.168.10.88"
+
+    ep = EndurancePage(device=Dev())
+    assert ep._ip() == "192.168.10.88"
 
 
 def test_endurance_page_restores_combos_and_thresholds(qapp, tmp_path):

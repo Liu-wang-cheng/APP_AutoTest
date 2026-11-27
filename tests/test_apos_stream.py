@@ -948,6 +948,22 @@ def test_call_service_without_stream_returns_empty():
     assert st.call_service("/TaskControl/StartToPointMove", {"x": 1}) == {}
 
 
+def test_static_params_cache_only_first_value():
+    """SN/固件等固定参数只认第一次读到的值, 后续推送不覆盖(用户 2026-11-27)。"""
+    from core.apos.catalog import STATIC_PATHS
+    assert "/System/CustomSN" in STATIC_PATHS
+    assert "/System/BoardSN" in STATIC_PATHS
+    assert "/System/FirmwareInfo" in STATIC_PATHS
+    svc = ParamService(object(), [], stream=None)
+    first = {"/System/CustomSN": "SN-1",
+             "/System/FirmwareInfo": '{"Model": "M1"}'}
+    svc._cache_static(first)
+    assert svc._static_done >= {"/System/CustomSN", "/System/FirmwareInfo"}
+    second = {"/System/CustomSN": "SN-2"}
+    svc._cache_static(second)
+    assert second["/System/CustomSN"] == "SN-1"
+
+
 def test_continue_clean_posts_resume_event():
     """报错恢复用「继续清扫」事件，不是新开任务（2026-11-27）。"""
     class Stream:

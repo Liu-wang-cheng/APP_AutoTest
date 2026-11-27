@@ -3830,6 +3830,32 @@ def test_update_prompt_appears_when_new_version_found(win, qapp, monkeypatch):
     assert buttons == ["立即更新", "稍后再说"], buttons
 
 
+def test_downloaded_update_is_not_downloaded_again(win, tmp_path, monkeypatch):
+    """已下载并点过「稍后」的更新, 再检查同版本时直接提示重启, 不重复下载。"""
+    from core import updater
+    bat = tmp_path / "_update.bat"
+    bat.write_text("@echo off\r\n", encoding="utf-8")
+    win._update_bat_path = str(bat)
+    win._update_ready_version = "9.9"
+    dialogs = []
+
+    def fake_msg(self, h, b="", kind="info", buttons=None, default=0):
+        dialogs.append((h, b, list(buttons or [])))
+        return "稍后"
+
+    monkeypatch.setattr(mw.MainWindow, "_update_message", fake_msg)
+    downloads = []
+    monkeypatch.setattr(mw.MainWindow, "_start_update_download",
+                        lambda self, r: downloads.append(r))
+    win._on_update_checked(updater.CheckResult(
+        "has_update", "发现新版本 9.9",
+        updater.VersionInfo(version="9.9", release_date="2026-11-27",
+                            release_notes="x")))
+    assert dialogs and dialogs[0][0] == "更新包已下载", dialogs
+    assert "无需重新下载" in dialogs[0][1]
+    assert not downloads, "已下载的更新包被重复下载了"
+
+
 def test_template_dropdown_rescans_when_opened(win, monkeypatch, tmp_path):
     """★ 新建模板后**不用重新添加步骤**就能在下拉里选到(用户实测反馈 2026-10-10)。
 

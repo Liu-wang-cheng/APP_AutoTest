@@ -269,6 +269,9 @@ class MainWindow(CaseFileMixin, QMainWindow):
             return
 
         info = result.info
+        # ★ 已下载好、点过「稍后」的更新包不要重复下载(用户 2026-11-27)
+        if prompt_ready_update(self, info.version):
+            return
         notes = (info.release_notes or "").strip()
         if len(notes) > 600:
             notes = notes[:600] + "…"
@@ -292,6 +295,7 @@ class MainWindow(CaseFileMixin, QMainWindow):
             self._set_status("更新包正在下载，请稍候…", self.status_label)
             return
         self._set_status(f"正在下载更新 v{result.info.version}…", self.status_label)
+        self._update_target_version = result.info.version
         self._dl_logged_key = None          # 进度日志台阶清零(见 _on_download_progress)
         self._update_download_thread = UpdateDownloadThread(
             load_config(), result.info, result.mirror, self,
@@ -322,12 +326,14 @@ class MainWindow(CaseFileMixin, QMainWindow):
 
     def _on_download_done(self, bat_path, err):
         if err:
+            self._update_ready_version = ""
             self._set_status("更新失败", self.status_label)
             self._update_message(
                 "更新没有成功",
                 f"{err}\n\n程序仍是可用的，联网正常时再试一次即可。", kind="error")
             return
         self._update_bat_path = bat_path
+        self._update_ready_version = getattr(self, "_update_target_version", "")
         picked = self._update_message(
             "更新已就绪",
             "新版本下载完成并通过校验。\n\n"
@@ -338,34 +344,8 @@ class MainWindow(CaseFileMixin, QMainWindow):
             self._apply_update_and_restart()
 
     def _apply_update_and_restart(self):
-        """启动替换脚本并立刻退出本进程。
-
-        ★ 必须 os._exit 而不是正常退出: 单文件 exe 内已释放的 Qt/opencv DLL 句柄若
-          不立刻释放, bat 里的改名/复制会因文件被锁而失败(参考项目实战踩过)。
-        ★ 下载期间用户可能又点了「运行」—— 带着正在执行的用例退出会毁掉这一轮,
-          必须拦下(下次定时器到点再提示)。
-        """
-        if self.worker:
-            self._update_message(
-                "现在不能重启更新",
-                "用例正在执行中。等这一轮跑完，再点工具栏的「检查更新」重新操作即可。",
-                kind="warn")
-            return
-        bat = getattr(self, "_update_bat_path", "")
-        if not bat or not os.path.exists(bat):
-            self._update_message("更新失败", "替换脚本不存在，请重新检查更新。",
-                                 kind="error")
-            return
-        # ★ 留痕: 这行之后本进程会 os._exit(0)(静默退出) —— 有这行才说明是**更新重启**,
-        #   而不是崩溃(见 core/crashlog.py)。
-        log.info("[退出] 应用更新: 已启动替换脚本, 本进程即将退出并自动重启")
-        import subprocess
-        subprocess.Popen(
-            ["cmd", "/c", bat],
-            creationflags=subprocess.CREATE_NEW_CONSOLE | subprocess.CREATE_NEW_PROCESS_GROUP,
-            cwd=os.path.dirname(bat),
-        )
-        os._exit(0)
+        """启动替换脚本并立刻退出本进程(实现在 gui.dialogs, 2026-11-27 挪出)。"""
+        apply_update_and_restart(self)
 
     def _set_status(self, msg, label=None):
         """同时更新界面提示并写运行日志。
@@ -2967,6 +2947,7 @@ from gui.dialogs import (
     ImageViewDialog, StatusWordsDialog, PreconditionEditDialog,
     PreconditionsDialog, NewCaseDialog, TemplateCropDialog, _CropView, _to_qimage,
     validate_template, BatteryMonitorDialog,
+    apply_update_and_restart, prompt_ready_update,
 )
 from gui.step_card import (
     _make_field_widget, _int_of, _float_of, _int4_of, StepCard, _StepsHost,

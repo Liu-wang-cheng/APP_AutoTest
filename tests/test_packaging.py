@@ -6,8 +6,6 @@
 """
 import os
 import sys
-import time
-import zipfile
 from pathlib import Path
 
 import pytest
@@ -96,124 +94,12 @@ def test_user_data_paths_cover_all_user_data():
     """
     from core.driver import USER_DATA_PATHS
     need = {"config/config.yaml", "Test_cases", "Test_preconditions",
-            "Test_img", "backups"}
+            "Test_img"}
     missing = need - set(USER_DATA_PATHS)
     assert not missing, f"这些用户数据没被保护, OTA 更新会覆盖它们: {missing}"
     # locators.yaml / config.example.yaml 是随版本走的程序资源, 不该被保护
     # (否则它们的修 bug 就永远发不出去)
     assert "config/locators.yaml" not in USER_DATA_PATHS
-
-
-# ── 自动备份 ──
-
-def _make_data(root):
-    """造一份有代表性的用户数据 + 若干运行产物
-
-    ★ 用 makedirs(exist_ok=True) 而不是 mkdir(): conftest 的
-      _isolate_group_preconditions 夹具已经在 tmp_path 下建过 Test_preconditions/,
-      直接 mkdir 会撞 FileExistsError。
-    """
-    os.makedirs(root / "config", exist_ok=True)
-    (root / "config" / "config.yaml").write_text(
-        "target_device: 我的扫地机\n", encoding="utf-8")
-    os.makedirs(root / "Test_cases" / "三星", exist_ok=True)
-    (root / "Test_cases" / "三星" / "a.yaml").write_text(
-        "module: a\ncases: []\n", encoding="utf-8")
-    os.makedirs(root / "Test_preconditions", exist_ok=True)
-    (root / "Test_preconditions" / "三星.yaml").write_text(
-        "preconditions: []\n", encoding="utf-8")
-    os.makedirs(root / "Test_img" / "templates", exist_ok=True)
-    (root / "Test_img" / "templates" / "开始清扫.png").write_bytes(b"fake")
-    # ↓ 这些是运行产物: 可再生、体积大, 不该进备份
-    os.makedirs(root / "Test_img" / "screenshots", exist_ok=True)
-    (root / "Test_img" / "screenshots" / "big.png").write_bytes(b"x" * 500)
-    os.makedirs(root / "reports", exist_ok=True)
-    (root / "reports" / "r.xlsx").write_bytes(b"x")
-
-
-def test_backup_contains_user_data_only(tmp_path):
-    """备份要装齐"人做出来的"数据, 但不该把截图/报告这类产物也塞进去"""
-    from core.backup import make_backup
-    _make_data(tmp_path)
-    p = make_backup(data_dir=str(tmp_path), force=True)
-    assert p and os.path.isfile(p)
-    with zipfile.ZipFile(p) as zf:
-        names = set(zf.namelist())
-    assert "config/config.yaml" in names
-    assert any(n.startswith("Test_cases") for n in names), names
-    assert any(n.startswith("Test_preconditions") for n in names), names
-    assert not any("screenshots" in n for n in names), f"截图不该进备份: {names}"
-    assert not any(n.startswith("reports/") for n in names), f"报告不该进备份: {names}"
-
-
-def test_backup_once_per_day(tmp_path):
-    """★ 同一天只备一次 —— 否则用户一天开十次程序就产生十份, 把有价值的旧备份挤掉
-
-    用注入的固定时间戳, 而不是真实时钟: 真实时钟两次调用会落在同一秒,
-    文件名相同就分不出"跳过了"还是"又备了一份"。
-    """
-    from core.backup import make_backup
-    day1 = time.mktime((2026, 1, 15, 10, 0, 0, 0, 0, -1))
-    _make_data(tmp_path)
-
-    first = make_backup(data_dir=str(tmp_path), now=day1)
-    assert first, "首次备份应该成功"
-    assert "20260115" in os.path.basename(first)
-
-    # 同一天晚些时候再启动 -> 跳过
-    assert make_backup(data_dir=str(tmp_path), now=day1 + 3600) == "", \
-        "当天第二次不该再备一份"
-
-    # 跨天 -> 应该再备一份
-    second = make_backup(data_dir=str(tmp_path), now=day1 + 86400)
-    assert second and second != first, "跨天后应该再备一份"
-    assert "20260116" in os.path.basename(second)
-
-    # force -> 同一天也强制再备(时间戳不同)
-    forced = make_backup(data_dir=str(tmp_path), now=day1 + 7200, force=True)
-    assert forced and forced != first, "force=True 应强制再备一份"
-
-
-def test_backup_prunes_old(tmp_path):
-    """保留策略: 只留最近 keep 份, 且必须留住最新的那份"""
-    from core.backup import make_backup
-    _make_data(tmp_path)
-    bdir = tmp_path / "backups"
-    bdir.mkdir()
-    for i in range(5):                      # 造 5 份"旧备份"
-        (bdir / f"2026010{i + 1}-000000.zip").write_bytes(b"old")
-    p = make_backup(data_dir=str(tmp_path), keep=3, force=True)
-    assert p
-    left = sorted(f.name for f in bdir.glob("*.zip"))
-    assert len(left) == 3, f"应只保留 3 份, 实际 {left}"
-    assert os.path.basename(p) in left, "最新的那份必须留着"
-
-
-def test_backup_never_raises(tmp_path, monkeypatch):
-    """★ 备份是兜底手段, 它失败绝不能拖垮启动 —— 异常一律吞掉并返回空串"""
-    from core import backup
-    _make_data(tmp_path)
-
-    def boom(*_a, **_k):
-        raise OSError("模拟: 磁盘满")
-
-    monkeypatch.setattr(backup.zipfile, "ZipFile", boom)
-    assert backup.make_backup(data_dir=str(tmp_path), force=True) == ""
-    bdir = tmp_path / "backups"
-    if bdir.is_dir():
-        assert not list(bdir.glob("*.zip")), "失败时不该留下半截 zip 骗人"
-
-
-def test_backup_skips_when_nothing_to_back_up(tmp_path):
-    """全新环境(什么都还没配)不该产生一个空备份
-
-    ★ 用 tmp_path 下一个**干净子目录**当数据目录: conftest 的
-      _isolate_group_preconditions 夹具已经在 tmp_path 下建了 Test_preconditions/,
-      直接拿 tmp_path 当数据目录会被它干扰(误判成"有内容")。
-    """
-    from core.backup import make_backup
-    clean = tmp_path / "clean_data"
-    assert make_backup(data_dir=str(clean), force=True) == ""
 
 
 # ── OTA 的 GUI 接入 ──

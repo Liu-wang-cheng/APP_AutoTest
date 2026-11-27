@@ -232,7 +232,9 @@ def translate_value(path, value):
 
 
 CURATED_GROUPS = [
-    {"name": "系统", "items": [
+    # ★ 系统信息/固件信息在设备生命周期内是固定的：连上读到一次就缓存，
+    #   直到重新连接/换 IP 再读（用户 2026-11-27）。
+    {"name": "系统", "static": True, "items": [
         {"name": "型号", "vendor_name": "Model", "path": "/System/FirmwareInfo", "field": "Model"},
         {"name": "固件版本", "vendor_name": "Version", "path": "/System/FirmwareInfo", "field": "Version"},
         {"name": "镜像版本", "vendor_name": "SocImageVersion", "path": "/System/FirmwareInfo", "field": "SocImageVersion"},
@@ -248,7 +250,8 @@ CURATED_GROUPS = [
         {"name": "适配器电压", "vendor_name": "AdapterVol", "path": "/BatteryBattery/AdapterVol", "unit": "mV"},
         # ChargerSort 为充电器类别原始值(实测恒 0)，不是「充电状态」；
         # 真正的充电状态见下方 /Mcu/ChargeStatus。
-        {"name": "充电器类别", "vendor_name": "ChargerSort", "path": "/BatteryBattery/ChargerSort"},
+        {"name": "充电器类别", "vendor_name": "ChargerSort",
+         "path": "/BatteryBattery/ChargerSort"},
         # 厂商面板的「充电状态」：来自 MCU 7809 帧（在桩 1 / 离桩 0）
         {"name": "充电状态", "path": "/Mcu/ChargeStatus"},
     ]},
@@ -593,6 +596,19 @@ CURVE_PAGES = [
 def item_label(item):
     """显示名（中文；厂商 DisplayName 只用于内部映射）。"""
     return item.get("name", "")
+
+
+def _static_paths():
+    out = []
+    for group in CURATED_GROUPS:
+        for item in group["items"]:
+            if (group.get("static") or item.get("static"))                     and item["path"] not in out:
+                out.append(item["path"])
+    return frozenset(out)
+
+
+#: 连上读成功一次即可缓存、无需每秒重读的固定参数（用户 2026-11-27）
+STATIC_PATHS = _static_paths()
 
 
 def is_mcu_path(path):

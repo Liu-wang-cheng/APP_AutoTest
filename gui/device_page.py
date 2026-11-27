@@ -915,6 +915,16 @@ class DevicePage(QWidget):
             hdr.setSectionResizeMode(col, QHeaderView.Interactive)
             self.table.setColumnWidth(col, width)
         hdr.setSectionResizeMode(1, QHeaderView.Stretch)
+        # 选中单元格不要蓝底、也不要外围虚线焦点框(用户 2026-11-27)
+        pal = self.table.palette()
+        for group in (QPalette.Active, QPalette.Inactive, QPalette.Disabled):
+            pal.setColor(group, QPalette.Highlight, QColor("#ffffff"))
+            pal.setColor(group, QPalette.HighlightedText, QColor("#1e293b"))
+        self.table.setPalette(pal)
+        self.table.setStyleSheet(
+            "QTableWidget{outline:0;}"
+            "QTableWidget::item:selected{background:#ffffff;color:#1e293b;}"
+            "QTableWidget::item:focus{outline:none;border:none;}")
         body.addWidget(self.table, 1)
         v.addLayout(body, 1)
         self._init_categories()
@@ -1303,6 +1313,14 @@ class DevicePage(QWidget):
             text = combo.currentText().strip()
             if re.fullmatch(r"\d{1,3}(?:\.\d{1,3}){3}", text):
                 current = text
+        if not current:
+            # ★ 未连接时也跟随设备页当前/上次使用的 IP，而不是只挑扫描列表第一台
+            try:
+                current = (self._selected_ip()
+                           or str(self.settings.value("apos/last_ip", "")
+                                  or "").strip())
+            except Exception:
+                current = ""
         combo.blockSignals(True)
         combo.clear()
         for dev in self._known_devices():
@@ -6070,8 +6088,26 @@ class DevicePage(QWidget):
                 return None
         return None
 
+    def _on_link_lost(self):
+        """设备侧断链(断网/机器人重启): 不再显示「已连接」。"""
+        if not self._connected:
+            return
+        log.warning("[连接] 参数链路已断开, 界面切换为未连接")
+        self.status_label.setText("连接已断开（长时间无数据）")
+        self.status_label.setStyleSheet("color:#dc2626;")
+        self.disconnect_device()
+
     def _poll(self):
         if not self._connected or self._service is None:
+            return
+        # ★ 断链实时反馈: 参数服务长时间读不到数据会置 _connected=False,
+        #   这里立刻把界面/其它页的连接状态切成「未连接」(用户 2026-11-27)。
+        try:
+            alive = self._service.is_connected()
+        except Exception:
+            alive = True
+        if not alive:
+            self._on_link_lost()
             return
         try:
             snap = self._service.latest()

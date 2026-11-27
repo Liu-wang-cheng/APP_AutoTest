@@ -164,6 +164,12 @@ def refresh_robot_ips(window, device, auto=True):
         text = combo.currentText().strip()
         if re.fullmatch(r"\d{1,3}(?:\.\d{1,3}){3}", text):
             current = text
+    if not current:
+        # ★ 未连接时也跟随设备页当前/上次使用的 IP（用户 2026-11-27）
+        try:
+            current = device._selected_ip()
+        except Exception:
+            current = ""
     connected_ip = str(device.connected_ip or "")
     info = getattr(device, "_device_info", None) or {}
     devs = list(device._known_devices())

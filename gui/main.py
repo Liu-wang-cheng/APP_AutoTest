@@ -27,23 +27,39 @@ def _detach_console():
         pass
 
 
-def _run_backup_async():
-    """后台做一次用户数据备份 —— 不阻塞启动。
+def _force_light_theme(app):
+    """固定浅色配色 —— 界面本身是浅色, 不能跟随 Windows 深色主题。
 
-    ★ 必须异步: 用例/模板多的时候要复制几十 MB, 放主线程会让窗口白屏一两秒。
-    ★ 必须 daemon: 备份跑着时用户直接关窗口也不该拖住进程退出。
-    ★ 必须吞异常: 备份是兜底手段, 它自己失败绝不能影响程序启动。
+    ★ 用户 2026-11-27: 新电脑开深色模式后, 原生勾选框的勾变成浅色/白色,
+      而页面底仍是白色 QSS → 勾看起来"消失"。这里强制 Light color scheme,
+      并把关键调色板角色设回浅色, 勾选标记在深色系统上也能看清。
     """
-    import threading
-
-    def _work():
-        try:
-            from core.backup import make_backup
-            make_backup()
-        except Exception:
-            pass
-
-    threading.Thread(target=_work, name="auto-backup", daemon=True).start()
+    from PySide6.QtCore import Qt
+    from PySide6.QtGui import QColor, QPalette
+    try:
+        app.styleHints().setColorScheme(Qt.ColorScheme.Light)
+    except Exception:
+        pass
+    roles = {
+        QPalette.Window: "#f4f6f9",
+        QPalette.WindowText: "#1e293b",
+        QPalette.Base: "#ffffff",
+        QPalette.AlternateBase: "#f8fafc",
+        QPalette.ToolTipBase: "#ffffff",
+        QPalette.ToolTipText: "#1e293b",
+        QPalette.Text: "#1e293b",
+        QPalette.Button: "#ffffff",
+        QPalette.ButtonText: "#1e293b",
+        QPalette.BrightText: "#ffffff",
+        QPalette.Highlight: "#2563eb",
+        QPalette.HighlightedText: "#ffffff",
+        QPalette.PlaceholderText: "#94a3b8",
+    }
+    pal = app.palette()
+    for group in (QPalette.Active, QPalette.Inactive, QPalette.Disabled):
+        for role, color in roles.items():
+            pal.setColor(group, role, QColor(color))
+    app.setPalette(pal)
 
 
 def _run_ocr_selfcheck_async():
@@ -145,12 +161,12 @@ def main():
     #   万一有执行线程在跑, 它会把自己推迟到本轮结束(见 core/idle.py)。
     cleanup_update_leftovers(os.path.dirname(os.path.abspath(sys.argv[0])))
     setup_logger()
-    _run_backup_async()
     _run_ocr_selfcheck_async()
     _prune_debug_async()
     _start_memlog()
     _install_crashlog()
     app = QApplication(sys.argv)
+    _force_light_theme(app)
     # 应用图标(任务栏/窗口):自绘 乐动品牌融合(O传感器+对勾);ico 含 16~256 多尺寸
     # ★ 不要在 main() 里再 `import os` —— 函数内 import 会把 os 变成**整个函数**
     #   的局部变量, 上面 cleanup_update_leftovers(os.path...) 那行就会

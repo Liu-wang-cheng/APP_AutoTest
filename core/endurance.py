@@ -1365,6 +1365,8 @@ def run_endurance(ip, mode="sweepOnly", fan_level=4, water_level=0,
         in_transition = False
         reloc_active = False
         last_reloc_ts = 0.0
+        location_ok = False       # 收到「定位成功，继续清扫」(clean_location_success)
+        initial_settings_sent = False
         result["fan_changes"] = []
         result["water_changes"] = []
         result["water_outflows"] = []
@@ -1453,6 +1455,8 @@ def run_endurance(ip, mode="sweepOnly", fan_level=4, water_level=0,
                     if any(k in low for k in ("go_back_mop", "back_wash",
                                               "wash_mop")):
                         wash_signal_ts = now
+                    if "clean_location_success" in line:
+                        location_ok = True
                     if "Enter transition path type" in line:
                         in_transition = True
                         continue
@@ -1707,9 +1711,14 @@ def run_endurance(ip, mode="sweepOnly", fan_level=4, water_level=0,
                     result["start_battery"] = battery if battery >= 0 else \
                         result.get("start_battery")
                     last_sample = now
-                    # 清扫已真正开始 → 现在才下发吸力挡位并确认生效
-                    time.sleep(4)
-                    apply_settings()
+
+            # ★ 吸力/水量必须等机器人「定位成功，继续清扫」后再下发；
+            #   若设备日志里没有该事件(旧固件/无 MCU 流)，15 秒后兜底下发。
+            if (t0 is not None and not initial_settings_sent and cleaning
+                    and (location_ok or now - t0 > 15)):
+                initial_settings_sent = True
+                event("定位成功", "开始下发吸力/水量")
+                apply_settings()
 
             if cleaning and segment_start is None:
                 segment_start = now
@@ -1823,8 +1832,9 @@ def run_endurance(ip, mode="sweepOnly", fan_level=4, water_level=0,
                     time.sleep(0.5)
                 if ok:
                     start_fail_streak = 0
+                    location_ok = False
+                    initial_settings_sent = False
                     event("重启清扫成功", "%s%%" % _battery(st))
-                    apply_settings()
                 else:
                     start_fail_streak += 1
                     event("重启清扫失败", "连续 %d 次，状态 %s"
