@@ -799,6 +799,10 @@ class CaseItemDelegate(QStyledItemDelegate):
         self._view = view
 
     def paint(self, painter, option, index):
+        # ★ 去掉 item 的虚线焦点框(点击勾选框/选中行后出现的那圈虚线):
+        #   直接清掉 State_HasFocus, 比 QSS `outline:none` 可靠(用户 2026-11-27)。
+        option = QStyleOptionViewItem(option)
+        option.state &= ~QStyle.State_HasFocus
         super().paint(painter, option, index)   # 原生:勾选框 + icon(灯) + 用例名
         rect = option.rect
         painter.save()

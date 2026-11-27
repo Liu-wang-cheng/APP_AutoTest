@@ -50,8 +50,9 @@ def _default_log_path():
       莫名其妙的地方, 排查问题时反而找不到。
       延迟导入 core.driver: logger 是底层模块, 顶层导入容易卷进循环依赖。
     """
-    from core.driver import DATA_DIR
-    return os.path.join(DATA_DIR, "reports", "test.log")
+    from core.driver import DATA_DIR, REPORT_SUBDIRS
+    return os.path.join(DATA_DIR, "reports",
+                        REPORT_SUBDIRS["log"], "test.log")
 
 
 def setup_logger(log_path=None, level=logging.INFO):

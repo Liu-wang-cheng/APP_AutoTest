@@ -848,7 +848,7 @@ def generate_update_bat(app_dir, pid, exe_name=None, probe_seconds=8):
         log.warning("[更新] 未能写下目标程序名, 替换脚本将按 AutoTest.exe 兜底")
     probe_pings = max(2, int(probe_seconds) + 1)
     bat = f"""@echo off
-title 正在更新 APP 自动化测试平台
+title 正在更新 自动化测试平台
 cd /d "%~dp0"
 
 REM ★ 本文件按**本机 OEM 代码页**落盘(中文 Windows=GBK), 与 cmd 读它时用的代码页天生一致,

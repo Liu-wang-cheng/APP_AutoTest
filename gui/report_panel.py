@@ -58,22 +58,43 @@ class ReportsPanel(QWidget):
 
     # ── 数据 ──
     def report_paths(self):
-        """reports/ 下的 .xlsx, 按修改时间倒序(最新在前)。"""
+        """列出报告目录下的 .xlsx（含分类子目录，最多两层），按时间倒序。"""
+        seen, rows = set(), []
+        roots = [self.reports_dir]
         try:
-            names = [n for n in os.listdir(self.reports_dir)
-                     if n.lower().endswith(".xlsx")
-                     and not n.startswith("~$")]      # Excel 打开时的临时锁文件
+            for name in os.listdir(self.reports_dir):
+                p = os.path.join(self.reports_dir, name)
+                # 日志/CI 产物不是报告；其余分类目录都纳入
+                if os.path.isdir(p) and name != "log":
+                    roots.append(p)
         except OSError:
-            return []
-        # ★ 逐个 stat(代码审查 2026-11-04): 文件可能在列表与排序之间被删/被占用,
-        #   直接 getmtime 会抛异常把**整个列表**清空; 拿不到的那份跳过即可。
-        rows = []
-        for n in names:
-            p = os.path.join(self.reports_dir, n)
+            pass
+        # 连续续航的 Excel 在运行目录下一层（分类目录/<运行目录>/*.xlsx）
+        for root in list(roots[1:]):
             try:
-                rows.append((os.stat(p).st_mtime, p))
+                for name in os.listdir(root):
+                    p = os.path.join(root, name)
+                    if os.path.isdir(p):
+                        roots.append(p)
+            except OSError:
+                pass
+        for root in roots:
+            try:
+                names = [n for n in os.listdir(root)
+                         if n.lower().endswith(".xlsx")
+                         and not n.startswith("~$")]      # Excel 锁文件
             except OSError:
                 continue
+            for n in names:
+                p = os.path.join(root, n)
+                if p in seen:
+                    continue
+                seen.add(p)
+                # ★ 逐个 stat: 文件可能在列表与排序之间被删/被占用
+                try:
+                    rows.append((os.stat(p).st_mtime, p))
+                except OSError:
+                    continue
         rows.sort(reverse=True)
         return [p for _mt, p in rows]
 

@@ -451,5 +451,5 @@ class AiConfigPage(QWidget):
         self.settings.setValue("ai/prd_model", vals["model"])
         self.settings.setValue("ai/prd_model_1m", vals["model_1m"])
         self.settings.setValue("ai/prd_max_tokens", vals["max_tokens"])
-        self.status.setText("已保存，可回到「设备参数 → 故障模拟」解析 PRD")
+        self.status.setText("已保存，可回到「灯显语音测试」解析 PRD")
         self.status.setStyleSheet("color:#16a34a;font-size:12px;")

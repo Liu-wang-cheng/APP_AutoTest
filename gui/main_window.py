@@ -45,7 +45,7 @@ class MainWindow(CaseFileMixin, QMainWindow):
 
     def __init__(self):
         super().__init__()
-        self.setWindowTitle(f"APP 自动化测试平台 v{APP_VERSION}")
+        self.setWindowTitle(f"自动化测试平台 v{APP_VERSION}")
         # 应用图标(自绘 乐动品牌融合): ico 含 16~256 多尺寸(高分屏不发虚)
         _icon_path = os.path.join(_ASSETS, "app_icon.ico")
         if not os.path.isfile(_icon_path):

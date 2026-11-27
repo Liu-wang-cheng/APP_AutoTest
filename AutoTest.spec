@@ -129,6 +129,7 @@ a = Analysis(
         #   漏了会导致打包版设备参数页没有挡位/充电/地检触发等 MCU 数据。
         "zmq",
         "paramiko",                  # 批量前 SSH 检查机器人语音包(按需导入)
+        "tools.endurance_report",    # GUI 续航页直接调它生成 Excel
     ],
     hookspath=[],
     runtime_hooks=[],

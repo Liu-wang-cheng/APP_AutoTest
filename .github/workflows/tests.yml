@@ -42,13 +42,15 @@ jobs:
         # 失败时把日志一起贴出来, 免得还要自己复现
         # ★ 同时写 junit.xml: 失败时作为 artifact 上传, 便于在 Actions 页面下载排查
         #   (pytest.ini 没配 addopts, 这里直接命令行加)
-        run: python -m pytest -q --junit-xml=reports/junit.xml
+        run: |
+          python -c "import os;os.makedirs('reports/log',exist_ok=True)"
+          python -m pytest -q --junit-xml=reports/log/junit.xml
 
       - name: 失败时上传 junit 报告(便于下载排查)
         if: failure()
         uses: actions/upload-artifact@v7
         with:
           name: pytest-junit-${{ github.run_id }}
-          path: reports/junit.xml
+          path: reports/log/junit.xml
           if-no-files-found: ignore
           retention-days: 7

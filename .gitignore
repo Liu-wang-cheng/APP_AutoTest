@@ -36,5 +36,8 @@ backups/
 #   (设备参数监控) 一起忽略, 发版包就会缺整个模块。
 /apos/
 
-# 厂商 TestCase 样本(自带独立 .git, 不是本仓库代码)
-/TestCase/
+# 厂商 TestCase 样本(自带独立 .git, 不是本仓库代码; 2026-11-26 移到 vendor/)
+/vendor/
+
+# 脚本误写出的临时日志(根目录零散文件)
+@AutomationLog.txt

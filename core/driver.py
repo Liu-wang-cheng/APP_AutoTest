@@ -56,6 +56,16 @@ USER_DATA_PATHS = (
 
 _ENCRYPTED_HEADER = b"%TSD-Header"
 
+#: reports/ 下的分类目录（用户 2026-11-26）：报告按测试项目分开放，
+#: 日志/CI 产物统一进 log/，避免根目录混杂、保留策略互相挤占。
+REPORT_SUBDIRS = {
+    "automation": "自动化测试报告",
+    "endurance": "续航测试报告",
+    "fault": "灯显语音测试报告",
+    "loop": "循环清扫",
+    "log": "log",
+}
+
 
 def atomic_write(path, text, newline=""):
     """原子写文本: 先写同目录临时文件, 再 os.replace 覆盖目标。

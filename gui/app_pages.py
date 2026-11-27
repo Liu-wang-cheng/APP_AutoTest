@@ -14,12 +14,14 @@ from PySide6.QtWidgets import (QComboBox, QFrame, QHBoxLayout, QLabel,
 
 from gui.ai_config_page import AiConfigPage
 from gui.device_page import DevicePage
+from gui.endurance_page import EnduranceCloseFilter, EndurancePage
+from gui.loop_clean_page import LoopCleanPage, LoopCloseFilter
 from gui.sdk_setup import ensure_sdk
 from gui.widgets import NoWheelComboBox
 _NAV_QSS = """
 QPushButton#pageTab {
     background: transparent; border: none; border-bottom: 2px solid transparent;
-    padding: 8px 14px 6px; color: #94a3b8; font-size: 13px;
+    padding: 8px 10px 6px; color: #94a3b8; font-size: 12.5px;
 }
 QPushButton#pageTab:hover { color: #475569; }
 QPushButton#pageTab:checked {
@@ -38,10 +40,12 @@ class PageNav(QWidget):
         h.setSpacing(2)
         self.btn_test = QPushButton("自动化测试")
         self.btn_device = QPushButton("设备参数")
-        self.btn_fault = QPushButton("故障模拟")
+        self.btn_endurance = QPushButton("续航测试")
+        self.btn_loop = QPushButton("循环清扫")
+        self.btn_fault = QPushButton("灯显语音测试")
         self.btn_ai = QPushButton("AI 配置")
-        for b in (self.btn_test, self.btn_device, self.btn_fault,
-                  self.btn_ai):
+        for b in (self.btn_test, self.btn_device, self.btn_endurance,
+                  self.btn_loop, self.btn_fault, self.btn_ai):
             b.setObjectName("pageTab")
             b.setCheckable(True)
             b.setAutoExclusive(True)
@@ -53,24 +57,43 @@ class PageNav(QWidget):
         self.dev_status.setObjectName("navStatus")
         h.addWidget(self.run_status)
         h.addWidget(self.dev_status)
+        #: 正在跑的任务来源（自动化/续航…）——任何一个在跑都显示「运行中」
+        self._active = set()
         self.btn_test.setChecked(True)
 
     def set_active(self, name):
-        btn = {"device": self.btn_device, "fault": self.btn_fault,
-               "ai": self.btn_ai}.get(name, self.btn_test)
+        btn = {"device": self.btn_device, "endurance": self.btn_endurance,
+               "loop": self.btn_loop,
+               "fault": self.btn_fault, "ai": self.btn_ai}.get(
+                   name, self.btn_test)
         btn.setChecked(True)
 
-    def set_running(self, running):
-        self.run_status.setText("● 运行中" if running else "● 空闲")
+    def set_running(self, running, source="test"):
+        """任务运行状态（用户 2026-11-26）：续航测试也要点亮「运行中」。
+
+        source 区分来源，多个入口同时运行时不互相覆盖。
+        """
+        if running:
+            self._active.add(source)
+        else:
+            self._active.discard(source)
+        busy = bool(self._active)
+        self.run_status.setText("● 运行中" if busy else "● 空闲")
         self.run_status.setStyleSheet(
-            "color:#2563eb;font-size:11px;" if running else "color:#475569;font-size:11px;")
+            "color:#2563eb;font-size:11px;" if busy
+            else "color:#475569;font-size:11px;")
 
     def set_device(self, connected, label=""):
         if connected:
-            self.dev_status.setText("● 设备 已连接" + (f" · {label}" if label else ""))
+            # 导航栏空间有限：只显示型号（完整 label 放 tooltip，避免挤掉页签）
+            short = str(label).split(" · ")[0] if label else ""
+            self.dev_status.setText(
+                "● 设备 已连接" + (f" · {short}" if short else ""))
+            self.dev_status.setToolTip(str(label) or "已连接")
             self.dev_status.setStyleSheet("color:#16a34a;font-size:11px;")
         else:
             self.dev_status.setText("● 设备未连接")
+            self.dev_status.setToolTip("")
             self.dev_status.setStyleSheet("color:#475569;font-size:11px;")
 
     def set_connecting(self, connecting, ip=""):
@@ -141,13 +164,24 @@ def refresh_robot_ips(window, device, auto=True):
         text = combo.currentText().strip()
         if re.fullmatch(r"\d{1,3}(?:\.\d{1,3}){3}", text):
             current = text
+    connected_ip = str(device.connected_ip or "")
+    info = getattr(device, "_device_info", None) or {}
+    devs = list(device._known_devices())
+    if connected_ip and not any(
+            str(d.get("ip") or "") == connected_ip for d in devs):
+        # 设备列表里可能还没有这条（型号/SN 读得比连接结果晚）——用设备信息补上
+        devs.append({"ip": connected_ip})
     combo.blockSignals(True)
     combo.clear()
-    for dev in device._known_devices():
+    for dev in devs:
         ip = str(dev.get("ip") or "").strip()
         if not ip:
             continue
-        label = "-".join(x for x in (dev.get("model", ""), dev.get("sn", ""), ip) if x)
+        model = dev.get("model") or (info.get("model", "")
+                                     if ip == connected_ip else "")
+        sn = dev.get("sn") or (info.get("sn", "")
+                               if ip == connected_ip else "")
+        label = "-".join(x for x in (model, sn, ip) if x)
         combo.addItem(label, ip)
     target = current or str(device.settings.value("apos/last_ip", "") or "")
     idx = combo.findData(target)
@@ -187,15 +221,24 @@ def select_robot_ip(window, device, warn=True):
 def install_pages(window, test_page):
     """把测试页与设备页装进顶部导航 + QStackedWidget，返回新的中央控件。"""
     device = DevicePage(parent=window)
+    endurance_page = EndurancePage(device=device, parent=window)
+    loop_page = LoopCleanPage(device=device, parent=window)
+    window.installEventFilter(
+        EnduranceCloseFilter(endurance_page, parent=window))
+    window.installEventFilter(
+        LoopCloseFilter(loop_page, parent=window))
     fault_page = device.fault_page
     ai_page = AiConfigPage(parent=window)
     stack = QStackedWidget()
     stack.addWidget(test_page)
     stack.addWidget(device)
+    stack.addWidget(endurance_page)
+    stack.addWidget(loop_page)
     stack.addWidget(fault_page)
     stack.addWidget(ai_page)
     nav = PageNav()
-    pages = {"test": 0, "device": 1, "fault": 2, "ai": 3}
+    pages = {"test": 0, "device": 1, "endurance": 2, "loop": 3,
+             "fault": 4, "ai": 5}
 
     def show(name):
         idx = pages.get(name, 0)
@@ -210,12 +253,24 @@ def install_pages(window, test_page):
 
     nav.btn_test.clicked.connect(lambda: show("test"))
     nav.btn_device.clicked.connect(lambda: show("device"))
+    nav.btn_endurance.clicked.connect(lambda: show("endurance"))
+    nav.btn_loop.clicked.connect(lambda: show("loop"))
     nav.btn_fault.clicked.connect(lambda: show("fault"))
     nav.btn_ai.clicked.connect(lambda: show("ai"))
     device.connectionChanged.connect(nav.set_device)
     device.connectingChanged.connect(nav.set_connecting)
+    # 续航测试运行时右上角显示「运行中」（用户 2026-11-26）
+    endurance_page.runningChanged.connect(
+        lambda running: nav.set_running(running, "endurance"))
+    loop_page.runningChanged.connect(
+        lambda running: nav.set_running(running, "loop"))
+    # 灯显语音测试的「批量测试」也点亮同一个运行指示灯
+    device.runningChanged.connect(
+        lambda running: nav.set_running(running, "fault"))
     window.test_page = test_page
     window.device_page = device
+    window.endurance_page = endurance_page
+    window.loop_page = loop_page
     window.fault_page = fault_page
     window.ai_page = ai_page
     window.pages = stack

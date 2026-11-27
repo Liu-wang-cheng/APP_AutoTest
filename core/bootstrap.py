@@ -468,13 +468,64 @@ def prune_run_artifacts(app_dir=None, keep_runs=None, max_total_mb=None,
                     files_removed += n
                     freed += b
                     total -= b
-        # ── ③ 报告文件: 保留最近 N 份 ──
-        rep_dir = os.path.join(root, "reports")
-        if os.path.isdir(rep_dir):
-            reports = [os.path.join(rep_dir, f) for f in os.listdir(rep_dir)
+        # ── ③ 报告文件: 按分类目录各自保留最近 N 份（用户 2026-11-26） ──
+        from core.driver import REPORT_SUBDIRS
+        rep_root = os.path.join(root, "reports")
+        # 自动化/故障/历史根目录：各自保留 report_keep 份 xlsx
+        for rep_dir in (os.path.join(rep_root, REPORT_SUBDIRS["automation"]),
+                        os.path.join(rep_root, REPORT_SUBDIRS["fault"]),
+                        rep_root):
+            if not os.path.isdir(rep_dir):
+                continue
+            reports = [os.path.join(rep_dir, f)
+                       for f in os.listdir(rep_dir)
                        if f.lower().endswith((".xlsx", ".xls"))]
             reports.sort(key=lambda x: os.path.getmtime(x), reverse=True)
             for old in reports[report_keep:]:
+                if _remove(old):
+                    files_removed += 1
+                    freed += _file_size(old)
+        # 续航：运行目录 + Excel 各保留 10 份（与 prune_runs 一致）
+        end_dir = os.path.join(rep_root, REPORT_SUBDIRS["endurance"])
+        if os.path.isdir(end_dir):
+            runs = [os.path.join(end_dir, n) for n in os.listdir(end_dir)
+                    if os.path.isdir(os.path.join(end_dir, n))
+                    and n.startswith(("endurance_", "endurance_suite_",
+                                      "shutdown_"))]
+            runs.sort(key=os.path.getmtime, reverse=True)
+            for old in runs[10:]:
+                n, b = _tree_size(old)
+                if _rm_tree(old):
+                    dirs_removed += 1
+                    files_removed += n
+                    freed += b
+            xlsx = [os.path.join(end_dir, f) for f in os.listdir(end_dir)
+                    if f.lower().endswith((".xlsx", ".xls"))]
+            xlsx.sort(key=os.path.getmtime, reverse=True)
+            for old in xlsx[10:]:
+                if _remove(old):
+                    files_removed += 1
+                    freed += _file_size(old)
+        # 循环清扫：结果目录保留 10 次
+        loop_dir = os.path.join(rep_root, REPORT_SUBDIRS["loop"])
+        if os.path.isdir(loop_dir):
+            runs = [os.path.join(loop_dir, n) for n in os.listdir(loop_dir)
+                    if os.path.isdir(os.path.join(loop_dir, n))
+                    and n.startswith("loop_")]
+            runs.sort(key=os.path.getmtime, reverse=True)
+            for old in runs[10:]:
+                n, b = _tree_size(old)
+                if _rm_tree(old):
+                    dirs_removed += 1
+                    files_removed += n
+                    freed += b
+        # 日志/CI 产物：保留最近 50 个文件
+        log_dir = os.path.join(rep_root, REPORT_SUBDIRS["log"])
+        if os.path.isdir(log_dir):
+            logs = [os.path.join(log_dir, f) for f in os.listdir(log_dir)
+                    if os.path.isfile(os.path.join(log_dir, f))]
+            logs.sort(key=os.path.getmtime, reverse=True)
+            for old in logs[50:]:
                 if _remove(old):
                     files_removed += 1
                     freed += _file_size(old)

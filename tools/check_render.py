@@ -12,7 +12,7 @@
 
 用法
     python tools/check_render.py                # 检查表单勾选框的悬停稳定性
-    python tools/check_render.py --keep-images  # 保留对比图(reports/render_probe_*.png)
+    python tools/check_render.py --keep-images  # 保留对比图(.scratch/render_probe_*.png)
     退出码: 0 = 悬停前后无像素变化(稳定); 1 = 有变化(疑似闪动)。
 
 注意
@@ -123,7 +123,7 @@ def diff(a, b):
 
 def main():
     ap = argparse.ArgumentParser(description="真机渲染探针(悬停稳定性)")
-    ap.add_argument("--keep-images", action="store_true", help="保留对比图到 reports/")
+    ap.add_argument("--keep-images", action="store_true", help="保留对比图到 .scratch/")
     args = ap.parse_args()
 
     screen = app.primaryScreen()
@@ -140,7 +140,7 @@ def main():
     def grab(tag):
         pm = screen.grabWindow(0, *region)
         if args.keep_images:
-            path = os.path.join(ROOT, "reports", f"render_probe_{tag}.png")
+            path = os.path.join(ROOT, ".scratch", f"render_probe_{tag}.png")
             pm.save(path)
         return pm.toImage()
 

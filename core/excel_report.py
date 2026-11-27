@@ -14,7 +14,7 @@ from openpyxl.worksheet.hyperlink import Hyperlink
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 
 from core import timefmt as _tf
-from core.driver import BASE_DIR
+from core.driver import BASE_DIR, REPORT_SUBDIRS
 
 
 def case_sheet_name(case_name, run_no=None):
@@ -59,7 +59,8 @@ class ExcelReport:
         if path is None:
             from core import timefmt
             ts = datetime.now().strftime(timefmt.RUN_TAG)
-            reports_dir = os.path.join(BASE_DIR, "reports")
+            reports_dir = os.path.join(
+                BASE_DIR, "reports", REPORT_SUBDIRS["automation"])
             os.makedirs(reports_dir, exist_ok=True)
             path = os.path.join(reports_dir, f"test_report_{ts}.xlsx")
         self.path = path

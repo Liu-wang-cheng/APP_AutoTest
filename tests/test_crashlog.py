@@ -20,7 +20,8 @@ def test_install_creates_crash_log_and_hooks(tmp_path):
     old_main, old_thread_hook = sys.excepthook, threading.excepthook
     try:
         crashlog.install(data_dir=str(tmp_path), qt=False)      # qt=False: 别动测试里的 Qt
-        assert os.path.isfile(tmp_path / "reports" / "crash.log"), "crash.log 没建"
+        assert os.path.isfile(
+            tmp_path / "reports" / "log" / "crash.log"), "crash.log 没建"
         assert sys.excepthook is not old_main, "主线程异常钩子没挂上"
         assert threading.excepthook is not old_thread_hook, "线程异常钩子没挂上"
     finally:

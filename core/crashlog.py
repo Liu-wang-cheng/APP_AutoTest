@@ -43,9 +43,10 @@ def install(data_dir=None, qt=True):
         return
     # ① 原生崩溃栈 → reports/crash.log
     try:
-        from core.driver import DATA_DIR
+        from core.driver import DATA_DIR, REPORT_SUBDIRS
         root = data_dir or DATA_DIR
-        path = os.path.join(root, "reports", "crash.log")
+        path = os.path.join(root, "reports", REPORT_SUBDIRS["log"],
+                            "crash.log")
         os.makedirs(os.path.dirname(path), exist_ok=True)
         # buffering=1: 行缓冲, 崩的那一刻已经落盘; 必须保住这个句柄(局部变量会被回收)
         _crash_file = open(path, "a", buffering=1, encoding="utf-8", errors="replace")

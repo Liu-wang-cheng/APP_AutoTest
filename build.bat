@@ -2,6 +2,7 @@
 chcp 65001 >nul 2>&1
 REM 一键打包: 检查环境 -> 清理旧产物 -> PyInstaller(onefile 单exe) -> 验证
 REM 产物: dist\AutoTest.exe  (单个 exe, 双击即用; 用户数据在其同级目录自动生成)
+REM ★ 正式发版请走 .github/workflows/release.yml(全自动 CD); 本脚本仅本地备用。
 setlocal
 cd /d "%~dp0"
 

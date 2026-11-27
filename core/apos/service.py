@@ -41,6 +41,20 @@ DEFAULT_PATHS = (
 
 
 class ParamService:
+    #: 本机(10.21)已确认存在的电机属性组；驱动轮不在其中——轮子走
+    #: `/Carrier` 运动接口。模块名取自机器人 mod_reg.json 的 motor__*。
+    MOTOR_GROUPS = {
+        "mid_brush": "/MotorMidBrush",
+        "fan": "/MotorFan",
+        "side_brush_r": "/MotorSideBrushR",
+        "side_brush_l": "/MotorSideBrushL",
+        "cleaning_drum": "/MotorCleaningDrum",
+        "drum_telescopic": "/MotorDrumTelescopic",
+        "arm": "/MotorArm",
+        "wheel_lift_l": "/MotorWheelLiftL",
+        "wheel_lift_r": "/MotorWheelLiftR",
+    }
+
     def __init__(self, client, paths=None, interval=2.0, stream=None,
                  stream_paths=None, mcu=None):
         self.client = client
@@ -72,6 +86,9 @@ class ParamService:
         self._stream_stalls = 0
         self._stream_fallback = False
         self._stream_retry_at = 0.0
+        #: 外部（续航测试）独占推流时置位: 不再建流/读属性，让出机器人
+        #  推送会话, 避免同一台机器人上两条推送会话互相挤掉（用户 2026-11-26）
+        self._stream_paused = False
 
     # ── 生命周期 ──
     def connect(self, ip):
@@ -250,6 +267,228 @@ class ParamService:
                 out.append((path, f"ERR {e}"))
         return out
 
+    # ── 清扫控制（自动化/续航测试用，10.21 真机验证） ──
+    def _stream_ready(self):
+        stream = self.stream
+        return stream is not None and getattr(stream, "running", False)
+
+    def set_clean_mode(self, mode):
+        """设置清扫模式：sweepOnly / sweepMop / mopOnly。
+
+        机器人日志确认：`/Task/SetCleanMode` → SetCleanType:
+        CLEAN_TYPE_SWEEP / CLEAN_TYPE_SWEEP_AND_MOP / CLEAN_TYPE_MOP。
+        """
+        if not self._stream_ready():
+            return False
+        try:
+            return self.stream.send_binpack_event(
+                "/Task/SetCleanMode", {"CleanMode": str(mode)}) >= 0
+        except Exception as e:
+            log.info(f"[控制] 设置清扫模式失败: {e}")
+            return False
+
+    def set_fan_level(self, level):
+        """设置吸力挡位 1~5（APP 用户挡位，转场后保持）。
+
+        ★ 事件载荷字段是 `data`（厂商网络层 property.cpp 就是这样下发的）；
+          写成 `FanLevelUserSet` 会被处理器判为缺字段（日志 level:-1）。
+          处理器成功后写入 ParamManager 的 FanLevelUserSet，转场按它恢复。
+        ★ 再补一条 `/event/config_file_change` 写用户设置（与水量同款，
+          2026-11-26）：只发 change_fan_level 时机器人侧能改当前工作挡位，
+          但 APP/云端显示的用户挡位由 network 的 FanLevelServer 维护，
+          不一定同步；补写属性是最稳妥的尝试（不支持的固件会忽略）。
+        """
+        if not self._stream_ready():
+            return False
+        level = int(level)
+        try:
+            rc1 = self.stream.post_event(
+                "/event/component_ctrl", "change_fan_level",
+                {"data": level})
+            rc2 = self.stream.post_event(
+                "/event/config_file_change", "config_file_attribute_change",
+                {"FanLevelUserSet": level})
+            return rc1 >= 0 and rc2 >= 0
+        except Exception as e:
+            log.info(f"[控制] 设置吸力挡位失败: {e}")
+            return False
+
+    def set_water_level(self, level):
+        """设置水量挡位 0~3（0 = 关，1/2/3 = 低/中/高）。
+
+        APP 改水量实际是两步（2026-11-25 抓包确认）:
+          1. `/event/component_ctrl` `change_water_pump` `{data:N}`
+             —— 设置当前工作挡位（设备日志 `water_pump level set
+             successfully! level:N water_level_count:4`）；
+          2. `/event/config_file_change` `config_file_attribute_change`
+             `{WaterLevelUserSet:N}` —— 写用户设置，APP/云端显示的是它。
+        只发第 1 步会改运行挡位，但 APP 里仍是旧值（用户反馈）。
+        """
+        if not self._stream_ready():
+            return False
+        level = int(level)
+        try:
+            rc1 = self.stream.post_event(
+                "/event/component_ctrl", "change_water_pump",
+                {"data": level})
+            rc2 = self.stream.post_event(
+                "/event/config_file_change", "config_file_attribute_change",
+                {"WaterLevelUserSet": level})
+            return rc1 >= 0 and rc2 >= 0
+        except Exception as e:
+            log.info(f"[控制] 设置水量挡位失败: {e}")
+            return False
+
+    def continue_clean(self):
+        """继续当前清扫任务（报错恢复用，不要重开新任务）。
+
+        机器人上报的是 `/event/task_manager` 的 `app_sweeper_resume_clean_task`
+        （base_station 节点恢复清扫用的同一条事件）。
+        """
+        if not self._stream_ready():
+            return False
+        try:
+            return self.stream.post_event(
+                "/event/task_manager", "app_sweeper_resume_clean_task") >= 0
+        except Exception as e:
+            log.info(f"[控制] 继续清扫失败: {e}")
+            return False
+
+    def start_total_clean(self):
+        """从任意状态启动总清扫（含充电桩/基站任务）。
+
+        机器人启动清扫节点前必须先退出当前的充电/基站/回充节点，否则事件
+        会被忽略（实测：回充途中直接 start 会被 collect_dust/charging 抢走，
+        隔几分钟才生效）。这里 kill 后等状态离开这些节点再发 start。
+        """
+        if not self._stream_ready():
+            return False
+        try:
+            self.stream.post_event("/event/task_manager", "kill_all_nodes")
+            end = time.time() + 8
+            blocked = ("work_status_back_charge", "work_status_go_charge",
+                       "work_status_charging", "work_status_full_charging",
+                       "work_status_base_station", "work_status_collect_dust",
+                       "work_status_dry_mop", "work_status_wash_mop")
+            while time.time() < end:
+                v = self.stream.values().get("/CleanTask/CleanAppStatus")
+                status = v.get("CleanAppStatus") if isinstance(v, dict) \
+                    else str(v or "")
+                if status not in blocked:
+                    break
+                time.sleep(0.5)
+            self.stream.post_event("/event/task_manager",
+                                   "app_sweeper_start_total_clean")
+            return True
+        except Exception as e:
+            log.info(f"[控制] 启动清扫失败: {e}")
+            return False
+
+    def start_find_charger(self):
+        """开始找桩/回充。"""
+        if not self._stream_ready():
+            return False
+        try:
+            return self.stream.post_event("/event/task_manager",
+                                          "start_find_charger") >= 0
+        except Exception as e:
+            log.info(f"[控制] 回充失败: {e}")
+            return False
+
+    def stop_clean(self):
+        """停止清扫（不回充）。"""
+        if not self._stream_ready():
+            return False
+        try:
+            return self.stream.post_event("/event/task_manager",
+                                          "stop_clean") >= 0
+        except Exception as e:
+            log.info(f"[控制] 停止清扫失败: {e}")
+            return False
+
+    # ── 调试控制（底盘/任务模式、滚筒伸缩电机） ──
+    def set_task_manager_mode(self, mode):
+        """任务模式：`auto_mode` / `manual_mode`。
+
+        厂商 Event.AposTask.SetTaskManagerMode → `/Task/SetTaskManagerMode`
+        `{"Mode": mode}`。
+        """
+        if not self._stream_ready():
+            return False
+        try:
+            return self.stream.send_binpack_event(
+                "/Task/SetTaskManagerMode", {"Mode": str(mode)}) >= 0
+        except Exception as e:
+            log.info(f"[控制] 设置任务模式失败: {e}")
+            return False
+
+    def set_carrier_work_mode(self, mode):
+        """底盘工作模式：`CARRIER_WORK_NORMAL` / `CARRIER_WORK_IDLE`。
+
+        厂商 Event.Carrier.SetCarrierWorkMode → `/Carrier/SetCarrierWorkMode`
+        `{"Mode": mode}`。调试电机前必须切成 NORMAL，否则写入成功但
+        驱动不响应（真机实测，2026-11-25）。
+        """
+        if not self._stream_ready():
+            return False
+        try:
+            return self.stream.send_binpack_event(
+                "/Carrier/SetCarrierWorkMode", {"Mode": str(mode)}) >= 0
+        except Exception as e:
+            log.info(f"[控制] 设置底盘模式失败: {e}")
+            return False
+
+    def set_motor_pwm(self, module, pwm, work_mode=1):
+        """电机直控：写 `WorkModeCtl`(uint8) + `PwmOrLevelCtl`(int16)。
+
+        module 可用短名（见 `MOTOR_GROUPS`）或完整属性组路径，如
+        `"drum_telescopic"` / `"/MotorDrumTelescopic"`。正负方向由电机
+        决定；驱动轮不走这里（按 `/Carrier` 运动接口控制）。
+        前置条件（真机实测）：底盘 `CARRIER_WORK_NORMAL`、任务模式
+        `manual_mode`，否则写入成功但电机不响应。
+        """
+        group = self.MOTOR_GROUPS.get(str(module), str(module))
+        if not group.startswith("/Motor"):
+            return False
+        if not self._stream_ready():
+            return False
+        try:
+            return self.stream.write_props([
+                (group + "/WorkModeCtl", int(work_mode), "uint8"),
+                (group + "/PwmOrLevelCtl", int(pwm), "int16"),
+            ]) >= 0
+        except Exception as e:
+            log.info(f"[控制] 电机 {module} 直控失败: {e}")
+            return False
+
+    def motor_state(self, module):
+        """读电机当前值（PwmFb/Curr 非 0 表示真的在动）。"""
+        group = self.MOTOR_GROUPS.get(str(module), str(module))
+        stream = self.stream
+        if stream is None or not group.startswith("/Motor"):
+            return {}
+        try:
+            vals = stream.values()
+        except Exception:
+            return {}
+        out = {}
+        for key in ("WorkModeCtl", "PwmOrLevelCtl", "PwmFb", "Curr",
+                    "WorkState", "Speed"):
+            item = vals.get(group + "/" + key)
+            out[key] = item.get(key) if isinstance(item, dict) else item
+        return out
+
+    def set_drum_telescopic(self, pwm):
+        """控制清洁滚筒伸缩电机：正 PWM 伸出，负 PWM 收回，0 停止。
+
+        与 AutopackDebugger 的 `MotorDrumTelescopic_SetPWM` 同款。
+        """
+        return self.set_motor_pwm("drum_telescopic", pwm)
+
+    def drum_telescopic_state(self):
+        """读滚筒伸缩电机当前值（PwmFb/Curr 非 0 表示真的在动）。"""
+        return self.motor_state("drum_telescopic")
+
     def _stream_base_version(self):
         """在推流句柄上读两个候选文件，返回解析出的版本号。"""
         stream = self.stream
@@ -308,7 +547,10 @@ class ParamService:
         if stream is None or not getattr(stream, "running", False):
             return
         for path in paths:
-            if path in data or path not in SN_FILES:
+            # ★ 已经读到有效值才跳过：binpack 读 CustomSN 会带回空字符串，
+            #   之前按 "path in data" 判断会把文件兜底也跳掉 → SN 一直空
+            #   （用户 2026-11-26：CLA_ZY2L 老是读取失败）。
+            if str(data.get(path) or "").strip() or path not in SN_FILES:
                 continue
             for fn in SN_FILES[path]:
                 try:
@@ -328,6 +570,8 @@ class ParamService:
         """
         if self.stream is None or not self._connected:
             return False
+        if self._stream_paused:
+            return False                  # 已被续航测试等场景借用会话
         if getattr(self.stream, "running", False):
             return True                   # 已经在推流了
         # 等当前这一轮 librpc 读结束再开流 —— 两个客户端同时操作会互相卡死
@@ -358,6 +602,33 @@ class ParamService:
             self.mcu.start(self._ip)
         except Exception as e:
             log.debug(f"[参数] MCU 调试流启动失败: {e}")
+
+    # ── 推流借用（续航测试独占） ──
+    def pause_stream(self):
+        """暂停推送、让出机器人推送会话（续航测试运行期间用）。
+
+        只停流不退回轮询：librpc 读和续航自己的 libapos 推流同时跑会互卡。
+        值保留（clear=False），恢复后界面不闪空。
+        """
+        self._stream_paused = True
+        stream = self.stream
+        if stream is not None:
+            try:
+                stream.stop(clear=False)
+            except Exception:
+                pass
+        self._stream_only = False
+        self._wake.set()
+
+    def resume_stream(self):
+        """恢复推送（续航测试结束后调用）。"""
+        was_paused = self._stream_paused
+        self._stream_paused = False
+        if not was_paused:
+            return bool(getattr(self.stream, "running", False))
+        self._watch_at = 0.0
+        self._stream_retry_at = 0.0
+        return self.start_stream()
 
     def disconnect(self):
         self._ready.clear()
@@ -503,6 +774,8 @@ class ParamService:
         stream = self.stream
         if stream is None:
             return
+        if self._stream_paused:
+            return                        # 推流已被续航测试借用
         now = time.time()
         if now < getattr(self, "_watch_at", 0.0):
             return
@@ -652,6 +925,9 @@ class ParamService:
             if not self._ready.is_set():
                 continue
             self._watch_stream()
+            if self._stream_paused:
+                # 续航测试独占推流期间: 不读属性、不刷快照，恢复后自动继续
+                continue
             paths = self.paths()
             stream_on = (self.stream is not None
                          and getattr(self.stream, "running", False)

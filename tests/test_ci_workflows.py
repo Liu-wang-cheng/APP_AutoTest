@@ -139,7 +139,7 @@ def test_real_smoke_runs_selector_health_before_device_test():
     assert "tools/selector_health.py" in text
     assert "tools/selector_baseline.json" in text
     assert (ROOT / "tools" / "selector_baseline.json").is_file(), "基线文件必须入库"
-    assert "reports/selector-health.json" in text, "失败时要能拿到报告"
+    assert "reports/log/selector-health.json" in text, "失败时要能拿到报告"
 
 
 def test_real_smoke_does_not_use_setup_python():

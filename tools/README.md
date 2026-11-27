@@ -30,6 +30,14 @@
 | `rehearse_autoupdate.py` | 手动: 用真实安装目录彩排一次自动更新(替换/回滚), **不碰线上** |
 | `publish_learning_seed.py` | 手动: 导出 verified/ai_review 学习库, 先让 AI 复核再由 `--upload` 提交 GitHub 分支/PR |
 | `runtime_snapshot.py` | 真机(P1): 进入设备页/菜单/打扫报告, 采集无障碍树+OCR 文本存快照; 与基线 diff —— 覆盖 APK 里没有的服务端/WebView 动态文案(基线有、现在没有 = 回归) |
+| `endurance_run.py` | 真机: 单次续航测试(满电→低电回充), 输出 result.json/samples.csv/report.md |
+| `endurance_suite.py` | 真机: 连续多组合续航(默认仅扫 1~4、扫拖 1+1~4+3), 每个组合等满电, 结束生成汇总 Excel |
+| `endurance_shutdown.py` | 真机: 低电回充→低电关机续航(≤20% 起, 保持回充, 低于 5% 自动关机) |
+| `endurance_report.py` | 离线: 把多个续航 result.json 合并生成 Excel(含每组合电量监测页) |
+| `loop_report.py` | 离线/自动: 循环清扫结果生成 Excel(汇总/轮次明细/报错明细，样式与其它报告一致) |
+
+续航结果目录（`reports/endurance_*`、`endurance_suite_*`、`shutdown_*` 及根目录的
+`续航测试_*.xlsx`）只保留最近 **10 次**（`core.endurance.KEEP_RUNS`），每次测试结束自动清理。
 
 ## 三、约定
 

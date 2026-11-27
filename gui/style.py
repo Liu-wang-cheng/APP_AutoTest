@@ -168,10 +168,27 @@ QPushButton#chipBtn {
     padding: 3px 12px; color: #475569;
 }
 QPushButton#chipBtn:hover { border-color: #2563eb; color: #2563eb; background: #eef4ff; }
+/* 续航测试页底部动作按钮: 胶囊样式同 chipBtn, 但补 :disabled 视觉 ——
+   chipBtn 没有禁用态规则, 禁用时看起来仍可点, 用户会以为"点了没反应" */
+QPushButton#enduranceActionBtn {
+    background: #f8fafc; border: 1px solid #d9dee6; border-radius: 12px;
+    padding: 4px 14px; color: #475569;
+}
+QPushButton#enduranceActionBtn:hover {
+    border-color: #2563eb; color: #2563eb; background: #eef4ff;
+}
+QPushButton#enduranceActionBtn:disabled {
+    background: #f1f5f9; border-color: #e8ecf2; color: #b8c2cf;
+}
+QToolButton#chipBtn {
+    background: #f8fafc; border: 1px solid #d9dee6; border-radius: 12px;
+    padding: 3px 10px; color: #475569;
+}
+QToolButton#chipBtn:hover { border-color: #2563eb; color: #2563eb; background: #eef4ff; }
 
 /* 用例列表:行控件必须透明 —— 全局 QWidget 背景规则若盖到行内控件,
    选中高亮层与控件自绘背景交替重绘,复选框会闪(2026-09-21 实测) */
-QListWidget#caseList { background: #ffffff; border: 1px solid #e4e8ee; border-radius: 8px; }
+QListWidget#caseList { background: #ffffff; border: 1px solid #e4e8ee; border-radius: 8px; outline: none; }
 QListWidget#caseList::item { background: transparent; border-radius: 4px; margin: 1px 2px; outline: none; }
 QListWidget#caseList::item:focus { outline: none; }   /* 去掉键盘焦点虚线框(用户要求) */
 QListWidget#caseList::item:hover { background: #f0f4fa; }

@@ -56,7 +56,6 @@ def test_stream_start_without_license_returns_false(tmp_path):
 
 def test_stream_parses_property_upload_event():
     stream = UploadStream()
-    calls = []
 
     class _BP:
         @staticmethod
@@ -781,3 +780,188 @@ def test_start_stream_failure_keeps_paths_for_restart():
     assert stream.stopped is False
 
 
+
+
+# ── 滚筒伸缩/模式切换：字段类型必须与厂商工具一致 ──
+def test_write_props_without_stream_is_safe():
+    assert UploadStream().write_props([("/A", 1, "uint8")]) == -1
+
+
+def test_set_drum_telescopic_and_modes_use_vendor_payloads():
+    class FakeStream:
+        running = True
+
+        def __init__(self):
+            self.items = None
+            self.events = []
+
+        def write_props(self, items):
+            self.items = items
+            return 0
+
+        def send_binpack_event(self, topic, params):
+            self.events.append((topic, params))
+            return 0
+
+    stream = FakeStream()
+    svc = ParamService(object(), [], stream=stream)
+    assert svc.set_drum_telescopic(4000) is True
+    assert stream.items == [
+        ("/MotorDrumTelescopic/WorkModeCtl", 1, "uint8"),
+        ("/MotorDrumTelescopic/PwmOrLevelCtl", 4000, "int16"),
+    ]
+    assert svc.set_drum_telescopic(-4000) is True
+    assert stream.items[1][1] == -4000
+    assert svc.set_task_manager_mode("manual_mode") is True
+    assert stream.events[-1] == ("/Task/SetTaskManagerMode",
+                                 {"Mode": "manual_mode"})
+    assert svc.set_carrier_work_mode("CARRIER_WORK_NORMAL") is True
+    assert stream.events[-1] == ("/Carrier/SetCarrierWorkMode",
+                                 {"Mode": "CARRIER_WORK_NORMAL"})
+
+
+def test_set_motor_pwm_maps_module_and_rejects_unknown_group():
+    class FakeStream:
+        running = True
+
+        def __init__(self):
+            self.items = None
+
+        def write_props(self, items):
+            self.items = items
+            return 0
+
+    stream = FakeStream()
+    svc = ParamService(object(), [], stream=stream)
+    assert svc.set_motor_pwm("side_brush_r", 1500) is True
+    assert stream.items == [
+        ("/MotorSideBrushR/WorkModeCtl", 1, "uint8"),
+        ("/MotorSideBrushR/PwmOrLevelCtl", 1500, "int16"),
+    ]
+    # 也接受完整路径
+    assert svc.set_motor_pwm("/MotorArm", -500, work_mode=0) is True
+    assert stream.items[0] == ("/MotorArm/WorkModeCtl", 0, "uint8")
+    # 非电机组直接拒绝，不写设备
+    stream.items = None
+    assert svc.set_motor_pwm("drum_telescopic_motor", 1) is False
+    assert stream.items is None
+
+
+def test_set_water_level_sends_runtime_and_user_setting():
+    """APP 改水量是两步：运行挡位 + WaterLevelUserSet（2026-11-25 抓包）。"""
+    class FakeStream:
+        running = True
+
+        def __init__(self):
+            self.events = []
+
+        def post_event(self, topic, event, params=None):
+            self.events.append((topic, event, params))
+            return 0
+
+    stream = FakeStream()
+    svc = ParamService(object(), [], stream=stream)
+    assert svc.set_water_level(3) is True
+    assert stream.events == [
+        ("/event/component_ctrl", "change_water_pump", {"data": 3}),
+        ("/event/config_file_change", "config_file_attribute_change",
+         {"WaterLevelUserSet": 3}),
+    ]
+
+
+def test_set_fan_level_sends_runtime_and_user_setting():
+    """吸力也是两步：当前工作挡位 + FanLevelUserSet（2026-11-26）。"""
+    class FakeStream:
+        running = True
+
+        def __init__(self):
+            self.events = []
+
+        def post_event(self, topic, event, params=None):
+            self.events.append((topic, event, params))
+            return 0
+
+    stream = FakeStream()
+    svc = ParamService(object(), [], stream=stream)
+    assert svc.set_fan_level(4) is True
+    assert stream.events == [
+        ("/event/component_ctrl", "change_fan_level", {"data": 4}),
+        ("/event/config_file_change", "config_file_attribute_change",
+         {"FanLevelUserSet": 4}),
+    ]
+
+
+def test_pause_resume_stream_keeps_values_and_blocks_restart():
+    """续航占用推流期间: 设备页不重建推送、不读属性，恢复后重开（2026-11-26）。"""
+    class FakeStream:
+        running = True
+
+        def __init__(self):
+            self.stop_calls = []
+            self.start_calls = []
+
+        def stop(self, clear=True):
+            self.stop_calls.append(clear)
+            self.running = False
+
+        def start(self, ip, paths, preserve=False):
+            self.start_calls.append((ip, list(paths), preserve))
+            self.running = True
+            return True
+
+    stream = FakeStream()
+    svc = ParamService(object(), [], stream=stream)
+    svc._connected = True
+    svc._ip = "1.2.3.4"
+    svc._stream_paths = ["/BatteryBattery/BatteryLevel"]
+
+    svc.pause_stream()
+    assert stream.running is False
+    assert stream.stop_calls == [False]       # clear=False → 保留最后的值
+    assert svc._stream_paused is True
+    assert svc.start_stream() is False        # 暂停期间不允许重建
+
+    assert svc.resume_stream() is True
+    assert stream.running is True
+    assert stream.start_calls[-1] == (
+        "1.2.3.4", ["/BatteryBattery/BatteryLevel"], False)
+    assert svc._stream_paused is False
+
+
+def test_fill_system_from_files_overrides_empty_binpack_value():
+    """binpack 读 CustomSN 带回空串时，仍要读机器人文件兜底（2026-11-26）。"""
+    class Stream:
+        running = True
+
+        def read_file(self, _path):
+            return '{"FileData":"SN12345"}'
+
+    svc = ParamService(object(), [], stream=Stream())
+    data = {"/System/CustomSN": ""}
+    svc._fill_system_from_files(data, ["/System/CustomSN"])
+    assert data["/System/CustomSN"] == "SN12345"
+
+
+def test_call_service_without_stream_returns_empty():
+    """未连接时不发起服务调用（AposSdkService 新绑定，2026-11-26）。"""
+    st = UploadStream()
+    assert st.call_service("/TaskControl/StartToPointMove", {"x": 1}) == {}
+
+
+def test_continue_clean_posts_resume_event():
+    """报错恢复用「继续清扫」事件，不是新开任务（2026-11-27）。"""
+    class Stream:
+        running = True
+
+        def __init__(self):
+            self.events = []
+
+        def post_event(self, topic, event, params=None):
+            self.events.append((topic, event, params))
+            return 0
+
+    stream = Stream()
+    svc = ParamService(object(), [], stream=stream)
+    assert svc.continue_clean() is True
+    assert stream.events == [
+        ("/event/task_manager", "app_sweeper_resume_clean_task", None)]

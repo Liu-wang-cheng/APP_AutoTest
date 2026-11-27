@@ -449,6 +449,25 @@ class ConnectThread(QThread):
                 start_stream()
             except Exception as e:
                 log.debug(f"[连接] 上传流启动失败(退回轮询): {e}")
+        # ★ 开流后再补读 SN/型号/固件：CLA_ZY2L 的 CustomSN 在 librpc 上读不到，
+        #   只有开流后从机器人文件(/oem/bin/sys_data/custom.sn)读得到。
+        #   不补这一步，设备参数页/设备列表会一直缺 SN（用户 2026-11-26）。
+        for _ in range(3):
+            if self._cancel.is_set():
+                break
+            if info.get("sn") and info.get("firmware_version"):
+                break
+            self._sleep(0.8)
+            try:
+                more = read_robot_info(self.service, version_retries=1,
+                                       include_base_station=False)
+            except Exception:
+                more = {}
+            gained = {k: v for k, v in (more or {}).items()
+                      if v and not info.get(k)}
+            if gained:
+                info.update(gained)
+                self.info_ready.emit(self.ip, gained)
         reader = getattr(self.service, "read_base_station", None)
         client = getattr(self.service, "client", None)
         version = ""
@@ -695,6 +714,7 @@ class DevicePage(QWidget):
     connectingChanged = Signal(bool, str)     # (是否连接中, ip) —— 右上角显示"连接中"
     devicesChanged = Signal()                 # 设备列表/型号/SN 更新
     connect_finished = Signal(bool, str, str)  # (ok, ip, 错误信息) 连接结束
+    runningChanged = Signal(bool)             # 灯显语音「批量测试」运行状态
 
     def __init__(self, parent=None, settings=None, service_factory=None,
                  sdk_dir=None):
@@ -765,7 +785,7 @@ class DevicePage(QWidget):
         self.device_combo.lineEdit().returnPressed.connect(self._device_activated)
         # 型号-SN-IP 比较长：文本框按最长内容自适应宽度（用户 2026-11-06）
         self.device_combo.lineEdit().textChanged.connect(
-            lambda *_: self._fit_ip_combo_width())
+            lambda *_: (self._fit_ip_combo_width(), self._sync_connect_btn()))
         bar.addWidget(self.device_combo)
         self.scan_btn = QPushButton("扫描")
         self.scan_btn.setObjectName("chipBtn")
@@ -4128,8 +4148,7 @@ class DevicePage(QWidget):
             self.fault_status.setStyleSheet("color:#dc2626;font-size:12px;")
             return False
         if not (self._connected and self._service is not None):
-            self.fault_status.setText("请先连接设备")
-            self.fault_status.setStyleSheet("color:#dc2626;font-size:12px;")
+            self._warn_not_connected()
             return False
         label = label or event
         if event in self._DESTRUCTIVE_EVENTS:
@@ -4366,8 +4385,7 @@ class DevicePage(QWidget):
         if item is None:
             return
         if not (self._connected and self._service is not None):
-            self.fault_status.setText("请先连接设备")
-            self.fault_status.setStyleSheet("color:#dc2626;font-size:12px;")
+            self._warn_not_connected()
             return
         t0 = time.time()
         self.fault_status.setText(f"正在发送：{item['name']}…")
@@ -4743,11 +4761,12 @@ class DevicePage(QWidget):
         fw = str(info.get("firmware_version") or "").strip()
         version = fw or "未知版本"
         stamp = time.strftime("%Y%m%d_%H%M%S")
-        from core.driver import BASE_DIR
+        from core.driver import BASE_DIR, REPORT_SUBDIRS
         # 报告名称/内容都不写设备 IP(用户 2026-11-13)
         raw = f"故障模拟_{model}_{version}_{stamp}.xlsx"
         safe = re.sub(r'[\/:*?"<>|]+', "_", raw)
-        return os.path.join(BASE_DIR, "reports", safe)
+        return os.path.join(BASE_DIR, "reports",
+                            REPORT_SUBDIRS["fault"], safe)
 
     def _save_batch_report(self):
         path = self._batch_report_path()
@@ -5079,14 +5098,23 @@ class DevicePage(QWidget):
             out.append((event, label or event, prd_row))
         return out
 
+    def _warn_not_connected(self):
+        """未连接设备：状态栏红字 + 用户主动操作时弹窗（批量内部不弹）。"""
+        self.fault_status.setText("请先连接设备")
+        self.fault_status.setStyleSheet("color:#dc2626;font-size:12px;")
+        if getattr(self, "_batch", None) is None:
+            QMessageBox.warning(
+                self, "未连接扫地机",
+                "请先在「灯显语音测试」页点击「连接」并确认设备已连接，"
+                "再执行测试。")
+
     def _toggle_batch(self):
         if self._batch:
             self._batch["stop"] = True
             self.fault_batch_btn.setText("正在停止…")
             return
         if not (self._connected and self._service is not None):
-            self.fault_status.setText("请先连接设备")
-            self.fault_status.setStyleSheet("color:#dc2626;font-size:12px;")
+            self._warn_not_connected()
             return
         items = self._batch_items()
         if not items:
@@ -5194,6 +5222,7 @@ class DevicePage(QWidget):
             self._fault_log_line(
                 "相邻重复事件已错开执行", "#b45309")
         self.fault_batch_btn.setText("停止批量")
+        self.runningChanged.emit(True)
         # 开测前先回到空闲: 上一条残留任务会让后续事件不响应(ZY2L 实测)
         self._reset_robot_state()
         QTimer.singleShot(800, self._batch_step)
@@ -5233,6 +5262,7 @@ class DevicePage(QWidget):
                     self._batch_step()
                     return
             self._batch = None
+            self.runningChanged.emit(False)
             rows = self._report_rows()
             self.fault_batch_btn.setText("批量测试")
             self.fault_report_btn.setEnabled(bool(rows))
@@ -5675,9 +5705,17 @@ class DevicePage(QWidget):
         if not ip:
             QMessageBox.warning(self, "提示", "请先扫描或输入扫地机 IP")
             return
+        # ★ 已连接同一台设备时不重复连接（用户 2026-11-26）：
+        #   只有换了 IP 才重新发起，避免点「已连接」又把推流/任务打断。
+        if self.connected and ip == self._connected_ip:
+            self.status_label.setText(f"已连接 {ip}，无需重复连接")
+            self.status_label.setStyleSheet("color:#475569;")
+            self._sync_connect_btn()
+            return
         # ★ 先占住"连接中"标志: 创建 SDK 服务也要时间, 这期间别让自动连接/再次
         #   点击插进来并发连接(偶发"连接失败"的来源之一)。
         self._connecting = True
+        self._sync_connect_btn()
         started = False
         try:
             if not ensure_sdk(self):
@@ -5710,6 +5748,7 @@ class DevicePage(QWidget):
         finally:
             if not started:
                 self._connecting = False
+                self._sync_connect_btn()
 
     def _connect_thread_finished(self, thread):
         """ConnectThread 真正退出后才丢引用（done 时线程可能还在读基站版本）。"""
@@ -5744,6 +5783,7 @@ class DevicePage(QWidget):
             self.connectionChanged.emit(False, "")
             self.connect_finished.emit(False, ip, msg)
             self._flush_pending_connect()
+            self._sync_connect_btn()
             return
         self._connected = True
         self._connected_ip = ip
@@ -5771,6 +5811,7 @@ class DevicePage(QWidget):
         self.connectionChanged.emit(True, f"{model} · {ip}" if model else ip)
         self.connect_finished.emit(True, ip, "")
         self._flush_pending_connect()
+        self._sync_connect_btn()
 
     def _info_ready(self, ip, extra):
         """后台补到的补充信息（基站版本）：只更新当前连接的那台。"""
@@ -5778,6 +5819,18 @@ class DevicePage(QWidget):
             return
         self._device_info.update(extra or {})
         self._update_info_label()
+        # 型号/SN 可能比连接结果晚到：补进设备列表并通知刷新下拉，
+        # 让各页的「型号-SN-IP」显示补全（用户 2026-11-26）。
+        model = str(self._device_info.get("model") or "").strip()
+        sn = str(self._device_info.get("sn") or "").strip()
+        if not (model or sn):
+            return
+        devs = {str(d.get("ip") or ""): dict(d) for d in self._devices}
+        cur = devs.setdefault(str(ip), {"ip": ip})
+        if (cur.get("model") != model or cur.get("sn") != sn):
+            cur["model"] = model or cur.get("model", "")
+            cur["sn"] = sn or cur.get("sn", "")
+            self._save_devices(list(devs.values()))
 
     def robot_info(self):
         """给测试报告用：型号 / SN / 固件版本 / 基站版本。
@@ -5859,6 +5912,47 @@ class DevicePage(QWidget):
         self.disconnect_btn.setEnabled(False)
         self.connectionChanged.emit(False, "")
         self._flush_pending_connect()
+        self._sync_connect_btn()
+
+    def _sync_connect_btn(self):
+        """连接按钮文案跟随真实状态: 连接中… / 已连接 / 连接（用户 2026-11-26）。
+
+        只有「当前选中的 IP == 已连接的 IP」才显示已连接；输入了别的 IP 时
+        按钮回到「连接」，提示这是一次切换。
+        """
+        btn = getattr(self, "connect_btn", None)
+        if btn is None:
+            return
+        same = (self.connected
+                and self._selected_ip() == self._connected_ip)
+        text = ("连接中…" if self._connecting
+                else "已连接" if same else "连接")
+        if btn.text() != text:
+            btn.setText(text)
+
+    def pause_param_stream(self):
+        """续航测试运行期间让出机器人推送会话，返回是否成功暂停。"""
+        svc = self._service
+        if svc is None:
+            return False
+        try:
+            svc.pause_stream()
+            log.info("[参数] 已暂停设备页推流（续航测试运行中）")
+            return True
+        except Exception as e:
+            log.debug("[参数] 暂停推流失败: %s" % e)
+            return False
+
+    def resume_param_stream(self):
+        """续航测试结束后恢复设备页推流。"""
+        svc = self._service
+        if svc is None:
+            return
+        try:
+            svc.resume_stream()
+            log.info("[参数] 已恢复设备页推流")
+        except Exception as e:
+            log.debug("[参数] 恢复推流失败: %s" % e)
 
     # ── 数据刷新 ──
     @property

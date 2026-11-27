@@ -194,6 +194,35 @@ def test_connection_refresh_does_not_auto_reconnect(qapp, monkeypatch):
     assert calls, "启动/设备列表刷新仍应自动连接一次"
 
 
+def test_robot_ip_combo_shows_model_sn_ip_from_device_info(qapp):
+    """自动化测试页 IP 下拉显示 型号-SN-IP；型号/SN 晚到时用设备信息补全。"""
+    import types
+    from PySide6.QtWidgets import QComboBox
+    import gui.app_pages as ap
+
+    class Dev:
+        connected = True
+        connecting = False
+        connected_ip = "192.168.10.21"
+        _device_info = {"model": "CLA_ZY2L", "sn": "LDTest0012"}
+
+        class settings:
+            @staticmethod
+            def value(key, default=None):
+                return ""
+
+        @staticmethod
+        def _known_devices():
+            return []
+
+    win = types.SimpleNamespace(robot_ip_combo=QComboBox(),
+                                _robot_auto_connecting=True)
+    win.robot_ip_combo.setEditable(True)
+    ap.refresh_robot_ips(win, Dev(), auto=False)
+    assert (win.robot_ip_combo.currentText()
+            == "CLA_ZY2L-LDTest0012-192.168.10.21")
+
+
 def test_fit_robot_combo_follows_long_label(qapp):
     """自动化测试页的扫地机IP下拉也要装得下「型号-SN-IP」。"""
     from PySide6.QtWidgets import QComboBox
@@ -470,12 +499,16 @@ def test_main_window_top_nav(qapp, monkeypatch, tmp_path):
     monkeypatch.setattr(mw, "CASES_DIR", str(tmp_path / "Test_cases"), raising=False)
     w = mw.MainWindow()
     try:
-        assert w.pages.count() == 4
+        assert w.pages.count() == 6
         # 默认打开自动化测试页
         assert w.pages.currentWidget() is w.test_page
         assert hasattr(w, "robot_ip_combo")
         w._show_page("device")
         assert w.pages.currentWidget() is w.device_page
+        w._show_page("endurance")
+        assert w.pages.currentWidget() is w.endurance_page
+        w._show_page("loop")
+        assert w.pages.currentWidget() is w.loop_page
         w._show_page("fault")
         assert w.pages.currentWidget() is w.fault_page
         w._show_page("ai")
@@ -1070,6 +1103,39 @@ def test_connect_is_async_and_reads_base_station(qapp, tmp_path, monkeypatch):
         page.shutdown()
 
 
+def test_endurance_page_combos_are_dropdowns(qapp):
+    """续航组合：默认 8 条；吸力/水量只能下拉选择，吸力 0~5、水量 0~4。"""
+    from gui.endurance_page import EndurancePage
+
+    page = EndurancePage()
+    try:
+        assert len(page._collect_combos()) == 8
+        fan = page.table.cellWidget(0, 2)
+        assert not fan.isEditable()
+        fan.setCurrentIndex(fan.findData(0))
+        assert page._collect_combos()[0][1] == 0
+        fan.setCurrentIndex(fan.findData(5))
+        assert page._collect_combos()[0][1] == 5
+        water = page.table.cellWidget(4, 3)
+        assert not water.isEditable()
+        water.setCurrentIndex(water.findData(4))
+        assert page._collect_combos()[4][2] == 4
+        # 一个按钮：主按钮一键选中，菜单反选
+        page._invert_checks()
+        assert not page._row_checked(0)
+        page._check_all()
+        assert page._row_checked(0)
+        # 同一个按钮：第一次全选，第二次反选
+        page.all_btn.click()
+        assert page._row_checked(0)
+        assert page.all_btn.text() == "反选"
+        page.all_btn.click()
+        assert not page._row_checked(0)
+        assert page.all_btn.text() == "全选"
+    finally:
+        page.shutdown()
+
+
 def test_page_nav_shows_connecting_state(qapp):
     """右上角设备状态要显示「连接中 · IP」，不能一直停留在旧的「已连接」。"""
     from gui.app_pages import PageNav
@@ -1080,7 +1146,9 @@ def test_page_nav_shows_connecting_state(qapp):
     assert "连接中" in nav.dev_status.text()
     assert "10.0.0.9" in nav.dev_status.text()
     nav.set_device(True, "CLA_HS4 · 10.0.0.9")
-    assert "已连接" in nav.dev_status.text() and "10.0.0.9" in nav.dev_status.text()
+    # 导航栏只显示型号(避免挤掉页签)，完整 IP 在 tooltip
+    assert "已连接" in nav.dev_status.text()
+    assert "10.0.0.9" in nav.dev_status.toolTip()
     nav.set_device(False, "")
     assert "未连接" in nav.dev_status.text()
 
@@ -3045,6 +3113,39 @@ def test_read_robot_info_retries_empty_firmware(monkeypatch):
     assert info["firmware_version"] == "1.2.3"
 
 
+def test_connect_thread_backfills_sn_after_stream_start(qapp, monkeypatch):
+    """开流后再补读 SN：ZY2L 的 CustomSN 只有开流后从文件读得到（2026-11-26）。"""
+    import gui.device_page as dp
+    monkeypatch.setattr(dp.ConnectThread, "_sleep", lambda self, s: None)
+    got = []
+
+    class Svc:
+        client = None
+
+        def __init__(self):
+            self.stream = False
+
+        def connect(self, _ip):
+            return True
+
+        def start_stream(self):
+            self.stream = True
+
+        def read_once(self, _paths):
+            return {
+                "/System/CustomSN": "SN001" if self.stream else "",
+                "/System/FirmwareInfo":
+                    '{"Model":"CLA_ZY2L","Version":"1.0"}',
+            }
+
+    t = dp.ConnectThread(Svc(), "1.2.3.4")
+    t.done.connect(lambda ok, ip, info: got.append(("done", dict(info))))
+    t.info_ready.connect(lambda ip, extra: got.append(("info", dict(extra))))
+    t.run()
+    assert any(kind == "info" and data.get("sn") == "SN001"
+               for kind, data in got), got
+
+
 def test_prd_kind_filter_hides_rows(page):
     """类型列头下拉只隐藏不匹配的行, 不改变解析结果(用户 2026-11-13)。"""
     page._prd_rows = [
@@ -3267,6 +3368,101 @@ def test_fault_ip_auto_connect_and_button_state(page):
     assert page.fault_connect_btn.isEnabled() is False
 
 
+def test_main_connect_button_text_follows_state(page):
+    """设备参数页连接按钮文案随状态变化(用户 2026-11-26)。"""
+    page._service = object()
+    page._connected = False
+    page._connecting = False
+    page.device_combo.setEditText("10.0.0.9")
+    page._sync_connect_btn()
+    assert page.connect_btn.text() == "连接"
+    page._connected = True
+    page._connected_ip = "10.0.0.9"
+    page._sync_connect_btn()
+    assert page.connect_btn.text() == "已连接"
+    # 输入了别的 IP → 这是一次切换，按钮回到「连接」
+    page.device_combo.setEditText("10.0.0.10")
+    page._sync_connect_btn()
+    assert page.connect_btn.text() == "连接"
+    page.device_combo.setEditText("10.0.0.9")
+    page._connecting = True
+    page._sync_connect_btn()
+    assert page.connect_btn.text() == "连接中…"
+
+
+def test_connect_same_ip_does_not_reconnect(page):
+    """已连接同一 IP 时点「已连接」不再触发重连(用户 2026-11-26)。"""
+    page._service = object()
+    page._connected = True
+    page._connected_ip = "10.0.0.9"
+    page._connecting = False
+    page.device_combo.setEditText("10.0.0.9")
+    page.connect_device()
+    assert page._connecting is False
+    assert "无需重复连接" in page.status_label.text()
+
+
+def test_endurance_connect_button_text_follows_state(qapp, page):
+    """续航测试页连接按钮文案/可用态随状态变化(用户 2026-11-26)。"""
+    from gui.endurance_page import EndurancePage
+    ep = EndurancePage(device=page)
+    page._service = object()
+    page._connected = False
+    page._connecting = False
+    ep.ip_combo.setEditText("10.0.0.9")
+    ep._sync_conn_ui()
+    assert ep.connect_btn.text() == "连接"
+    assert not ep.disconnect_btn.isEnabled()
+    page._connected = True
+    page._connected_ip = "10.0.0.9"
+    ep._sync_conn_ui()
+    assert ep.connect_btn.text() == "已连接"
+    assert ep.disconnect_btn.isEnabled()
+    # 已连接同一 IP 再点连接：不发新连接，只提示
+    ep._connect()
+    assert "无需重复连接" in ep.log.toPlainText()
+    # 换了 IP → 按钮回到「连接」
+    ep.ip_combo.setEditText("10.0.0.10")
+    ep._sync_conn_ui()
+    assert ep.connect_btn.text() == "连接"
+    page._connecting = True
+    ep._sync_conn_ui()
+    assert ep.connect_btn.text() == "连接中…"
+    assert not ep.connect_btn.isEnabled()
+
+
+def test_endurance_ip_combo_shows_model_sn_ip(qapp):
+    """续航页 IP 下拉与设备页/测试页一致: 型号-SN-IP(用户 2026-11-26)。"""
+    from gui.endurance_page import EndurancePage
+
+    class Dev:
+        connected = False
+        connecting = False
+        connected_ip = ""
+
+        def _known_devices(self):
+            return [{"model": "CLA_HS4", "sn": "SN1", "ip": "10.0.0.9"}]
+
+    ep = EndurancePage(device=Dev())
+    assert ep.ip_combo.itemText(0) == "CLA_HS4-SN1-10.0.0.9"
+    assert ep.ip_combo.itemData(0) == "10.0.0.9"
+    assert ep._ip() == "10.0.0.9"
+
+
+def test_nav_running_state_tracks_sources(qapp):
+    """续航测试运行时顶部也要显示「运行中」，多个来源互不覆盖（2026-11-26）。"""
+    from gui.app_pages import PageNav
+    nav = PageNav()
+    assert nav.run_status.text() == "● 空闲"
+    nav.set_running(True, "endurance")
+    assert nav.run_status.text() == "● 运行中"
+    nav.set_running(True, "test")
+    nav.set_running(False, "endurance")
+    assert nav.run_status.text() == "● 运行中"
+    nav.set_running(False, "test")
+    assert nav.run_status.text() == "● 空闲"
+
+
 def test_stale_parsed_rows_are_not_shown(page):
     """旧版本解析结果不再直接展示, 提示重新 AI 解析(用户 2026-11-12)。"""
     import json as _json
@@ -3291,3 +3487,77 @@ def test_failed_batch_items_only_mismatch_for_retry(page):
                        ("c", "C", {"qid": "Q3"})]}
     got = page._failed_batch_items(batch)
     assert [x[2]["qid"] for x in got] == ["Q1"]
+
+
+def test_loop_clean_page_combos_and_thresholds(qapp):
+    """循环清扫页：组合下拉(吸力0~5/水量0~4)、次数可为0、全选切换。"""
+    from gui.loop_clean_page import LoopCleanPage
+    p = LoopCleanPage()
+    assert p.table.rowCount() == 2        # 默认只放仅扫1档 + 扫拖1档
+    item0 = p.table.item(0, 0)   # 原生 item 勾选(同自动化用例列表)
+    assert item0 is not None
+    assert item0.flags() & Qt.ItemIsUserCheckable
+    assert not p._row_checked(0)   # 默认不选中
+    fan = p.table.cellWidget(0, 2)
+    water = p.table.cellWidget(0, 3)
+    assert fan.count() == 6 and fan.itemData(5) == 5
+    assert water.count() == 5 and water.itemData(4) == 4
+    assert p.rounds_spin.minimum() == 0
+    assert p.low_spin.value() == 30       # 清扫电量默认 30
+    assert p.target_spin.value() == 20    # 回充电量默认 20
+    p.all_btn.click()          # 第一次全选
+    assert p._row_checked(0)
+    p.all_btn.click()          # 第二次反选
+    assert not p._row_checked(0)
+
+
+def test_endurance_page_restores_combos_and_thresholds(qapp, tmp_path):
+    """续航组合勾选/挡位与阈值写入 QSettings，下次打开界面保持上次设置。"""
+    from gui.endurance_page import EndurancePage
+    ini = str(tmp_path / "end.ini")
+    st = QSettings(ini, QSettings.IniFormat)
+    p = EndurancePage(settings=st)
+    p._set_row_checked(0, True)
+    p.table.cellWidget(0, 2).setCurrentIndex(
+        p.table.cellWidget(0, 2).findData(2))
+    for r in (7, 6, 5):
+        p.table.removeRow(r)
+    p.low_spin.setValue(35)
+    p.sample_spin.setValue(30)
+    st.sync()
+
+    st2 = QSettings(ini, QSettings.IniFormat)
+    p2 = EndurancePage(settings=st2)
+    assert p2.table.rowCount() == 5
+    assert p2._row_checked(0)
+    assert p2.table.cellWidget(0, 2).currentData() == 2
+    assert p2._row_checked(1)   # 默认仍是勾选状态
+    assert p2.low_spin.value() == 35
+    assert p2.sample_spin.value() == 30
+
+
+def test_loop_clean_page_restores_combos_and_thresholds(qapp, tmp_path):
+    """循环清扫组合勾选/挡位与四个阈值写入 QSettings，下次打开保持。"""
+    from gui.loop_clean_page import LoopCleanPage
+    ini = str(tmp_path / "loop.ini")
+    st = QSettings(ini, QSettings.IniFormat)
+    p = LoopCleanPage(settings=st)
+    p._set_row_checked(0, True)
+    p.table.cellWidget(0, 2).setCurrentIndex(
+        p.table.cellWidget(0, 2).findData(3))
+    p._add_row("sweepMop", 5, 4, checked=True)
+    p.low_spin.setValue(40)
+    p.target_spin.setValue(25)
+    p.rounds_spin.setValue(7)
+    p.sample_spin.setValue(20)
+    st.sync()
+
+    st2 = QSettings(ini, QSettings.IniFormat)
+    p2 = LoopCleanPage(settings=st2)
+    assert p2.table.rowCount() == 3
+    assert p2._row_values(0) == (True, "sweepOnly", 3, 0)
+    assert p2._row_values(2) == (True, "sweepMop", 5, 4)
+    assert p2.low_spin.value() == 40
+    assert p2.target_spin.value() == 25
+    assert p2.rounds_spin.value() == 7
+    assert p2.sample_spin.value() == 20

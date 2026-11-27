@@ -141,10 +141,11 @@ jobs:
           Write-Host "拉取 APK: $remote -> $apk"
           & adb -s $dev pull $remote $apk
           if ($LASTEXITCODE -ne 0) { throw "APK 拉取失败: $remote" }
+          New-Item -ItemType Directory -Force reports/log | Out-Null
           & $py tools/selector_health.py --apk $apk --repo . `
-              --baseline tools/selector_baseline.json --json reports/selector-health.json
+              --baseline tools/selector_baseline.json --json reports/log/selector-health.json
           if ($LASTEXITCODE -ne 0) {
-            throw "选择器健康检查未通过(有回归) —— 详见 reports/selector-health.json"
+            throw "选择器健康检查未通过(有回归) —— 详见 reports/log/selector-health.json"
           }
 
       - name: 跑真机冒烟
@@ -167,7 +168,7 @@ jobs:
           Write-Host "冒烟: 组=$group 用例=$case 设备=$dev python=$py"
           & $py -m pytest tests/test_yaml_runner.py -q -rs `
             --mode real --device "$dev" --group "$group" --case "$case" `
-            --junit-xml=reports/junit-real.xml
+            --junit-xml=reports/log/junit-real.xml
 
       - name: "失败时上传现场(junit + 截图 + 调试产物)"
         if: failure()
@@ -175,8 +176,8 @@ jobs:
         with:
           name: real-failure-${{ github.run_id }}
           path: |
-            reports/junit-real.xml
-            reports/selector-health.json
+            reports/log/junit-real.xml
+            reports/log/selector-health.json
             Test_cases/*/screenshots/**
             Test_img/debug/**
           retention-days: 7

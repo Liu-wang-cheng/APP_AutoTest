@@ -1551,7 +1551,7 @@ def test_window_title_has_version(win):
     """GUI 标题 = 名称 + 版本号(用户要求;版本与 git tag 对应)"""
     import gui.main_window as mw
     assert "v" + mw.APP_VERSION in win.windowTitle()
-    assert win.windowTitle() == f"APP 自动化测试平台 v{mw.APP_VERSION}"
+    assert win.windowTitle() == f"自动化测试平台 v{mw.APP_VERSION}"
     assert "vacuum_app_test" not in win.windowTitle(), "源项目名残留必须去掉"
 
 
@@ -4776,8 +4776,11 @@ def test_case_list_header_has_no_delete_button(win_with_cases):
     from PySide6.QtWidgets import QPushButton
 
     win = win_with_cases
-    all_btn = next(b for b in win.findChildren(QPushButton) if b.text() == "全选")
-    panel = all_btn.parentWidget()
+    # ★ 主窗口里现在还有续航测试页的「全选」，按「同面板里带清空」定位用例列表面板
+    panels = [b.parentWidget() for b in win.findChildren(QPushButton)
+              if b.text() == "全选"]
+    panel = next(p for p in panels
+                 if any(x.text() == "清空" for x in p.findChildren(QPushButton)))
     texts = [b.text() for b in panel.findChildren(QPushButton)]
     assert "全选" in texts and "清空" in texts, texts
     assert "删除" not in texts, texts
@@ -5129,3 +5132,18 @@ def test_paste_and_rename_refuse_during_run(win_with_cases):
     finally:
         win.worker = None
     assert set(os.listdir(gdir)) == before, "执行期间不应改动用例文件"
+
+
+def test_nav_running_indicator_covers_endurance_and_fault(win_with_cases):
+    """续航测试、灯显语音批量测试也要点亮顶部「运行中」（用户 2026-11-26）。"""
+    win = win_with_cases
+    nav = win.page_nav
+    assert nav.run_status.text() == "● 空闲"
+    win.endurance_page.runningChanged.emit(True)
+    assert nav.run_status.text() == "● 运行中"
+    win.endurance_page.runningChanged.emit(False)
+    assert nav.run_status.text() == "● 空闲"
+    win.device_page.runningChanged.emit(True)
+    assert nav.run_status.text() == "● 运行中"
+    win.device_page.runningChanged.emit(False)
+    assert nav.run_status.text() == "● 空闲"

@@ -83,7 +83,7 @@ def main():
 
     # ③ 启动打包好的程序(off-screen), 看日志
     exe = os.path.join(app, "AutoTest.exe")
-    log = os.path.join(app, "reports", "test.log")
+    log = os.path.join(app, "reports", "log", "test.log")
     env = dict(os.environ, QT_QPA_PLATFORM="offscreen")
     t0 = time.time()
     p = subprocess.Popen([exe], cwd=app, env=env,
