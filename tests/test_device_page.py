@@ -3608,3 +3608,108 @@ def test_robot_ip_popup_second_click_does_not_flicker(qapp):
     c.hidePopup()
     c.showPopup()                     # 立即再触发 = 第二次点击
     assert c._popup is None, "刚关闭就重开, 会闪动"
+
+
+# ── 2026-11-27 界面统一后的守护 ──
+
+def test_delete_checked_requires_confirmation_endurance(qapp, monkeypatch):
+    """续航页删除的是勾选项, 且必须确认；取消不删。"""
+    from PySide6.QtWidgets import QMessageBox
+    from gui.endurance_page import EndurancePage
+    p = EndurancePage()
+    for r in range(p.table.rowCount()):
+        p._set_row_checked(r, False)
+    p._set_row_checked(0, True)
+    p._set_row_checked(1, True)
+    n = p.table.rowCount()
+    monkeypatch.setattr(QMessageBox, "question",
+                        staticmethod(lambda *a, **k: QMessageBox.No))
+    p._delete_selected()
+    assert p.table.rowCount() == n, "取消确认仍删除了组合"
+    monkeypatch.setattr(QMessageBox, "question",
+                        staticmethod(lambda *a, **k: QMessageBox.Yes))
+    p._delete_selected()
+    assert p.table.rowCount() == n - 2
+
+
+def test_delete_checked_requires_confirmation_loop(qapp, monkeypatch):
+    from PySide6.QtWidgets import QMessageBox
+    from gui.loop_clean_page import LoopCleanPage
+    p = LoopCleanPage()
+    for r in range(p.table.rowCount()):
+        p._set_row_checked(r, False)
+    p._set_row_checked(0, True)
+    n = p.table.rowCount()
+    monkeypatch.setattr(QMessageBox, "question",
+                        staticmethod(lambda *a, **k: QMessageBox.No))
+    p._delete_selected()
+    assert p.table.rowCount() == n
+    monkeypatch.setattr(QMessageBox, "question",
+                        staticmethod(lambda *a, **k: QMessageBox.Yes))
+    p._delete_selected()
+    assert p.table.rowCount() == n - 1
+
+
+def test_stop_requires_confirmation_endurance(qapp, monkeypatch):
+    from PySide6.QtWidgets import QMessageBox
+    from gui.endurance_page import EndurancePage
+
+    class Worker:
+        called = False
+        def isRunning(self):
+            return True
+        def stop(self):
+            self.called = True
+
+    p = EndurancePage()
+    p.worker = Worker()
+    monkeypatch.setattr(QMessageBox, "question",
+                        staticmethod(lambda *a, **k: QMessageBox.No))
+    p.stop()
+    assert not p.worker.called, "取消停止仍停止了测试"
+    monkeypatch.setattr(QMessageBox, "question",
+                        staticmethod(lambda *a, **k: QMessageBox.Yes))
+    p.stop()
+    assert p.worker.called
+
+
+def test_stop_requires_confirmation_loop(qapp, monkeypatch):
+    from PySide6.QtWidgets import QMessageBox
+    from gui.loop_clean_page import LoopCleanPage
+
+    class Worker:
+        called = False
+        def isRunning(self):
+            return True
+        def stop(self):
+            self.called = True
+
+    p = LoopCleanPage()
+    p.worker = Worker()
+    monkeypatch.setattr(QMessageBox, "question",
+                        staticmethod(lambda *a, **k: QMessageBox.No))
+    p.stop()
+    assert not p.worker.called
+    monkeypatch.setattr(QMessageBox, "question",
+                        staticmethod(lambda *a, **k: QMessageBox.Yes))
+    p.stop()
+    assert p.worker.called
+
+
+def test_device_page_compact_layout_and_fault_header(page):
+    """设备页 IP 行隐藏、SDK+信息同行、刷新间隔在参数栏；灯显页有标题。"""
+    from PySide6.QtWidgets import QLabel
+    assert page._ip_bar_host.isVisible() is False
+    assert page.info_line is page.sdk_line
+    assert page.interval_combo.parent() is not None
+    texts = [w.text() for w in page.fault_tab.widget().findChildren(QLabel)]
+    assert "灯显语音测试" in texts
+    # AP/PRD 文件提示是只读标签, 显示 basename
+    page._show_file_hint(page.fault_prd_label, r"C:\tmp\CLA_HS4_PRD.xlsx")
+    assert page.fault_prd_label.text() == "CLA_HS4_PRD.xlsx"
+
+
+def test_nav_has_global_scan_button(qapp):
+    from gui.app_pages import PageNav
+    nav = PageNav()
+    assert nav.robot_scan_btn.text() == "扫描"

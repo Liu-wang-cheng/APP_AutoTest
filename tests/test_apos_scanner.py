@@ -179,3 +179,22 @@ def test_tcp_fallback_uses_reader(monkeypatch):
     assert [x["ip"] for x in out] == ["192.168.1.2"]
     assert out[0]["model"] == "M" and out[0]["sn"] == "S"
     assert seen == ["192.168.1.2"]
+
+
+def test_ipconfig_runs_without_extra_console(monkeypatch):
+    """打包版无控制台: ipconfig 必须带 CREATE_NO_WINDOW, 否则点扫描会弹黑框。"""
+    captured = {}
+
+    class R:
+        stdout = b""
+
+    def fake_run(cmd, **kw):
+        captured["cmd"] = cmd
+        captured.update(kw)
+        return R()
+
+    monkeypatch.setattr(scanner.subprocess, "run", fake_run)
+    scanner._decode_ipconfig()
+    assert captured["cmd"] == ["ipconfig"]
+    if scanner.os.name == "nt":
+        assert captured.get("creationflags") == scanner.subprocess.CREATE_NO_WINDOW
