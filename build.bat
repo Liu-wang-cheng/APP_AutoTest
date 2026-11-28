@@ -30,7 +30,7 @@ if errorlevel 1 (
 )
 
 echo [2/4] 跑测试(打包前先确认代码是好的)...
-"%PY%" -m pytest -q || (
+"%PY%" -m pytest -q --timeout=180 || (
     echo [ERROR] 测试未通过, 中止打包
     exit /b 1
 )

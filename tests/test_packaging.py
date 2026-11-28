@@ -257,14 +257,20 @@ def test_force_update_mentions_mandatory(win, monkeypatch):
 
 
 def test_check_update_never_raises_in_gui(win, monkeypatch):
-    """检查更新出岔子不能把界面搞崩(它跑在启动路径上)"""
+    """检查更新出岔子不能把界面搞崩(它跑在启动路径上)。"""
     import gui.main_window as mw
 
+    calls = []
+
     def boom(*_a, **_k):
+        calls.append(1)
         raise RuntimeError("模拟: 线程起不来")
 
+    win._allow_real_check = True     # conftest 默认把检查 stub 掉, 这里要真走到起线程
     monkeypatch.setattr(mw, "UpdateCheckThread", boom)
     win._check_update_now()          # 不得抛
+    assert calls, "检查更新应真的尝试起线程(异常被吞掉)"
+    assert win.update_btn.text() == "检查更新", "异常后按钮状态不能被弄乱"
 
 
 def test_update_button_exists_and_disabled_while_running(win):
@@ -417,7 +423,7 @@ def test_bootstrap_noop_in_dev_env(tmp_path):
 
 
 def test_bootstrap_never_raises(tmp_path, monkeypatch):
-    """初始化失败不能拦住启动"""
+    """初始化失败不能拦住启动。"""
     from core import bootstrap
     src, dst = tmp_path / "pkg", tmp_path / "data"
     _seed_src(src)
@@ -427,7 +433,9 @@ def test_bootstrap_never_raises(tmp_path, monkeypatch):
         raise OSError("模拟: 目录只读")
 
     monkeypatch.setattr(bootstrap.shutil, "copy2", boom)
-    bootstrap.ensure_data_dirs(app_dir=str(src), data_dir=str(dst))   # 不得抛
+    seeded = bootstrap.ensure_data_dirs(app_dir=str(src), data_dir=str(dst))
+    assert seeded == [], "复制失败时不应报告已铺出文件"
+    assert dst.is_dir(), "失败也要保留数据目录, 不能拦住启动"
 
 
 def test_bootstrap_seeds_apos_sdk_only_when_missing(tmp_path):

@@ -44,7 +44,7 @@ jobs:
         #   (pytest.ini 没配 addopts, 这里直接命令行加)
         run: |
           python -c "import os;os.makedirs('reports/log',exist_ok=True)"
-          python -m pytest -q --junit-xml=reports/log/junit.xml
+          python -m pytest -q --timeout=180 --junit-xml=reports/log/junit.xml
 
       - name: 失败时上传 junit 报告(便于下载排查)
         if: failure()

@@ -381,3 +381,47 @@ def _isolate_log_file(tmp_path_factory):
     fh.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
     log.addHandler(fh)
     yield
+
+
+@pytest.fixture(autouse=True)
+def _no_modal_dialogs(monkeypatch):
+    """测试里不允许弹**真的模态弹窗**（2026-11-28）。
+
+    屏幕之外没人点「确定」：一旦有用例漏 mock 了 QMessageBox，测试会一直挂到
+    超时（本轮就踩到过一次：选区域时 fetch 失败弹了 warning，整包卡住）。
+    这里默认把确认类弹窗改成"立即返回"，个别用例要测弹窗行为时自己再
+    monkeypatch 覆盖即可（后执行的覆盖优先）。
+    """
+    if "PySide6.QtWidgets" not in sys.modules:
+        return
+    from PySide6.QtWidgets import QMessageBox
+
+    monkeypatch.setattr(QMessageBox, "warning",
+                        staticmethod(lambda *a, **k: QMessageBox.Ok))
+    monkeypatch.setattr(QMessageBox, "critical",
+                        staticmethod(lambda *a, **k: QMessageBox.Ok))
+    monkeypatch.setattr(QMessageBox, "information",
+                        staticmethod(lambda *a, **k: QMessageBox.Ok))
+    monkeypatch.setattr(QMessageBox, "question",
+                        staticmethod(lambda *a, **k: QMessageBox.Yes))
+
+
+@pytest.fixture(autouse=True)
+def _close_leftover_dialogs():
+    """每个测试结束后关掉遗留的对话框并处理事件，减少跨用例的 Qt 状态泄漏。"""
+    yield
+    if "PySide6.QtWidgets" not in sys.modules:
+        return
+    from PySide6.QtWidgets import QApplication, QDialog
+
+    app = QApplication.instance()
+    if app is None:
+        return
+    for w in app.topLevelWidgets():
+        if isinstance(w, QDialog):
+            try:
+                w.reject()
+                w.deleteLater()
+            except Exception:
+                pass
+    app.processEvents()
