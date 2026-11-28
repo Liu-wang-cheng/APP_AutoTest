@@ -394,6 +394,119 @@ class ParamService:
             log.info(f"[控制] 启动清扫失败: {e}")
             return False
 
+    def start_area_clean(self, area_ids):
+        """划区清扫: 按手动区域(areaValue) ID 列表清扫。
+
+        ★ 必须用 `/CleanTask/StartAreaClean` + 完整 JSON(AP 上位机同款):
+          带 `areaFillType/areaMask/cleanRange`。只发 `/event/task_manager`
+          `app_sweeper_start_area_clean` + AreaIds 时，清扫节点拿到默认
+          `FILL_TYPE_END`、`clean_area_type_` 为空 —— 机器人会报
+          `clean_cannot_arrive`(区域不可达) 然后直接回充(2026-11-28 真机对比)。
+        """
+        if not self._stream_ready():
+            return False
+        ids = []
+        for v in (area_ids or []):
+            try:
+                ids.append(int(v))
+            except (TypeError, ValueError):
+                continue
+        if not ids:
+            return False
+        try:
+            payload = {
+                "cleanRange": "CLEAN_RANGE_AREA",
+                "areaFillType": "FILL_TYPE_AREA",
+                "areaMask": "AREA_MASK_NORMAL",
+                "cleanStartFrom": "CLEAN_START_FROM_APP",
+                "cleanId": ids,
+            }
+            return self.stream.send_json_event(
+                "/CleanTask/StartAreaClean",
+                json.dumps(payload, separators=(",", ":"))) >= 0
+        except Exception as e:
+            log.info(f"[控制] 启动选区清扫失败: {e}")
+            return False
+
+    def start_segment_clean(self, segment_ids):
+        """选区/分区清扫(机器人自带房间分段 autoAreaValue)。
+
+        参数取自机器人共享内存里 APP 真实下发的 `start_segment_clean`：
+          {"areaFillType":"FILL_TYPE_AUTO","areaMask":"AREA_MASK_NORMAL",
+           "cleanCount":1,"cleanId":[1,2],"cleanRange":"CLEAN_RANGE_AREA",
+           "cleanStartFrom":"CLEAN_START_FROM_APP"}
+        真机日志确认: `clean_area_type_: autoAreaValue`,
+        `AREA_ID_INT: 1 ... area_fill_type: FILL_TYPE_AUTO`。
+        """
+        if not self._stream_ready():
+            return False
+        ids = []
+        for v in (segment_ids or []):
+            try:
+                ids.append(int(v))
+            except (TypeError, ValueError):
+                continue
+        if not ids:
+            return False
+        try:
+            payload = {
+                "cleanRange": "CLEAN_RANGE_AREA",
+                "areaFillType": "FILL_TYPE_AUTO",
+                "areaMask": "AREA_MASK_NORMAL",
+                "cleanCount": 1,
+                "cleanStartFrom": "CLEAN_START_FROM_APP",
+                "cleanId": ids,
+            }
+            return self.stream.send_json_event(
+                "/CleanTask/StartSegmentClean",
+                json.dumps(payload, separators=(",", ":"))) >= 0
+        except Exception as e:
+            log.info(f"[控制] 启动选区清扫失败: {e}")
+            return False
+
+    def start_curpoint_clean(self):
+        """原地定点清扫：以机器人当前位姿为中心 1.5×1.5m。"""
+        if not self._stream_ready():
+            return False
+        try:
+            return self.stream.post_event(
+                "/event/task_manager", "app_sweeper_start_curpoint_clean",
+                {}) >= 0
+        except Exception as e:
+            log.info(f"[控制] 启动定点清扫失败: {e}")
+            return False
+
+    def set_area_info(self, areas):
+        """写清扫区域（划区清扫，与 AP 上位机同款链路）。
+
+        AP 抓包（2026-11-28 10.21 真机, 用户用 AP 上位机划区确认）:
+          1. 事件 `/MapData/SetAreaInfo`，载荷是 JSON 字符串
+             `{"JsonParam": '<区域 JSON>'}`；区域 JSON 形如
+             `{"Areainfo":[{"id":1,"cleanCount":1,
+             "vertexs":[[x1,y1],[x2,y1],[x2,y2],[x1,y2]]}]}`；
+          2. 再发 `app_sweeper_start_area_clean`，按上面的 id 清扫。
+        机器人用 Areainfo **整体替换** areaValue(手动区域列表)，所以多次
+        划区只会保留最后一次；坐标是毫米，顶点顺序见上（任意方向都行）。
+        """
+        if not self._stream_ready():
+            return False
+        try:
+            text = json.dumps({"Areainfo": list(areas or [])},
+                              separators=(",", ":"))
+            return self.stream.send_json_event(
+                "/MapData/SetAreaInfo", text) >= 0
+        except Exception as e:
+            log.info(f"[控制] 写清扫区域失败: {e}")
+            return False
+
+    def clear_area_info(self):
+        """清掉临时划区（`Areainfo: []`，AP 上位机取消划区时同款）。
+
+        ★ 会把 areaValue(手动区域)清空 —— 划区测试结束后调用可恢复
+          “没有手动区域”的初始状态；用户自己保存的手动区域也会一起没。
+        """
+        return self.set_area_info([])
+
     def start_find_charger(self):
         """开始找桩/回充。"""
         if not self._stream_ready():

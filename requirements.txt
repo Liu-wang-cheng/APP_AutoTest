@@ -30,3 +30,4 @@ tokenizers==0.23.3
 
 # 批量测试前 SSH 检查机器人 /tmp/music 语音包
 paramiko==5.1.0
+lz4==4.4.5

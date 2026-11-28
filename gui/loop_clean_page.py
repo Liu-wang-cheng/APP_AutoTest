@@ -8,19 +8,27 @@ import os
 import threading
 import time
 
-from PySide6.QtCore import (QEvent, QObject, QSettings, Qt, QThread,
-                            QUrl, Signal)
+from PySide6.QtCore import (QEvent, QObject, QSettings, Qt,
+                            QThread, QUrl, Signal)
 from PySide6.QtGui import QColor, QDesktopServices, QPalette
-from PySide6.QtWidgets import (QAbstractItemView, QFrame,
+from PySide6.QtWidgets import (QAbstractItemView, QApplication, QDialog,
+                               QFrame,
                                QGridLayout, QHBoxLayout, QHeaderView,
-                               QLabel, QMessageBox, QPlainTextEdit,
+                               QLabel, QLineEdit, QMessageBox, QPlainTextEdit,
                                QPushButton, QSpinBox, QTableWidget,
                                QTableWidgetItem,
                                QVBoxLayout, QWidget)
 
 from core.driver import BASE_DIR, REPORT_SUBDIRS
 from core.endurance import _acquire_lock, _release_lock
-from core.loop_clean import run_loop_clean
+from core.loop_clean import (parse_area_ids, parse_point, parse_zones,
+                             run_loop_clean)
+from core.apos.map_data import fetch_map
+from gui.area_cell import (AreaCell, MapCacheMixin,
+                           point_text,
+                           rooms_text as _rooms_text,
+                           show_zones as _show_zones)
+from gui.map_picker import MapSelectorDialog
 from gui.widgets import NoWheelComboBox
 
 MODE_ITEMS = (
@@ -30,12 +38,10 @@ MODE_ITEMS = (
     ("先扫后拖", "sweepThenMop"),
 )
 
-
 class LoopWorker(QThread):
     log_line = Signal(str)
     state = Signal(dict)
     finished_run = Signal(bool, str, str)      # 完成/原因/结果目录
-
     def __init__(self, ip, combos, clean_battery, recharge_battery,
                  max_rounds, sample_interval, parent=None, peer=None,
                  stream=None):
@@ -89,7 +95,7 @@ class LoopWorker(QThread):
                     pass
 
 
-class LoopCleanPage(QWidget):
+class LoopCleanPage(MapCacheMixin, QWidget):
     runningChanged = Signal(bool)
 
     def __init__(self, device=None, parent=None, settings=None):
@@ -99,6 +105,7 @@ class LoopCleanPage(QWidget):
         self._result_dir = ""
         self._select_all_next = True
         self._auto_ip = ""          # 自动填入的默认 IP(用户手动改过就不再跟随)
+        self._init_map_cache()      # 地图连接后预取, 点击“选择清扫区域”直接复用
         self.settings = settings
         self._persist = (settings is not None
                          or not os.environ.get("PYTEST_CURRENT_TEST"))
@@ -110,6 +117,9 @@ class LoopCleanPage(QWidget):
         if self._persist:
             self._load_settings()
         self._loading = False
+        # 连上扫地机就在后台读一次地图, 点“选择清扫区域”时不用再等 SSH
+        if device is not None and hasattr(device, "connect_finished"):
+            device.connect_finished.connect(self._on_robot_connected)
 
     # ── UI ──
     def _build_ui(self):
@@ -186,18 +196,23 @@ class LoopCleanPage(QWidget):
         combo_bar.addWidget(reset_btn)
         root.addLayout(combo_bar)
 
-        self.table = QTableWidget(0, 4)
-        self.table.setHorizontalHeaderLabels(["启用", "模式", "吸力", "水量"])
+        self.table = QTableWidget(0, 6)
+        self.table.setHorizontalHeaderLabels(
+            ["启用", "清扫类型", "模式", "吸力", "水量", "清扫区域"])
         self.table.verticalHeader().setVisible(False)
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         h = self.table.horizontalHeader()
         h.setSectionResizeMode(0, QHeaderView.ResizeToContents)
-        h.setSectionResizeMode(1, QHeaderView.Stretch)
+        h.setSectionResizeMode(1, QHeaderView.Fixed)
         h.setSectionResizeMode(2, QHeaderView.Fixed)
         h.setSectionResizeMode(3, QHeaderView.Fixed)
-        self.table.setColumnWidth(2, 120)
-        self.table.setColumnWidth(3, 120)
+        h.setSectionResizeMode(4, QHeaderView.Fixed)
+        h.setSectionResizeMode(5, QHeaderView.Stretch)
+        self.table.setColumnWidth(1, 130)
+        self.table.setColumnWidth(2, 170)
+        self.table.setColumnWidth(3, 90)
+        self.table.setColumnWidth(4, 90)
         # 选中行不要蓝底(与灯显语音 PRD 表格一致)
         pal = self.table.palette()
         for role in (QPalette.Active, QPalette.Inactive, QPalette.Disabled):
@@ -263,6 +278,8 @@ class LoopCleanPage(QWidget):
     # ── 组合表 ──
     #: 循环清扫默认组合：仅扫1档 + 扫拖1档(水量1)，默认不勾选
     LOOP_DEFAULT_COMBOS = (("sweepOnly", 1, 0), ("sweepMop", 1, 1))
+    CLEAN_TYPES = (("全局清扫", "total"), ("定点清扫(指定点)", "point"),
+                   ("选区/分区", "rooms"), ("划区清扫", "zones"))
 
     def _restore_defaults(self):
         self.table.setRowCount(0)
@@ -273,7 +290,10 @@ class LoopCleanPage(QWidget):
             self.all_btn.setText("全选")
         self._save_settings()
 
-    def _add_row(self, mode="sweepOnly", fan=4, water=0, checked=False):
+    def _add_row(self, mode="sweepOnly", fan=4, water=0, checked=False,
+                 clean_type="total", area_ids="", zones=None, point=None):
+        if clean_type == "curpoint":       # 旧版「原地定点」→ 指定点定点
+            clean_type = "point"
         r = self.table.rowCount()
         self.table.insertRow(r)
         # ★ 原生 item 勾选(与自动化用例列表同一效果/同一 Qt 管线):
@@ -283,25 +303,72 @@ class LoopCleanPage(QWidget):
                       | Qt.ItemIsUserCheckable)
         item.setCheckState(Qt.Checked if checked else Qt.Unchecked)
         self.table.setItem(r, 0, item)
+        type_combo = NoWheelComboBox()
+        for label, value in self.CLEAN_TYPES:
+            type_combo.addItem(label, value)
+        tidx = type_combo.findData(clean_type)
+        type_combo.setCurrentIndex(max(0, tidx))
+        self.table.setCellWidget(r, 1, type_combo)
         mode_combo = NoWheelComboBox()
         for label, value in MODE_ITEMS:
             mode_combo.addItem(label, value)
         idx = mode_combo.findData(mode)
         mode_combo.setCurrentIndex(max(0, idx))
-        self.table.setCellWidget(r, 1, mode_combo)
+        self.table.setCellWidget(r, 2, mode_combo)
         fan_combo = self._level_combo(
             [("关", 0), ("1 档", 1), ("2 档", 2), ("3 档", 3),
              ("4 档", 4), ("5 档", 5)], int(fan))
-        self.table.setCellWidget(r, 2, fan_combo)
+        self.table.setCellWidget(r, 3, fan_combo)
         water_combo = self._level_combo(
             [("关", 0), ("1 档", 1), ("2 档", 2), ("3 档", 3),
              ("4 档", 4)], int(water))
-        self.table.setCellWidget(r, 3, water_combo)
+        self.table.setCellWidget(r, 4, water_combo)
+        area_edit = QLineEdit(_rooms_text(area_ids))
+        area_edit.setPlaceholderText("如 1,2")
+        area_edit.setToolTip("选区/分区清扫时必填：房间 ID，逗号分隔")
+        zone_list = parse_zones(zones)
+        area_edit.setProperty("zones", zone_list)
+        area_edit.setProperty("rooms_text", _rooms_text(area_ids))
+        point_val = parse_point(point)
+        area_edit.setProperty("point", point_val)
+        if point_val:
+            area_edit.setText(point_text(point_val))
+        elif zone_list:
+            _show_zones(area_edit, zone_list)
+        area_cell = AreaCell(area_edit)
+        area_cell.pick_btn.clicked.connect(
+            lambda *_: self._pick_area(area_cell))
+        self.table.setCellWidget(r, 5, area_cell)
 
-        def _sync(_=None, c=mode_combo, w=water_combo):
+        def _remember(_=None):
+            if type_combo.currentData() == "rooms":
+                area_edit.setProperty("rooms_text", area_edit.text())
+        area_edit.textChanged.connect(_remember)
+        area_edit.textChanged.connect(lambda *_: self._save_settings())
+
+        def _sync(_=None, c=mode_combo, w=water_combo,
+                  t=type_combo, a=area_edit, cell=area_cell):
             w.setEnabled(c.currentData() != "sweepOnly")
+            ctype = t.currentData()
+            a.setEnabled(ctype in ("rooms", "zones", "point"))
+            cell.pick_btn.setEnabled(ctype in ("rooms", "zones", "point"))
+            # 划区/定点由地图选择生成，不允许手改文字
+            a.setReadOnly(ctype in ("zones", "point"))
+            if ctype == "zones":
+                a.setPlaceholderText("点「选择清扫区域」画区域")
+                _show_zones(a, a.property("zones") or [])
+            elif ctype == "point":
+                a.setPlaceholderText("点「选择清扫区域」选位置")
+                pt = parse_point(a.property("point"))
+                a.setText(point_text(pt))
+            elif ctype == "rooms":
+                a.setPlaceholderText("如 1,2")
+                a.setText(a.property("rooms_text") or "")
         mode_combo.currentIndexChanged.connect(_sync)
+        type_combo.currentIndexChanged.connect(_sync)
         _sync()
+        type_combo.currentIndexChanged.connect(
+            lambda *_: self._save_settings())
         mode_combo.currentIndexChanged.connect(
             lambda *_: self._save_settings())
         fan_combo.currentIndexChanged.connect(
@@ -328,18 +395,40 @@ class LoopCleanPage(QWidget):
         if item is not None:
             item.setCheckState(Qt.Checked if checked else Qt.Unchecked)
 
+    def _area_edit(self, row):
+        cell = self.table.cellWidget(row, 5)
+        return getattr(cell, "edit", cell)
+
     def _row_values(self, row):
-        mode = self.table.cellWidget(row, 1).currentData()
-        fan = self.table.cellWidget(row, 2).currentData()
-        water = self.table.cellWidget(row, 3).currentData()
-        return self._row_checked(row), mode, int(fan), int(water)
+        ctype = self.table.cellWidget(row, 1).currentData()
+        mode = self.table.cellWidget(row, 2).currentData()
+        fan = self.table.cellWidget(row, 3).currentData()
+        water = self.table.cellWidget(row, 4).currentData()
+        area = self._area_edit(row)
+        area_text = area.text().strip() if area is not None else ""
+        return (self._row_checked(row), ctype, mode, int(fan), int(water),
+                area_text)
+
+    def _row_zones(self, row):
+        area = self._area_edit(row)
+        return parse_zones(area.property("zones") if area is not None else [])
+
+    def _row_point(self, row):
+        area = self._area_edit(row)
+        return parse_point(area.property("point") if area is not None else None)
 
     def _combos_snapshot(self):
         rows = []
         for r in range(self.table.rowCount()):
-            enabled, mode, fan, water = self._row_values(r)
-            rows.append({"enabled": enabled, "mode": mode,
-                         "fan": fan, "water": water})
+            enabled, ctype, mode, fan, water, area = self._row_values(r)
+            row = {"enabled": enabled, "clean_type": ctype,
+                   "mode": mode, "fan": fan, "water": water,
+                   "area_ids": "" if ctype in ("zones", "point") else area}
+            if ctype == "zones":
+                row["zones"] = self._row_zones(r)
+            elif ctype == "point":
+                row["point"] = self._row_point(r)
+            rows.append(row)
         return rows
 
     def _save_settings(self):
@@ -359,6 +448,79 @@ class LoopCleanPage(QWidget):
                                    self.sample_spin.value())
         except Exception:
             pass
+
+    def _row_for_cell(self, cell):
+        for r in range(self.table.rowCount()):
+            if self.table.cellWidget(r, 5) is cell:
+                return r
+        return -1
+
+    def _pick_area(self, cell):
+        """「选择清扫区域」：按该行清扫类型打开地图并回填(用户 2026-11-28)。
+
+        选区/分区 → 只能点房间；划区 → 只能画矩形；定点 → 只能点一个位置。
+        """
+        row = self._row_for_cell(cell)
+        if row < 0:
+            return
+        type_combo = self.table.cellWidget(row, 1)
+        ctype = type_combo.currentData()
+        if ctype not in ("rooms", "zones", "point"):
+            return
+        ip = self._ip()
+        if not ip:
+            QMessageBox.warning(self, "未填写 IP",
+                                "请先在右上角选择扫地机 IP。")
+            return
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        # 连接后已经在后台预取: 稍等它完成, 避免再开一条 SSH
+        data = self._wait_cached_map(ip)
+        try:
+            if data is None:
+                # 兜底: 用短超时, 别让界面在这里卡几十秒
+                data = fetch_map(ip, timeout=5.0, attempts=1)
+                self._map_cache[ip] = (time.time(), data)
+        except Exception as e:
+            QApplication.restoreOverrideCursor()
+            QMessageBox.warning(
+                self, "读取地图失败",
+                "无法读取机器人地图：%s\n\n请确认机器人在线且地图已保存。" % e)
+            return
+        QApplication.restoreOverrideCursor()
+        edit = cell.edit
+        # 带上这一行已选的内容, 打开地图就能看到之前的选择
+        init_rooms, init_zones, init_point = [], [], None
+        if ctype == "rooms":
+            init_rooms = parse_area_ids(edit.property("rooms_text")
+                                        or edit.text())
+        elif ctype == "zones":
+            init_zones = parse_zones(edit.property("zones"))
+        else:
+            init_point = parse_point(edit.property("point"))
+        dlg = MapSelectorDialog(data, self, mode=ctype,
+                                rooms=init_rooms, zones=init_zones,
+                                point=init_point)
+        if dlg.exec() != QDialog.Accepted:
+            return
+        if ctype == "rooms" and dlg.rooms:
+            text = _rooms_text(dlg.rooms)
+            edit.setProperty("rooms_text", text)
+            edit.setText(text)
+            self.log.appendPlainText("[地图] 已选择房间: %s" % text)
+        elif ctype == "zones" and dlg.zones:
+            edit.setProperty("zones", parse_zones(dlg.zones))
+            _show_zones(edit, dlg.zones)
+            self.log.appendPlainText(
+                "[地图] 已选择划区: %d 个区域（%s）"
+                % (len(dlg.zones), "；".join(
+                    "(%d,%d)-(%d,%d)" % tuple(z) for z in dlg.zones)))
+        elif ctype == "point" and dlg.point:
+            edit.setProperty("point", list(dlg.point))
+            edit.setText(point_text(dlg.point))
+            self.log.appendPlainText(
+                "[地图] 已选择定点: (%d, %d)（1.5m 见方，扫 2 遍）"
+                % tuple(dlg.point))
+        self._save_settings()
 
     def _load_settings(self):
         try:
@@ -384,8 +546,15 @@ class LoopCleanPage(QWidget):
                     continue
                 if not (0 <= fan <= 5 and 0 <= water <= 4):
                     continue
+                ctype = str(row.get("clean_type") or "total")
+                if ctype not in ("total", "curpoint", "rooms", "zones"):
+                    ctype = "total"
                 self._add_row(row.get("mode"), fan, water,
-                              checked=bool(row.get("enabled")))
+                              checked=bool(row.get("enabled")),
+                              clean_type=ctype,
+                              area_ids=str(row.get("area_ids") or ""),
+                              zones=row.get("zones"),
+                              point=row.get("point"))
             self._select_all_next = True
             if hasattr(self, "all_btn"):
                 self.all_btn.setText("全选")
@@ -402,12 +571,17 @@ class LoopCleanPage(QWidget):
     def _collect_combos(self):
         out = []
         for r in range(self.table.rowCount()):
-            enabled, mode, fan, water = self._row_values(r)
+            enabled, ctype, mode, fan, water, area = self._row_values(r)
             if not enabled:
                 continue
             if mode == "sweepOnly" and water:
                 water = 0
-            out.append((mode, fan, water))
+            if ctype == "zones":
+                out.append((mode, fan, water, ctype, self._row_zones(r)))
+            elif ctype == "point":
+                out.append((mode, fan, water, ctype, self._row_point(r)))
+            else:
+                out.append((mode, fan, water, ctype, area))
         return out
 
     def _toggle_select(self):
@@ -489,6 +663,24 @@ class LoopCleanPage(QWidget):
             QMessageBox.warning(self, "没有测试组合",
                                 "至少启用一个清扫组合。")
             return
+        for combo in combos:
+            if combo[3] == "rooms" and not parse_area_ids(combo[4]):
+                QMessageBox.warning(
+                    self, "选区/分区缺少房间ID",
+                    "清扫类型为「选区/分区」的组合必须填写房间 ID（如 1,2）。")
+                return
+            if combo[3] == "zones" and not parse_zones(combo[4]):
+                QMessageBox.warning(
+                    self, "划区清扫缺少区域",
+                    "清扫类型为「划区清扫」的组合请先点该行的「选择清扫区域」"
+                    "在地图上画出区域。")
+                return
+            if combo[3] == "point" and not parse_point(combo[4]):
+                QMessageBox.warning(
+                    self, "定点清扫缺少位置",
+                    "清扫类型为「定点清扫(指定点)」的组合请先点该行的"
+                    "「选择清扫区域」在地图上点选位置。")
+                return
         if self.device is not None and not getattr(self.device, "connected",
                                                    False):
             ok = QMessageBox.question(
@@ -582,6 +774,8 @@ class LoopCleanPage(QWidget):
             self._append("[结果] %s" % base)
         self.worker = None
         self.runningChanged.emit(False)
+        # 跑完一轮测试, 地图可能变化(回洗/重定位/新建图) → 后台重取一次
+        self.invalidate_map()
         if not ok and not base:
             QMessageBox.critical(self, "循环清扫启动失败", message)
 

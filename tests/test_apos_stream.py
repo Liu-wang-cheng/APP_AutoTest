@@ -1011,3 +1011,98 @@ def test_continue_clean_posts_resume_event():
     assert svc.continue_clean() is True
     assert stream.events == [
         ("/event/task_manager", "app_sweeper_resume_clean_task", None)]
+
+
+def test_set_area_info_matches_ap_upper_computer(monkeypatch):
+    """划区: /MapData/SetAreaInfo + JsonParam 字符串(AP 上位机抓包同款)。"""
+    import json
+
+    class Stream:
+        running = True
+
+        def __init__(self):
+            self.sent = []
+
+        def send_json_event(self, topic, text):
+            self.sent.append((topic, json.loads(text)))
+            return 0
+
+    stream = Stream()
+    svc = ParamService(object(), [], stream=stream)
+    areas = [{"id": 1, "cleanCount": 1,
+              "vertexs": [[119, 242], [768, 242], [768, -861],
+                          [119, -861]]}]
+    assert svc.set_area_info(areas) is True
+    assert stream.sent == [("/MapData/SetAreaInfo", {"Areainfo": areas})]
+    assert svc.clear_area_info() is True
+    assert stream.sent[-1] == ("/MapData/SetAreaInfo", {"Areainfo": []})
+
+
+def test_start_area_and_curpoint_clean_events():
+    """选区/原地定点清扫的事件与参数(2026-11-28, 选区走 AP 同款服务)。"""
+    import json
+
+    class Stream:
+        running = True
+
+        def __init__(self):
+            self.events = []
+            self.json_events = []
+
+        def post_event(self, topic, event, params=None):
+            self.events.append((topic, event, params))
+            return 0
+
+        def send_json_event(self, topic, text):
+            self.json_events.append((topic, json.loads(text)))
+            return 0
+
+    stream = Stream()
+    svc = ParamService(object(), [], stream=stream)
+    assert svc.start_area_clean([2, 3]) is True
+    assert svc.start_area_clean([]) is False
+    assert svc.start_curpoint_clean() is True
+    assert stream.events == [
+        ("/event/task_manager", "app_sweeper_start_curpoint_clean", {}),
+    ]
+    # ★ 只带 AreaIds 时清扫节点 FillType 为空 → clean_cannot_arrive; 必须用
+    #   AP 同款的 /CleanTask/StartAreaClean + 完整字段(真机对比 2026-11-28)
+    assert stream.json_events == [
+        ("/CleanTask/StartAreaClean", {
+            "cleanRange": "CLEAN_RANGE_AREA",
+            "areaFillType": "FILL_TYPE_AREA",
+            "areaMask": "AREA_MASK_NORMAL",
+            "cleanStartFrom": "CLEAN_START_FROM_APP",
+            "cleanId": [2, 3],
+        }),
+    ]
+
+
+def test_start_segment_clean_uses_auto_area():
+    """选区(房间)必须走 StartSegmentClean + FILL_TYPE_AUTO(机器人 autoAreaValue)。"""
+    import json
+
+    class Stream:
+        running = True
+
+        def __init__(self):
+            self.json_events = []
+
+        def send_json_event(self, topic, text):
+            self.json_events.append((topic, json.loads(text)))
+            return 0
+
+    stream = Stream()
+    svc = ParamService(object(), [], stream=stream)
+    assert svc.start_segment_clean([1, 2]) is True
+    assert svc.start_segment_clean([]) is False
+    assert stream.json_events == [
+        ("/CleanTask/StartSegmentClean", {
+            "cleanRange": "CLEAN_RANGE_AREA",
+            "areaFillType": "FILL_TYPE_AUTO",
+            "areaMask": "AREA_MASK_NORMAL",
+            "cleanCount": 1,
+            "cleanStartFrom": "CLEAN_START_FROM_APP",
+            "cleanId": [1, 2],
+        }),
+    ]

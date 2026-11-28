@@ -84,6 +84,14 @@ def cond_label(d):
                             d.get("fan_level"))
     if d.get("mode") in ("sweepMop", "sweepThenMop"):
         label += "+水量%s" % d.get("water_level")
+    ctype = d.get("clean_type") or "total"
+    area = d.get("area") or []
+    if ctype == "rooms":
+        label += " · 选区%s" % ",".join(str(x) for x in area)
+    elif ctype == "zones":
+        label += " · 划区%d 个" % len(area)
+    elif ctype == "curpoint":
+        label += " · 原地定点"
     return label
 
 

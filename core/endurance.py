@@ -83,6 +83,20 @@ def suite_total_timeout(max_duration, n_combos):
     return max(1, int(max_duration)) * max(1, int(n_combos))
 
 
+def _ctype_label(ctype, area=None):
+    """清扫类型的中文说明（与循环清扫一致）。"""
+    if ctype == "rooms":
+        return "选区 %s" % ",".join(str(x) for x in (area or []))
+    if ctype == "zones":
+        return "划区 %d 个" % len(area or [])
+    if ctype == "point":
+        pt = list(area or [])[:2]
+        return ("定点 %d,%d" % tuple(pt)) if len(pt) == 2 else "定点"
+    if ctype == "curpoint":
+        return "原地定点"
+    return "全局"
+
+
 def plan_settings(applied, mode, fan_level, water_level, only=None):
     """计算本次需要下发的挡位通道。
 
@@ -802,7 +816,13 @@ def run_endurance_suite(ip, combos=None, out_dir=None, stop_on_fail=False,
 
     entries = []
     dirs = []
-    for idx, (mode, fan, water) in enumerate(combos, 1):
+    for idx, combo in enumerate(combos, 1):
+        # 兼容旧三元组 (mode, fan, water) 和循环清扫的五元组
+        # (mode, fan, water, clean_type, area)
+        vals = list(combo) + [None] * (5 - len(combo))
+        mode, fan, water, ctype, area = vals[:5]
+        ctype = ctype or "total"
+        area = list(area or [])
         if stop_event is not None and stop_event.is_set():
             _log("[组合] 用户停止，结束后续组合")
             break
@@ -814,18 +834,31 @@ def run_endurance_suite(ip, combos=None, out_dir=None, stop_on_fail=False,
         name = "%02d_%s_fan%s" % (idx, mode, fan)
         if mode == "sweepMop":
             name += "_water%s" % water
+        if ctype == "rooms":
+            name += "_room%s" % ",".join(str(x) for x in area)
+        elif ctype == "zones":
+            name += "_zone%d" % len(area)
+        elif ctype == "point":
+            name += "_point"
+            if len(area) >= 2:
+                name += "_%s_%s" % (area[0], area[1])
+        elif ctype == "curpoint":
+            name += "_point"
         run_dir = os.path.join(base, name)
-        _log("[组合 %d/%d] %s 吸力%s 水量%s 开始（超时上限 %s）"
+        _log("[组合 %d/%d] %s 吸力%s 水量%s%s 开始（超时上限 %s）"
              % (idx, len(combos), mode, fan, water,
+                "" if ctype == "total" else "（%s）" % _ctype_label(ctype, area),
                 _fmt_duration(min(max_duration, remaining))))
         result, d = run_endurance(ip, mode=mode, fan_level=fan,
                                   water_level=water, out_dir=run_dir,
                                   log_fn=_log, stop_event=stop_event,
                                   on_state=on_state,
                                   max_duration=min(max_duration, remaining),
-                                  stream=stream, **run_kwargs)
+                                  stream=stream, clean_type=ctype, area=area,
+                                  **run_kwargs)
         dirs.append(d)
         entries.append({"mode": mode, "fan": fan, "water": water,
+                        "clean_type": ctype, "area": area,
                         "dir": d, "completed": bool(result.get("completed")),
                         "seconds": result.get("shutdown_seconds")
                         if result.get("kind") == "shutdown"
@@ -1099,7 +1132,8 @@ def run_endurance(ip, mode="sweepOnly", fan_level=4, water_level=0,
                   low_battery=20, sample_interval=15.0,
                   wait_full_timeout=4 * 3600, max_duration=8 * 3600,
                   out_dir=None, log_fn=None, stop_event=None,
-                  on_state=None, stream=None):
+                  on_state=None, stream=None,
+                  clean_type="total", area=None):
     """执行一次完整续航测试，返回结果 dict 并落盘报告。
 
     stop_event: threading.Event；GUI 点停止时置位，正常收尾并写部分报告。
@@ -1147,11 +1181,16 @@ def run_endurance(ip, mode="sweepOnly", fan_level=4, water_level=0,
         mcu = None
     svc = ParamService(None, stream=st, mcu=mcu)
 
+    # 清扫类型(与循环清扫一致): total / curpoint / rooms / zones
+    clean_type = str(clean_type or "total")
+    area = list(area or [])
+    zone_used = set()
     result = {
         "ip": ip, "mode": mode, "fan_level": fan_level,
         "water_level": water_level, "low_battery": low_battery,
         "sample_interval": sample_interval, "completed": False,
         "restarts": 0, "events": [], "samples": [],
+        "clean_type": clean_type, "area": area,
     }
     samples = result["samples"]
     clean_started = False       # 只有真正启动过清扫，结束时才清任务
@@ -1169,6 +1208,43 @@ def run_endurance(ip, mode="sweepOnly", fan_level=4, water_level=0,
 
     def stop_requested():
         return stop_event is not None and stop_event.is_set()
+
+    def start_clean():
+        """按清扫类型下发（与循环清扫同一套链路）。
+
+        选区 → StartSegmentClean(FILL_TYPE_AUTO, 机器人房间分段)
+        划区 → SetAreaInfo 临时区域 + StartAreaClean(FILL_TYPE_AREA)
+        定点 → 该点 1.5m 见方临时区域 + StartAreaClean(扫 2 遍)
+        其它 → 全局清扫
+        """
+        if clean_type == "rooms":
+            ok = svc.start_segment_clean(area)
+            if not ok:
+                log_fn("[启动] 选区启动失败（房间 %s）" % area)
+            return ok
+        if clean_type in ("zones", "point"):
+            from core.loop_clean import point_area_entry, zone_area_entries
+            if clean_type == "point":
+                entry = point_area_entry(area)
+                entries = [entry] if entry else []
+            else:
+                entries = zone_area_entries(area)
+            if not entries:
+                log_fn("[启动] %s没有有效区域"
+                       % ("定点" if clean_type == "point" else "划区"))
+                return False
+            if not svc.set_area_info(entries):
+                log_fn("[启动] 区域信息写入失败")
+                return False
+            zone_used.add("1")
+            ok = svc.start_area_clean([e["id"] for e in entries])
+            if not ok:
+                log_fn("[启动] %s启动失败"
+                       % ("定点" if clean_type == "point" else "划区"))
+            return ok
+        if clean_type == "curpoint":
+            return svc.start_curpoint_clean()
+        return svc.start_total_clean()
 
     last_state = [0.0]
 
@@ -1280,24 +1356,32 @@ def run_endurance(ip, mode="sweepOnly", fan_level=4, water_level=0,
         event("满电就绪", "%s%% %s" % (result["start_battery"],
                                        result["start_status"]))
         if result["start_status"] in TASK_ACTIVE_STATUSES:
-            # 满电但已有清扫/暂停任务：先停掉，随后重新开一个干净的测试任务
+            # 满电但已有清扫/暂停任务：先停掉、转空闲，再开一个干净的测试任务
+            # （与循环清扫一致，用户 2026-11-28：有任务必须先转空闲再下发）
             result["restarted_task"] = True
             event("重新开始清扫", "满电但已有清扫/暂停任务（%s），先停止再新开"
                   % result["start_status"])
             svc.stop_clean()
-            svc.post_event("/event/task_manager", "kill_all_nodes")
-            time.sleep(2)
+            time.sleep(1)
+            if _status(st) in TASK_ACTIVE_STATUSES:
+                svc.post_event("/event/task_manager", "kill_all_nodes")
+            svc.post_event("/event/task_node", "clear_last_clean_id")
+            idle_end = time.time() + 30
+            while (time.time() < idle_end and not stop_requested()
+                   and _status(st) in TASK_ACTIVE_STATUSES):
+                time.sleep(1)
+            event("转空闲完成", "当前状态 %s" % (_status(st) or "未知"))
 
         # 2) 先设清扫模式并启动；吸力/水量必须等清扫真正开始后再下发
         #    （用户 2026-11-24：开始清扫后就要设置吸力挡位）
         svc.set_clean_mode(mode)
         time.sleep(1)
-        svc.start_total_clean()
+        start_clean()
         clean_started = True
         starts_sent = 1
         last_start_ts = time.time()
-        event("启动清扫", "mode=%s fan=%s water=%s"
-              % (mode, fan_level, water_level))
+        event("启动清扫", "mode=%s fan=%s water=%s type=%s"
+              % (mode, fan_level, water_level, clean_type))
 
         applied = {"mode": None, "fan": None, "water": None}
 
@@ -1746,7 +1830,7 @@ def run_endurance(ip, mode="sweepOnly", fan_level=4, water_level=0,
                 event("重发启动清扫", "第 %d 次（连续失败 %d）"
                       % (starts_sent, start_fail_streak))
                 svc.set_clean_mode(mode)
-                svc.start_total_clean()
+                start_clean()
 
             accum = clean_seconds + ((now - segment_start)
                                      if segment_start else 0)
@@ -1827,7 +1911,7 @@ def run_endurance(ip, mode="sweepOnly", fan_level=4, water_level=0,
                         event("提前完成重启清扫", "%s%% %s" % (battery, status))
                 wash_continue = False
                 svc.set_clean_mode(mode)
-                svc.start_total_clean()
+                start_clean()
                 ok = False
                 end = time.time() + 15
                 while time.time() < end:
@@ -1909,6 +1993,13 @@ def run_endurance(ip, mode="sweepOnly", fan_level=4, water_level=0,
                 log_fn("[清理] 已停止并清除当前清扫任务（防断点续扫）")
             except Exception as e:
                 log_fn("[清理] 清除任务失败: %s" % e)
+        if zone_used:
+            # 划区写的是 areaValue(手动区域)，结束后清掉，避免残留在 APP 地图上
+            try:
+                if svc.clear_area_info():
+                    log_fn("[清理] 已清除临时划区")
+            except Exception as e:
+                log_fn("[清理] 清除临时划区失败: %s" % e)
         if own_stream:
             st.stop()          # 共享流不归本函数管, 交给设备页
         if mcu is not None:

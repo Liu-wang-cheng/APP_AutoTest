@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """循环清扫 Excel 报告（样式与自动化/续航报告一致）。"""
 import os
+import re
 import time
 
 from openpyxl import Workbook
@@ -73,8 +74,22 @@ def _autofit(ws, letters, min_w=10, max_w=48):
 def _combo_text(combo):
     if not combo:
         return "—"
-    mode, fan, water = combo
-    text = "%s · 吸力%s" % (MODE.get(mode, mode), fan)
+    mode, fan, water = combo[0], combo[1], combo[2]
+    ctype = combo[3] if len(combo) > 3 else "total"
+    area = combo[4] if len(combo) > 4 and combo[4] else ""
+    prefix = {"curpoint": "定点(原地)", "point": "定点",
+              "rooms": "选区", "zones": "划区"}.get(ctype, "全局")
+    text = "%s · %s · 吸力%s" % (prefix, MODE.get(mode, mode), fan)
+    if ctype == "rooms" and area:
+        # 界面里是「房间1 房间2」; 报告里统一成 房间1,2
+        ids = re.findall(r"\d+", str(area))
+        text += " · 房间%s" % ",".join(ids) if ids else " · 房间%s" % area
+    elif ctype == "point" and area:
+        nums = re.findall(r"-?\d+", str(area))
+        if len(nums) >= 2:
+            text += " · 定点(%s,%s)" % (nums[0], nums[1])
+    elif ctype == "zones" and area:
+        text += " · 区域%d 个" % len(area)
     if mode in ("sweepMop", "mopOnly", "sweepThenMop"):
         text += " · 水量%s" % water
     return text

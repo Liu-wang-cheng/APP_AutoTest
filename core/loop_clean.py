@@ -70,6 +70,145 @@ def should_stop_existing(status):
     return status in TASK_ACTIVE_STATUSES
 
 
+CLEAN_TYPE_TOTAL = "total"
+CLEAN_TYPE_CURPOINT = "curpoint"      # 旧版「原地定点」(仅兼容已保存的配置)
+CLEAN_TYPE_POINT = "point"            # 指定地点定点(用户 2026-11-28)
+CLEAN_TYPE_ROOMS = "rooms"
+CLEAN_TYPE_ZONES = "zones"
+
+#: 定点清扫的默认方块边长(mm)与清扫遍数 —— 与 AP 上位机一致
+POINT_SIDE = 1500
+POINT_CLEAN_COUNT = 2
+
+
+def parse_point(value):
+    """定点坐标 mm: 支持 [x, y] / "x,y" / "定点(x, y)" / "(x, y)"。
+
+    返回 [x, y] 或 []。
+    """
+    if isinstance(value, (list, tuple)):
+        nums = list(value)
+    else:
+        text = re.sub(r"定点", "", str(value or ""))
+        nums = [s for s in re.split(r"[,\s，()（）]+", text) if s]
+    try:
+        vals = [int(round(float(n))) for n in nums]
+    except (TypeError, ValueError):
+        return []
+    return vals[:2] if len(vals) >= 2 else []
+
+
+def point_area_entry(point, side=POINT_SIDE, count=POINT_CLEAN_COUNT,
+                     start_id=9001):
+    """定点 → 以该点为中心的方形区域条目(AP 的定点清扫就是 1.5m 见方扫 2 遍)。"""
+    pt = parse_point(point)
+    if not pt:
+        return None
+    half = max(100, int(side) // 2)
+    x, y = pt
+    rect = [x - half, y - half, x + half, y + half]
+    entry = zone_area_entries([rect], start_id=start_id)[0]
+    entry["cleanCount"] = int(count)
+    return entry
+
+
+def parse_area_ids(value):
+    """房间 ID: 支持 "1,2" / "1、2;3" / "房间1 房间2" / 列表。
+
+    界面里显示成「房间1 房间2」(用户 2026-11-28)，这里把前缀和空白一起处理。
+    """
+    if isinstance(value, (list, tuple)):
+        items = value
+    else:
+        text = re.sub(r"房间\s*", " ", str(value or ""))
+        items = re.split(r"[,，、;；\s]+", text)
+    out = []
+    for item in items:
+        try:
+            n = int(str(item).strip())
+        except (TypeError, ValueError):
+            continue
+        if n > 0 and n not in out:
+            out.append(n)
+    return out
+
+
+def parse_zones(value):
+    """划区矩形: 支持 "x1,y1,x2,y2" 列表 / "x1,y1,x2,y2;x1,y1,x2,y2" 文本。
+
+    返回 [[x1, y1, x2, y2], ...]（毫米，左上/右下顺序已在内部归一化）。
+    """
+    if isinstance(value, str):
+        raw = [part for part in re.split(r"[;；]", value) if part.strip()]
+    elif isinstance(value, (list, tuple)):
+        raw = list(value)
+    else:
+        raw = []
+    out = []
+    for item in raw:
+        if isinstance(item, str):
+            nums = [s for s in re.split(r"[,\s，]+", item) if s]
+        else:
+            nums = list(item or ())
+        try:
+            vals = [int(round(float(n))) for n in nums]
+        except (TypeError, ValueError):
+            continue
+        if len(vals) != 4:
+            continue
+        x1, y1, x2, y2 = vals
+        rect = [min(x1, x2), min(y1, y2), max(x1, x2), max(y1, y2)]
+        if rect[2] - rect[0] < 100 or rect[3] - rect[1] < 100:
+            continue        # 太小(小于 10cm)的区域机器人会忽略
+        out.append(rect)
+    return out
+
+
+def combo_parts(combo):
+    """(mode, fan, water, clean_type, area) —— 兼容旧三元组。
+
+    area: 选区=房间 ID 列表; 划区=矩形列表; 定点=[x, y]; 其它=[]。
+    """
+    values = list(combo or ())
+    values += [None] * (5 - len(values))
+    mode, fan, water, ctype, area = values[:5]
+    ctype = ctype or CLEAN_TYPE_TOTAL
+    if ctype == CLEAN_TYPE_ZONES:
+        return (mode, fan, water, ctype, parse_zones(area))
+    if ctype in (CLEAN_TYPE_POINT, CLEAN_TYPE_CURPOINT):
+        return (mode, fan, water, CLEAN_TYPE_POINT, parse_point(area))
+    return (mode, fan, water, ctype, parse_area_ids(area))
+
+
+def combo_label(combo):
+    mode, fan, water, ctype, area = combo_parts(combo)
+    text = "%s 吸力%s 水量%s" % (mode, fan, water)
+    if ctype == CLEAN_TYPE_POINT:
+        text += ("（定点 %d,%d）" % tuple(area) if area else "（未选定点）")
+    elif ctype == CLEAN_TYPE_ROOMS:
+        text += "（选区 %s）" % ",".join(str(x) for x in area)
+    elif ctype == CLEAN_TYPE_ZONES:
+        text += "（划区 %d 个）" % len(area)
+    return text
+
+
+def zone_area_entries(zones, start_id=9001):
+    """矩形 → `/MapData/SetAreaInfo` 的 Areainfo 条目（AP 上位机同格式）。
+
+    ★ id 用 9001 起（真机验证 2026-11-28）：AP 上位机临时区用 1，会和房间
+      分段 id 撞；9001+ 机器人照样接受，`AreaIds` 下发也只命中 areaValue。
+    """
+    entries = []
+    for i, zone in enumerate(parse_zones(zones)):
+        x1, y1, x2, y2 = zone
+        entries.append({
+            "id": start_id + i,
+            "cleanCount": 1,
+            "vertexs": [[x1, y1], [x2, y1], [x2, y2], [x1, y2]],
+        })
+    return entries
+
+
 def next_combo(combos, index):
     """按顺序取下一个组合（多组合轮换）。"""
     if not combos:
@@ -156,6 +295,7 @@ def run_loop_clean(ip, combos, clean_battery=30, recharge_battery=20,
     last_wait_note = 0.0
     last_status = ""
     location_ok = False      # 本轮是否收到「定位成功，继续清扫」事件
+    zone_used = set()        # 本次是否下发过临时划区(结束时清掉)
 
     def _rebuild_if_stale():
         if _stream_fresh(st):
@@ -169,7 +309,7 @@ def run_loop_clean(ip, combos, clean_battery=30, recharge_battery=20,
         _log("[推送] 数据流%s" % ("已重建" if ok else "不可用"))
 
     def apply(combo, force=False, only=None):
-        mode, fan, water = combo
+        mode, fan, water, _ctype, _areas = combo_parts(combo)
         plan = plan_settings(applied, mode, fan, water, only)
         if force and not plan:
             plan = {"mode": mode, "fan": fan, "water": water}
@@ -244,14 +384,83 @@ def run_loop_clean(ip, combos, clean_battery=30, recharge_battery=20,
             time.sleep(0.5)
         return False
 
+    def ensure_idle(timeout=30.0):
+        """下发新一轮前先回到空闲：当前还有清扫/暂停任务时先停止(用户 2026-11-28)。
+
+        划区/选区清扫只有在空闲(或充电)状态下才会被任务管理器接受；带着旧任务
+        直接下发要么被忽略，要么沿用旧任务，测试组合就不可控了。
+        """
+        s = _status(st)
+        if not should_stop_existing(s):
+            return True
+        _log("[启动] 当前还有任务（%s），先停止转空闲再下发清扫" % s)
+        record_event("停止已有任务", "下发清扫前检测到 %s，先停止转空闲" % s)
+        try:
+            svc.stop_clean()
+            time.sleep(1)
+            if _status(st) in TASK_ACTIVE_STATUSES:
+                svc.post_event("/event/task_manager", "kill_all_nodes")
+            svc.post_event("/event/task_node", "clear_last_clean_id")
+        except Exception as e:
+            _log("[启动] 停止已有任务失败: %s" % e)
+        end = time.time() + timeout
+        while time.time() < end:
+            if _stop():
+                return False
+            s = _status(st)
+            if not should_stop_existing(s):
+                _log("[启动] 已回到空闲（%s）" % (s or "未知"))
+                return True
+            time.sleep(1)
+        _log("[启动] 等待转空闲超时（%s），本轮放弃启动"
+             % (_status(st) or "未知"))
+        return False
+
     def start_round(combo):
-        mode, fan, water = combo
+        mode, fan, water, ctype, area = combo_parts(combo)
+        if not ensure_idle():
+            return False
         # ★ 启动前只下发模式(决定清扫类型)；吸力/水量必须等机器人定位成功、
         #   真正进入清扫后再下发（用户 2026-11-27：提前下发会被启动流程覆盖）。
         if svc.set_clean_mode(mode):
             applied["mode"] = mode
-        _log("[清扫] 启动 %s 吸力%s 水量%s" % (mode, fan, water))
-        svc.start_total_clean()
+        _log("[清扫] 启动 %s" % combo_label(combo))
+        if ctype == CLEAN_TYPE_POINT:
+            # 指定地点定点: 以该点为中心 1.5m 见方、扫 2 遍(与 AP 一致),
+            # 走已验证的临时区域链路
+            entry = point_area_entry(area)
+            if entry is None:
+                _log("[清扫] 定点启动失败：没有选择定点位置")
+                return False
+            if not svc.set_area_info([entry]):
+                _log("[清扫] 定点启动失败：写区域信息失败")
+                return False
+            zone_used.add("point")
+            if not svc.start_area_clean([entry["id"]]):
+                _log("[清扫] 定点启动失败（区域 ID: %s）" % entry["id"])
+                return False
+        elif ctype == CLEAN_TYPE_ROOMS:
+            # 房间走机器人自带分段(autoAreaValue): StartSegmentClean
+            if not svc.start_segment_clean(area):
+                _log("[清扫] 选区启动失败（房间 ID: %s）"
+                     % ",".join(str(x) for x in area))
+                return False
+        elif ctype == CLEAN_TYPE_ZONES:
+            entries = zone_area_entries(area)
+            if not entries:
+                _log("[清扫] 划区启动失败：没有有效区域")
+                return False
+            # AP 上位机同款链路：先写区域(SetAreaInfo)，再按区域 id 清扫
+            if not svc.set_area_info(entries):
+                _log("[清扫] 划区启动失败：写区域信息失败")
+                return False
+            zone_used.add("zones")
+            if not svc.start_area_clean([e["id"] for e in entries]):
+                _log("[清扫] 划区启动失败（区域 ID: %s）"
+                     % ",".join(str(e["id"]) for e in entries))
+                return False
+        else:
+            svc.start_total_clean()
         end = time.time() + 30
         while time.time() < end:
             if _stop():
@@ -521,6 +730,14 @@ def run_loop_clean(ip, combos, clean_battery=30, recharge_battery=20,
             time.sleep(1)
     finally:
         cleanup()
+        if zone_used:
+            # 划区写的是 areaValue(手动区域，整体替换)；结束时清掉，
+            # 避免测试用的矩形一直留在 APP 地图上（AP 上位机同款行为）。
+            try:
+                if svc.clear_area_info():
+                    _log("[清理] 已清除临时划区")
+            except Exception as e:
+                _log("[清理] 清除临时划区失败: %s" % e)
         if own_stream:
             st.stop()          # 共享流不归本函数管, 交给设备页
         if mcu is not None:

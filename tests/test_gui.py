@@ -36,6 +36,28 @@ def win(qapp, monkeypatch, tmp_path):
     w.close()
 
 
+def test_log_handler_detached_on_close(qapp, monkeypatch, tmp_path):
+    """关窗后日志不再往界面发 —— 后台线程晚到的日志 emit 到已销毁窗口会闪退。"""
+    import logging
+    from gui import main_window as mw
+
+    monkeypatch.setattr(mw, "CASES_DIR", str(tmp_path / "Test_cases"),
+                        raising=False)
+    logger = logging.getLogger("vacuum_test")
+    before = list(logger.handlers)
+    w = mw.MainWindow()
+    handler = w._log_handler
+    assert handler is not None and handler in logger.handlers
+    w.close()
+    assert w._log_handler is None
+    assert w._log_view_alive is False
+    assert handler not in logger.handlers
+    logger.warning("关窗后的后台日志不应再进界面")     # 不抛异常即可
+    for h in list(logger.handlers):
+        if h not in before:
+            logger.removeHandler(h)
+
+
 def test_fault_button_sits_left_of_precondition_button(win):
     """★ 「故障检测」按钮加在「前置条件」左边(用户 2026-10-13)—— 工具栏顺序,
     排查故障词/空闲词是更频繁的微调, 放在更顺手的位置。"""

@@ -358,31 +358,30 @@ class MainWindow(CaseFileMixin, QMainWindow):
             log.info(msg)
 
     def _attach_log_handler(self):
-        """把 core.logger 的日志转到 GUI「运行日志」页签。
-
-        用户要求: GUI 的运行(设备检测/前置等待)与保存配置等动作也要在界面可见,
-        不能只写进 reports/test.log。
-        """
+        """把 core.logger 的日志转到 GUI「运行日志」页签(用户要求界面可见)。"""
         import logging
+        from gui.log_bridge import GuiLogHandler
+        self._log_view_alive = True
         if getattr(self, "_log_handler", None) is not None:
             return
-        outer = self
-
-        class _GuiLogHandler(logging.Handler):
-            def __init__(self):
-                super().__init__(logging.INFO)
-                self.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s",
-                                                     "%H:%M:%S"))
-
-            def emit(self, record):
-                try:
-                    outer.log_signal.emit(self.format(record))
-                except Exception:
-                    pass
-
-        self._log_handler = _GuiLogHandler()
+        self._log_handler = GuiLogHandler(self.log_signal.emit)
         logging.getLogger("vacuum_test").addHandler(self._log_handler)
         self.log_signal.connect(self.log_view.appendPlainText)
+        self.destroyed.connect(self._detach_log_handler)
+
+    def _detach_log_handler(self, *_):
+        """关窗/销毁时摘掉日志→界面信号, 后台日志不再打到已销毁的窗口。"""
+        self._log_view_alive = False
+        handler = getattr(self, "_log_handler", None)
+        if handler is None:
+            return
+        import logging
+        handler.close_bridge()
+        try:
+            logging.getLogger("vacuum_test").removeHandler(handler)
+        except Exception:
+            pass
+        self._log_handler = None
 
     def _build_toolbar(self):
         bar = QWidget()
@@ -2922,10 +2921,12 @@ class MainWindow(CaseFileMixin, QMainWindow):
                     self.worker.wait(5000)
                 except RuntimeError:
                     pass                       # 包装可能已被 GC(执行刚结束): 无需再停
+                self._detach_log_handler()     # 关窗后不再往界面发日志(防闪退)
                 event.accept()
             else:
                 event.ignore()
         else:
+            self._detach_log_handler()
             event.accept()
 
 

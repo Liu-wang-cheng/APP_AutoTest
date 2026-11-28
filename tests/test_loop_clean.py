@@ -32,12 +32,67 @@ def test_return_and_start_thresholds():
     assert ready_to_start(40, "work_status_error", 30) is False
 
 
+def test_combo_parts_supports_clean_types_and_room_ids():
+    from core.loop_clean import combo_parts, combo_label, parse_area_ids
+    assert combo_parts(("sweepOnly", 1, 0)) == ("sweepOnly", 1, 0, "total", [])
+    # 旧版「原地定点(curpoint)」统一映射成「指定点定点(point)」
+    assert combo_parts(("sweepOnly", 1, 0, "curpoint"))[3] == "point"
+    assert combo_parts(("sweepOnly", 1, 0, "point", [500, -200]))[4] == [500, -200]
+    mode, fan, water, ctype, ids = combo_parts(
+        ("sweepMop", 2, 1, "rooms", "1, 3"))
+    assert (mode, fan, water, ctype, ids) == (
+        "sweepMop", 2, 1, "rooms", [1, 3])
+    assert "选区" in combo_label(("sweepMop", 2, 1, "rooms", "1,3"))
+    assert parse_area_ids("2，4;5") == [2, 4, 5]
+    assert parse_area_ids("房间1 房间2") == [1, 2]
+    assert parse_area_ids("房间 3、房间 1") == [3, 1]
+    assert parse_area_ids("") == []
+
+
+def test_point_clean_builds_1500_square_two_passes():
+    """指定点定点 = 以点为中心 1.5m 见方、扫 2 遍(与 AP 定点参数一致)。"""
+    from core.loop_clean import (POINT_CLEAN_COUNT, POINT_SIDE, parse_point,
+                                 point_area_entry)
+    assert parse_point([500, -200]) == [500, -200]
+    assert parse_point("500,-200") == [500, -200]
+    assert parse_point("定点(500, -200)") == [500, -200]
+    assert parse_point("") == [] and parse_point("x,y") == []
+    assert POINT_SIDE == 1500 and POINT_CLEAN_COUNT == 2
+    e = point_area_entry([500, -200])
+    assert e["cleanCount"] == 2 and e["id"] == 9001
+    assert e["vertexs"] == [[-250, -950], [1250, -950],
+                            [1250, 550], [-250, 550]]
+
+
 def test_next_combo_rotates():
     combos = [("sweepOnly", 2, 0), ("sweepMop", 3, 3)]
     assert next_combo(combos, 0) == ("sweepOnly", 2, 0)
     assert next_combo(combos, 1) == ("sweepMop", 3, 3)
     assert next_combo(combos, 2) == ("sweepOnly", 2, 0)
     assert next_combo([], 0) is None
+
+
+def test_zone_combo_dispatch_payload_matches_ap_upper_computer():
+    """划区: SetAreaInfo 的 Areainfo 与 AP 上位机抓包格式一致(2026-11-28)。"""
+    from core.loop_clean import (CLEAN_TYPE_ZONES, combo_label, combo_parts,
+                                 parse_zones, zone_area_entries)
+    assert parse_zones("") == []
+    # 矩形无论怎么拖都归一化成 [x_min, y_min, x_max, y_max]
+    assert parse_zones("119,242,768,-861") == [[119, -861, 768, 242]]
+    # 中文逗号 / 多区域 / 过小区域丢弃
+    assert parse_zones("800,900,100,200；50,60,70,80") == [
+        [100, 200, 800, 900]]
+    assert parse_zones([[0, 0, 1500, 1500], [1, 2, 3, 4]]) == [
+        [0, 0, 1500, 1500]]
+    entries = zone_area_entries([[119, 242, 768, -861],
+                                 [0, 0, 1500, 1500]])
+    assert entries[0] == {
+        "id": 9001, "cleanCount": 1,
+        "vertexs": [[119, -861], [768, -861], [768, 242], [119, 242]]}
+    assert [e["id"] for e in entries] == [9001, 9002]
+    combo = ("sweepOnly", 1, 0, CLEAN_TYPE_ZONES, [[119, 242, 768, -861]])
+    assert combo_parts(combo)[4] == [[119, -861, 768, 242]]
+    assert "划区 1 个" in combo_label(combo)
 
 
 def test_should_stop_existing_cleaning_or_paused_task():

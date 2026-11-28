@@ -1077,13 +1077,13 @@ def test_endurance_page_combos_are_dropdowns(qapp):
     page = EndurancePage()
     try:
         assert len(page._collect_combos()) == 8
-        fan = page.table.cellWidget(0, 2)
+        fan = page.table.cellWidget(0, 3)
         assert not fan.isEditable()
         fan.setCurrentIndex(fan.findData(0))
         assert page._collect_combos()[0][1] == 0
         fan.setCurrentIndex(fan.findData(5))
         assert page._collect_combos()[0][1] == 5
-        water = page.table.cellWidget(4, 3)
+        water = page.table.cellWidget(4, 4)
         assert not water.isEditable()
         water.setCurrentIndex(water.findData(4))
         assert page._collect_combos()[4][2] == 4
@@ -3469,10 +3469,12 @@ def test_loop_clean_page_combos_and_thresholds(qapp):
     assert item0 is not None
     assert item0.flags() & Qt.ItemIsUserCheckable
     assert not p._row_checked(0)   # 默认不选中
-    fan = p.table.cellWidget(0, 2)
-    water = p.table.cellWidget(0, 3)
+    fan = p.table.cellWidget(0, 3)
+    water = p.table.cellWidget(0, 4)
     assert fan.count() == 6 and fan.itemData(5) == 5
     assert water.count() == 5 and water.itemData(4) == 4
+    assert p.table.columnCount() == 6
+    assert p.table.cellWidget(0, 1).currentData() == "total"
     assert p.rounds_spin.minimum() == 0
     assert p.low_spin.value() == 30       # 清扫电量默认 30
     assert p.target_spin.value() == 20    # 回充电量默认 20
@@ -3507,8 +3509,8 @@ def test_endurance_page_restores_combos_and_thresholds(qapp, tmp_path):
     st = QSettings(ini, QSettings.IniFormat)
     p = EndurancePage(settings=st)
     p._set_row_checked(0, True)
-    p.table.cellWidget(0, 2).setCurrentIndex(
-        p.table.cellWidget(0, 2).findData(2))
+    p.table.cellWidget(0, 3).setCurrentIndex(
+        p.table.cellWidget(0, 3).findData(2))
     for r in (7, 6, 5):
         p.table.removeRow(r)
     p.low_spin.setValue(35)
@@ -3519,10 +3521,37 @@ def test_endurance_page_restores_combos_and_thresholds(qapp, tmp_path):
     p2 = EndurancePage(settings=st2)
     assert p2.table.rowCount() == 5
     assert p2._row_checked(0)
-    assert p2.table.cellWidget(0, 2).currentData() == 2
+    assert p2.table.cellWidget(0, 3).currentData() == 2
     assert p2._row_checked(1)   # 默认仍是勾选状态
     assert p2.low_spin.value() == 35
     assert p2.sample_spin.value() == 30
+
+
+def test_endurance_page_zones_row_collect_and_persist(qapp, tmp_path):
+    """续航测试也支持选区/划区：组合带清扫区域并持久化(用户 2026-11-28)。"""
+    from gui.endurance_page import EndurancePage
+    zones = [[119, -861, 768, 242], [0, 0, 1500, 1500]]
+    ini = str(tmp_path / "end_zones.ini")
+    st = QSettings(ini, QSettings.IniFormat)
+    p = EndurancePage(settings=st)
+    p._add_row("sweepOnly", 1, 0, checked=True, clean_type="zones",
+               zones=zones)
+    row = p.table.rowCount() - 1
+    assert p._row_values(row)[1] == "zones"
+    assert p._row_values(row)[5] == "区域1 区域2"
+    cell = p.table.cellWidget(row, 5)
+    assert cell.edit.isReadOnly()
+    assert cell.pick_btn.text() == "选择清扫区域"
+    combo = p._collect_combos()[-1]
+    assert combo[3] == "zones" and combo[4] == zones
+    p._save_settings()
+    st.sync()
+
+    st2 = QSettings(ini, QSettings.IniFormat)
+    p2 = EndurancePage(settings=st2)
+    assert p2._row_values(row)[1] == "zones"
+    assert p2._row_zones(row) == zones
+    assert p2._collect_combos()[-1][4] == zones
 
 
 def test_loop_clean_page_restores_combos_and_thresholds(qapp, tmp_path):
@@ -3532,8 +3561,8 @@ def test_loop_clean_page_restores_combos_and_thresholds(qapp, tmp_path):
     st = QSettings(ini, QSettings.IniFormat)
     p = LoopCleanPage(settings=st)
     p._set_row_checked(0, True)
-    p.table.cellWidget(0, 2).setCurrentIndex(
-        p.table.cellWidget(0, 2).findData(3))
+    fan0 = p.table.cellWidget(0, 3)
+    fan0.setCurrentIndex(fan0.findData(3))
     p._add_row("sweepMop", 5, 4, checked=True)
     p.low_spin.setValue(40)
     p.target_spin.setValue(25)
@@ -3544,12 +3573,97 @@ def test_loop_clean_page_restores_combos_and_thresholds(qapp, tmp_path):
     st2 = QSettings(ini, QSettings.IniFormat)
     p2 = LoopCleanPage(settings=st2)
     assert p2.table.rowCount() == 3
-    assert p2._row_values(0) == (True, "sweepOnly", 3, 0)
-    assert p2._row_values(2) == (True, "sweepMop", 5, 4)
+    assert p2._row_values(0) == (True, "total", "sweepOnly", 3, 0, "")
+    assert p2._row_values(2) == (True, "total", "sweepMop", 5, 4, "")
     assert p2.low_spin.value() == 40
     assert p2.target_spin.value() == 25
     assert p2.rounds_spin.value() == 7
     assert p2.sample_spin.value() == 20
+
+
+def test_loop_clean_page_zones_row_collect_and_persist(qapp, tmp_path):
+    """划区组合: 地图画出的矩形随界面保存/恢复, 下发时是矩形列表。"""
+    from gui.loop_clean_page import LoopCleanPage
+    zones = [[119, -861, 768, 242], [0, 0, 1500, 1500]]
+    ini = str(tmp_path / "loop_zones.ini")
+    st = QSettings(ini, QSettings.IniFormat)
+    p = LoopCleanPage(settings=st)
+    p._add_row("sweepOnly", 1, 0, checked=True, clean_type="zones",
+               zones=zones)
+    assert p._row_values(2)[1] == "zones"
+    assert p._row_values(2)[5] == "区域1 区域2"
+    cell = p.table.cellWidget(2, 5)
+    assert cell.edit.isReadOnly()                  # 划区只能地图选择
+    assert cell.pick_btn.text() == "选择清扫区域"
+    assert cell.pick_btn.isEnabled()
+    combo = p._collect_combos()[-1]
+    assert combo[3] == "zones" and combo[4] == zones
+    p._save_settings()
+    st.sync()
+
+    st2 = QSettings(ini, QSettings.IniFormat)
+    p2 = LoopCleanPage(settings=st2)
+    assert p2._row_values(2)[1] == "zones"
+    assert p2._row_zones(2) == zones
+    assert p2._collect_combos()[-1][4] == zones
+
+
+def test_loop_clean_pick_area_fills_row_by_type(qapp, monkeypatch, tmp_path):
+    """「选择清扫区域」按行类型回填: 选区写房间 ID, 划区写矩形(用户 2026-11-28)。"""
+    from PySide6.QtWidgets import QDialog
+    import gui.loop_clean_page as L
+    from core.apos.map_data import parse_map_files
+
+    data = parse_map_files(
+        bytes([127] * 12),
+        b'{"width":4,"height":3,"resolution":0.05,'
+        b'"x_min":0.0,"y_min":0.0}', b"")
+    monkeypatch.setattr(L, "fetch_map", lambda ip, **kw: data)
+
+    class FakeDlg(L.MapSelectorDialog):
+        modes = []
+
+        def __init__(self, map_data, parent=None, mode=None, rooms=None,
+                     zones=None, point=None):
+            super().__init__(map_data, parent, mode, rooms, zones, point)
+            FakeDlg.modes.append(mode)
+            if mode == "rooms":
+                self.rooms = [2]
+            elif mode == "point":
+                self.point = [500, -200]
+            else:
+                self.zones = [[0, 0, 1500, 1500]]
+
+        def exec(self):
+            return QDialog.Accepted
+
+    monkeypatch.setattr(L, "MapSelectorDialog", FakeDlg)
+    st = QSettings(str(tmp_path / "pick.ini"), QSettings.IniFormat)
+    p = L.LoopCleanPage(settings=st)
+    p.settings.setValue("apos/last_ip", "192.168.10.9")
+    p._add_row("sweepOnly", 1, 0, checked=True, clean_type="rooms")
+    row = p.table.rowCount() - 1
+
+    cell = p.table.cellWidget(row, 5)
+    p._pick_area(cell)
+    assert p._row_values(row)[5] == "房间2"
+    assert FakeDlg.modes[-1] == "rooms"
+
+    p.table.cellWidget(row, 1).setCurrentIndex(
+        p.table.cellWidget(row, 1).findData("zones"))
+    p._pick_area(cell)
+    assert p._row_zones(row) == [[0, 0, 1500, 1500]]
+    assert p._row_values(row)[5] == "区域1"
+    assert FakeDlg.modes[-1] == "zones"
+
+    p.table.cellWidget(row, 1).setCurrentIndex(
+        p.table.cellWidget(row, 1).findData("point"))
+    p._pick_area(cell)
+    assert p._row_point(row) == [500, -200]
+    assert p._row_values(row)[5] == "定点(500,-200)"
+    assert p._collect_combos()[-1][3] == "point"
+    assert p._collect_combos()[-1][4] == [500, -200]
+    assert FakeDlg.modes[-1] == "point"
 
 
 def test_page_nav_hosts_global_robot_connection(qapp):
